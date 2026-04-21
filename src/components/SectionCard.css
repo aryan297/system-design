@@ -1,0 +1,29 @@
+.section-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--transition);
+}
+.section-card:hover { border-color: var(--border-default); }
+
+.section-card--accent {
+  border-color: rgba(217,119,87,0.25);
+}
+.section-card--accent .section-card-title {
+  color: var(--accent);
+  border-bottom-color: rgba(217,119,87,0.15);
+}
+
+.section-card-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  letter-spacing: -0.01em;
+}
+
+.section-card-body {
+  padding: 18px 20px;
+}

@@ -1,0 +1,203 @@
+.hld-page {
+  min-height: 100vh;
+  background: var(--bg-base);
+}
+
+/* ── Top tab bar ── */
+.hld-tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  padding: 0 40px;
+}
+
+.hld-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 13px 18px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition);
+  margin-bottom: -1px;
+}
+.hld-tab-btn:hover { color: var(--text-secondary); }
+.hld-tab-btn.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.hld-tab-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  background: var(--accent-muted);
+  color: var(--accent);
+  border: 1px solid rgba(217,119,87,0.25);
+  padding: 1px 6px;
+  border-radius: 99px;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* Q&A header row */
+.qna-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.qna-header-sub {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.qna-stats {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .hld-tab-bar { padding: 0 12px; }
+  .hld-tab-btn { padding: 12px 12px; font-size: 0.8rem; }
+  .qna-header-row { flex-direction: column; gap: 10px; }
+}
+
+.hld-overview,
+.hld-section {
+  padding: 28px 40px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.hld-section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+/* Phase layout */
+.phase-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.phase-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 20px;
+}
+
+.phase-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--transition);
+}
+.phase-tab:hover { background: var(--bg-hover); border-color: var(--border-subtle); }
+.phase-tab.active {
+  background: var(--accent-muted);
+  border-color: rgba(217,119,87,0.25);
+}
+
+.phase-tab-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.phase-tab.active .phase-tab-label { color: var(--accent); }
+
+.phase-tab-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+.phase-tab.active .phase-tab-title { color: var(--text-primary); }
+
+/* Phase content */
+.phase-content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.phase-content-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+
+.phase-content-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.phase-sections {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.phase-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.phase-section-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 900px) {
+  .hld-overview, .hld-section { padding: 16px; }
+  .phase-layout { grid-template-columns: 1fr; }
+  .phase-tabs { flex-direction: row; flex-wrap: wrap; position: static; gap: 4px; }
+  .phase-tab { flex-direction: row; gap: 6px; align-items: center; padding: 8px 10px; }
+  .phase-sections { padding: 16px; }
+  .phase-content-header { padding: 14px 16px; }
+}
+
+@media (max-width: 768px) {
+  .hld-overview, .hld-section { padding: 14px 12px; }
+  .phase-tab-title { display: none; }
+  .phase-tab-label { font-size: 0.7rem; }
+}

@@ -1,0 +1,100 @@
+/* Claude-style color palette & typography */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Claude-inspired neutrals */
+  --bg-base:        #1a1a1a;
+  --bg-surface:     #212121;
+  --bg-elevated:    #2a2a2a;
+  --bg-hover:       #313131;
+  --bg-active:      #383838;
+
+  /* Borders */
+  --border-subtle:  rgba(255,255,255,0.07);
+  --border-default: rgba(255,255,255,0.12);
+  --border-strong:  rgba(255,255,255,0.20);
+
+  /* Text */
+  --text-primary:   #ececec;
+  --text-secondary: #a8a8a8;
+  --text-muted:     #6b6b6b;
+  --text-link:      #d97757;
+
+  /* Accent — Claude orange-ish */
+  --accent:         #d97757;
+  --accent-muted:   rgba(217,119,87,0.15);
+  --accent-hover:   #e8896a;
+
+  /* Netflix red — used sparingly for Netflix-specific accents */
+  --netflix-red:    #E50914;
+  --netflix-muted:  rgba(229,9,20,0.12);
+
+  /* Code */
+  --code-bg:        #161616;
+  --code-border:    rgba(255,255,255,0.08);
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  /* Shadows */
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md:  0 4px 16px rgba(0,0,0,0.5);
+  --shadow-lg:  0 8px 32px rgba(0,0,0,0.6);
+
+  /* Sidebar */
+  --sidebar-width: 260px;
+
+  /* Transitions */
+  --transition: 0.15s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 16px; scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* Selection */
+::selection { background: var(--accent-muted); color: var(--text-primary); }
+
+/* Code / monospace */
+code, pre, .mono {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.875rem;
+}
+
+a { color: var(--text-link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Utility classes */
+.text-muted   { color: var(--text-muted); }
+.text-secondary { color: var(--text-secondary); }
+.text-accent  { color: var(--accent); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.badge-accent { background: var(--accent-muted); color: var(--accent); border: 1px solid rgba(217,119,87,0.25); }
+.badge-red    { background: var(--netflix-muted); color: var(--netflix-red); border: 1px solid rgba(229,9,20,0.25); }
+.badge-neutral{ background: rgba(255,255,255,0.06); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
