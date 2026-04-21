@@ -10,7 +10,11 @@
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-surface);
   padding: 0 40px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.hld-tab-bar::-webkit-scrollbar { display: none; }
 
 .hld-tab-btn {
   display: flex;
@@ -26,6 +30,8 @@
   cursor: pointer;
   transition: all var(--transition);
   margin-bottom: -1px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .hld-tab-btn:hover { color: var(--text-secondary); }
 .hld-tab-btn.active {
@@ -68,12 +74,7 @@
   flex-wrap: wrap;
 }
 
-@media (max-width: 768px) {
-  .hld-tab-bar { padding: 0 12px; }
-  .hld-tab-btn { padding: 12px 12px; font-size: 0.8rem; }
-  .qna-header-row { flex-direction: column; gap: 10px; }
-}
-
+/* ── Content sections ── */
 .hld-overview,
 .hld-section {
   padding: 28px 40px;
@@ -89,7 +90,7 @@
   margin-bottom: 16px;
 }
 
-/* Phase layout */
+/* ── Phase layout ── */
 .phase-layout {
   display: grid;
   grid-template-columns: 200px 1fr;
@@ -147,6 +148,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   overflow: hidden;
+  min-width: 0;
 }
 
 .phase-content-header {
@@ -187,17 +189,31 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* ── Tablet ── */
 @media (max-width: 900px) {
-  .hld-overview, .hld-section { padding: 16px; }
+  .hld-overview, .hld-section { padding: 20px 20px; }
   .phase-layout { grid-template-columns: 1fr; }
-  .phase-tabs { flex-direction: row; flex-wrap: wrap; position: static; gap: 4px; }
+  .phase-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+    position: static;
+    gap: 4px;
+  }
   .phase-tab { flex-direction: row; gap: 6px; align-items: center; padding: 8px 10px; }
   .phase-sections { padding: 16px; }
   .phase-content-header { padding: 14px 16px; }
 }
 
+/* ── Mobile ── */
 @media (max-width: 768px) {
+  .hld-tab-bar { padding: 0 12px; }
+  .hld-tab-btn { padding: 12px 12px; font-size: 0.82rem; }
   .hld-overview, .hld-section { padding: 14px 12px; }
   .phase-tab-title { display: none; }
   .phase-tab-label { font-size: 0.7rem; }
+  .phase-sections { padding: 12px; }
+  .phase-content-header { padding: 12px 14px; }
+  .phase-content-title { font-size: 0.9rem; }
+  .qna-header-row { flex-direction: column; gap: 10px; }
+  .hld-section-title { margin-bottom: 12px; }
 }

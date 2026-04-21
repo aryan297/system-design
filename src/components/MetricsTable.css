@@ -1,11 +1,19 @@
 .metrics-table {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 1px;
   background: var(--border-subtle);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .metrics-table {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .metrics-value { font-size: 1.1rem; }
+  .metrics-row { padding: 12px 14px; }
 }
 
 .metrics-row {

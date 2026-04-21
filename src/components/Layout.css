@@ -48,7 +48,7 @@
   height: 1.5px;
   background: var(--text-secondary);
   border-radius: 2px;
-  transition: transform 0.2s ease, opacity 0.2s ease;
+  transition: transform 0.22s ease, opacity 0.22s ease;
   transform-origin: center;
 }
 
@@ -62,9 +62,10 @@
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 149;
-  animation: fadeIn 0.15s ease;
+  animation: fadeIn 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -79,11 +80,13 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  height: 100vh;
   overflow-x: hidden;
+  height: 100vh;
+  /* iOS rubber-band scroll */
+  -webkit-overflow-scrolling: touch;
 }
 
-/* ── Mobile breakpoint ── */
+/* ── Mobile ── */
 @media (max-width: 768px) {
   .topbar {
     display: flex;
@@ -93,8 +96,12 @@
     display: block;
   }
 
+  /* On mobile the sidebar is fixed/out of flow, so main gets full width */
   .app-main {
-    height: calc(100vh - 52px);
+    width: 100%;
+    height: calc(100dvh - 52px); /* dvh = dynamic viewport height, handles address bar */
     margin-top: 52px;
+    /* Allow inner elements to scroll horizontally inside their own boxes */
+    overflow-x: hidden;
   }
 }

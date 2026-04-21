@@ -38,14 +38,16 @@
   border: 1px solid var(--border-subtle);
   color: var(--text-muted);
   font-size: 0.8rem;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   align-items: center;
   justify-content: center;
   transition: all var(--transition);
   flex-shrink: 0;
+  /* Bigger tap target on touch */
+  -webkit-tap-highlight-color: transparent;
 }
 .sidebar-close:hover {
   background: var(--bg-hover);
@@ -133,13 +135,89 @@
 
 /* ── Footer ── */
 .sidebar-footer {
-  padding: 14px 18px;
+  padding: 14px 16px;
   border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
+
 .sidebar-footer-text {
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+/* Author card */
+.sidebar-author {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  transition: border-color var(--transition);
+}
+.sidebar-author:hover { border-color: var(--border-default); }
+
+.sidebar-author-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, #c45c3a 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.sidebar-author-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-author-name {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-author-label {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.sidebar-github-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+.sidebar-github-btn:hover {
+  background: var(--bg-active);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+  text-decoration: none;
 }
 
 /* ── Mobile ── */

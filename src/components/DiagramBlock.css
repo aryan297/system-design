@@ -2,8 +2,8 @@
   background: var(--code-bg);
   border: 1px solid var(--code-border);
   border-radius: var(--radius-md);
+  /* Don't clip inner scroll — only clip border-radius visually */
   overflow: hidden;
-  margin: 0;
 }
 
 .diagram-title {
@@ -18,16 +18,23 @@
 }
 
 .diagram-pre {
-  padding: 20px;
+  padding: 16px 20px;
+  /* Allow horizontal scroll for wide ASCII diagrams */
   overflow-x: auto;
+  overflow-y: visible;
   line-height: 1.55;
   font-size: 0.8rem;
-  color: #c9d1d9;
+  color: #8b949e;
   white-space: pre;
   tab-size: 2;
+  /* iOS momentum scroll */
+  -webkit-overflow-scrolling: touch;
 }
 
-/* syntax-like coloring */
-.diagram-pre {
-  color: #8b949e;
+@media (max-width: 768px) {
+  .diagram-pre {
+    font-size: 0.68rem;
+    padding: 12px 14px;
+    line-height: 1.5;
+  }
 }

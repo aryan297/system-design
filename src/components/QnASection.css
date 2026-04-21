@@ -242,9 +242,16 @@
 
 /* Mobile */
 @media (max-width: 768px) {
-  .qna-body { padding: 14px 14px 14px 14px; }
-  .qna-header { padding: 12px 14px; }
+  .qna-body { padding: 12px; gap: 14px; }
+  .qna-header { padding: 12px; gap: 8px; }
   .qna-header-right { display: none; }
-  .qna-meta-row { flex-wrap: wrap; }
+  .qna-header-left { gap: 8px; }
+  .qna-meta-row { flex-wrap: wrap; gap: 4px; }
   .qna-question { font-size: 0.82rem; }
+  .qna-num { min-width: 18px; font-size: 0.65rem; }
+  .qna-answer-content { padding: 12px; }
+  .qna-followups { padding: 10px 12px; }
+  .qna-followup-item { font-size: 0.78rem; }
+  .qna-filters { gap: 5px; margin-bottom: 14px; }
+  .qna-filter-btn { font-size: 0.7rem; padding: 4px 9px; }
 }

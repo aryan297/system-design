@@ -28,3 +28,18 @@
   line-height: 1.5;
   max-width: 680px;
 }
+
+@media (max-width: 768px) {
+  .page-header {
+    padding: 18px 14px 16px;
+  }
+  .page-header-title {
+    font-size: 1.2rem;
+  }
+  .page-header-subtitle {
+    font-size: 0.82rem;
+  }
+  .page-header-top {
+    margin-bottom: 8px;
+  }
+}
