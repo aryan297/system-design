@@ -6,4 +6,32 @@ export const SYSTEMS = [
     description: "Video streaming platform — 300M+ users, 15% global internet traffic",
     color: "#E50914",
   },
+  {
+    id: "uber",
+    name: "Uber",
+    icon: "🚗",
+    description: "Real-time ride matching — 130M monthly users, 25M trips/day, 70+ countries",
+    color: "#000000",
+  },
+  {
+    id: "youtube",
+    name: "YouTube",
+    icon: "▶️",
+    description: "Video platform — 2.7B users, 500 hrs uploaded/min, 1B hrs watched/day",
+    color: "#FF0000",
+  },
+  {
+    id: "spotify",
+    name: "Spotify",
+    icon: "🎵",
+    description: "Music streaming — 600M users, 100M tracks, Discover Weekly at scale",
+    color: "#1DB954",
+  },
+  {
+    id: "instagram",
+    name: "Instagram",
+    icon: "📸",
+    description: "Photo/video social — 2B users, 100M uploads/day, ranked feed & Reels",
+    color: "#E1306C",
+  },
 ];
