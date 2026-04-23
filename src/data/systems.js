@@ -34,4 +34,18 @@ export const SYSTEMS = [
     description: "Photo/video social — 2B users, 100M uploads/day, ranked feed & Reels",
     color: "#E1306C",
   },
+  {
+    id: "revolut",
+    name: "Revolut",
+    icon: "💳",
+    description: "Neobank — 45M customers, double-entry ledger, real-time fraud, 30+ currencies",
+    color: "#0075EB",
+  },
+  {
+    id: "paypal",
+    name: "PayPal",
+    icon: "💰",
+    description: "Global payments — 430M accounts, $1.5T volume, buyer protection, Venmo",
+    color: "#003087",
+  },
 ];

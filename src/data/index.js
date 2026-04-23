@@ -3,6 +3,8 @@ import { UBER_HLD, UBER_LLD, UBER_QNA } from "./uber";
 import { YOUTUBE_HLD, YOUTUBE_LLD, YOUTUBE_QNA } from "./youtube";
 import { SPOTIFY_HLD, SPOTIFY_LLD, SPOTIFY_QNA } from "./spotify";
 import { INSTAGRAM_HLD, INSTAGRAM_LLD, INSTAGRAM_QNA } from "./instagram";
+import { REVOLUT_HLD, REVOLUT_LLD, REVOLUT_QNA } from "./revolut";
+import { PAYPAL_HLD, PAYPAL_LLD, PAYPAL_QNA } from "./paypal";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -35,6 +37,18 @@ const REGISTRY = {
     hld: INSTAGRAM_HLD,
     lld: INSTAGRAM_LLD,
     qna: INSTAGRAM_QNA,
+  },
+  revolut: {
+    meta: { icon: "💳", color: "#0075EB" },
+    hld: REVOLUT_HLD,
+    lld: REVOLUT_LLD,
+    qna: REVOLUT_QNA,
+  },
+  paypal: {
+    meta: { icon: "💰", color: "#003087" },
+    hld: PAYPAL_HLD,
+    lld: PAYPAL_LLD,
+    qna: PAYPAL_QNA,
   },
 };
 
