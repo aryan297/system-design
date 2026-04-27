@@ -75,6 +75,34 @@
   margin-top: 4px;
 }
 
+.sidebar-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 5px 8px;
+  margin-bottom: 4px;
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  transition: background var(--transition), color var(--transition);
+}
+.sidebar-section-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.sidebar-section-chevron {
+  font-size: 0.6rem;
+  opacity: 0.7;
+}
+
 .sidebar-system-link {
   display: flex;
   align-items: center;

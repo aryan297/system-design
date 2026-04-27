@@ -1,26 +1,33 @@
+import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { SYSTEMS } from "../data/systems";
+import { DSA_CATEGORIES } from "../data/dsa";
 import "./Sidebar.css";
 
 export default function Sidebar({ open, onClose }) {
   const location = useLocation();
+  const inDSA = location.pathname.startsWith("/dsa");
+  const [systemsOpen, setSystemsOpen] = useState(!inDSA);
+  const [dsaOpen, setDsaOpen] = useState(inDSA);
 
   return (
     <aside className={`sidebar ${open ? "sidebar--open" : ""}`}>
-      {/* Logo row — desktop always visible, mobile inside drawer */}
       <div className="sidebar-logo">
         <span className="sidebar-logo-icon">⚙️</span>
         <span className="sidebar-logo-text">SysDesign</span>
-        {/* Close button visible only on mobile */}
         <button className="sidebar-close" onClick={onClose} aria-label="Close sidebar">
           ✕
         </button>
       </div>
 
       <nav className="sidebar-nav">
-        <p className="sidebar-section-label">Systems</p>
+        {/* ── Systems ── */}
+        <button className="sidebar-section-toggle" onClick={() => setSystemsOpen((v) => !v)}>
+          <span>Systems</span>
+          <span className="sidebar-section-chevron">{systemsOpen ? "▾" : "▸"}</span>
+        </button>
 
-        {SYSTEMS.map((sys) => {
+        {systemsOpen && SYSTEMS.map((sys) => {
           const isActive = location.pathname.startsWith(`/${sys.id}`);
           return (
             <div key={sys.id} className={`sidebar-system ${isActive ? "open" : ""}`}>
@@ -38,18 +45,14 @@ export default function Sidebar({ open, onClose }) {
                 <div className="sidebar-sub">
                   <NavLink
                     to={`/${sys.id}/hld`}
-                    className={({ isActive: a }) =>
-                      `sidebar-sub-link ${a ? "active" : ""}`
-                    }
+                    className={({ isActive: a }) => `sidebar-sub-link ${a ? "active" : ""}`}
                   >
                     HLD
                     <span className="badge badge-neutral">High Level</span>
                   </NavLink>
                   <NavLink
                     to={`/${sys.id}/lld`}
-                    className={({ isActive: a }) =>
-                      `sidebar-sub-link ${a ? "active" : ""}`
-                    }
+                    className={({ isActive: a }) => `sidebar-sub-link ${a ? "active" : ""}`}
                   >
                     LLD
                     <span className="badge badge-neutral">Low Level</span>
@@ -59,7 +62,54 @@ export default function Sidebar({ open, onClose }) {
             </div>
           );
         })}
+
+        {/* ── DSA ── */}
+        <button
+          className="sidebar-section-toggle"
+          style={{ marginTop: "10px" }}
+          onClick={() => setDsaOpen((v) => !v)}
+        >
+          <span>DSA — Go</span>
+          <span className="sidebar-section-chevron">{dsaOpen ? "▾" : "▸"}</span>
+        </button>
+
+        {dsaOpen && DSA_CATEGORIES.map((cat) => {
+          const catPath = `/dsa/${cat.id}`;
+          const isCatOpen = location.pathname.startsWith(catPath);
+          return (
+            <div key={cat.id} className="sidebar-system">
+              <NavLink
+                to={`${catPath}/${cat.problems[0].id}`}
+                className={`sidebar-system-link ${isCatOpen ? "active" : ""}`}
+              >
+                <span className="sidebar-system-icon">{cat.icon}</span>
+                <span className="sidebar-system-name">{cat.title}</span>
+                <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
+                  {isCatOpen ? "▾" : "▸"}
+                </span>
+              </NavLink>
+
+              {isCatOpen && (
+                <div className="sidebar-sub">
+                  {cat.problems.map((p, idx) => (
+                    <NavLink
+                      key={p.id}
+                      to={`${catPath}/${p.id}`}
+                      className={({ isActive: a }) => `sidebar-sub-link ${a ? "active" : ""}`}
+                    >
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.65rem", minWidth: 16 }}>
+                        {idx + 1}.
+                      </span>
+                      {p.title}
+                    </NavLink>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </nav>
+
 
       <div className="sidebar-footer">
         <div className="sidebar-author">
