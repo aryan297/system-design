@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(curl -s http://localhost:5173)"
+      "Bash(curl -s http://localhost:5173)",
+      "Read(//private/tmp/**)",
+      "Read(//private/var/folders/**)",
+      "Bash(npx vite *)",
+      "Bash(kill 54244)",
+      "Bash(npm run *)",
+      "Read(//tmp/**)"
     ]
   }
 }

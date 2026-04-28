@@ -1,71 +1,137 @@
-.code-block {
-  background: var(--code-bg);
-  border: 1px solid var(--code-border);
-  border-radius: var(--radius-md);
+/* ── IDE shell ── */
+.ide {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 10px;
   overflow: hidden;
+  font-family: "Fira Code", "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
 }
 
-.code-block-header {
+/* Title bar */
+.ide-titlebar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--code-border);
-  background: rgba(255,255,255,0.02);
-  gap: 8px;
+  gap: 10px;
+  padding: 0 14px;
+  height: 38px;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  user-select: none;
 }
 
-.code-block-label {
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.code-block-copy {
-  background: none;
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  font-size: 0.7rem;
-  font-family: inherit;
-  padding: 2px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all var(--transition);
-  white-space: nowrap;
+.ide-dots {
+  display: flex;
+  gap: 6px;
   flex-shrink: 0;
 }
-.code-block-copy:hover { border-color: var(--border-default); color: var(--text-secondary); }
+.ide-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.ide-dot--red    { background: #ff5f57; }
+.ide-dot--yellow { background: #febc2e; }
+.ide-dot--green  { background: #28c840; }
 
-.code-block-pre {
-  padding: 16px 18px;
-  /* Horizontal scroll for wide code — must NOT be clipped by parent */
+.ide-tabs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.ide-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #cdd9e5;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-bottom: none;
+  padding: 5px 14px 6px;
+  border-radius: 6px 6px 0 0;
+  letter-spacing: 0.01em;
+}
+.ide-tab-gopher {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.ide-copy {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  font-size: 0.68rem;
+  font-family: inherit;
+  padding: 3px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.ide-copy:hover {
+  border-color: #8b949e;
+  color: #cdd9e5;
+}
+
+/* Editor body */
+.ide-body {
+  display: flex;
   overflow-x: auto;
-  overflow-y: visible;
-  margin: 0;
   -webkit-overflow-scrolling: touch;
 }
 
-.code-block-pre code {
+/* Line numbers gutter */
+.ide-gutter {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 0;
+  min-width: 44px;
+  background: #0d1117;
+  border-right: 1px solid #21262d;
+  flex-shrink: 0;
+  user-select: none;
+}
+.ide-ln {
+  font-size: 0.72rem;
+  line-height: 1.65;
+  color: #484f58;
+  text-align: right;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Code area */
+.ide-pre {
+  margin: 0;
+  padding: 16px 20px;
+  flex: 1;
+  overflow-x: auto;
+  background: #0d1117;
+}
+.ide-pre code {
   font-size: 0.78rem;
   line-height: 1.65;
-  color: #c9d1d9;
+  color: #e6edf3;
   white-space: pre;
   display: block;
-  /* min-width ensures content doesn't wrap */
   min-width: max-content;
 }
 
+/* ── Go syntax colours (VS Code Dark+ palette) ── */
+.go-kw      { color: #ff7b72; }          /* keywords — red */
+.go-type    { color: #79c0ff; }          /* types — blue */
+.go-builtin { color: #d2a8ff; }          /* builtins — purple */
+.go-string  { color: #a5d6ff; }          /* strings — light blue */
+.go-number  { color: #79c0ff; }          /* numbers */
+.go-comment { color: #8b949e; font-style: italic; } /* comments — grey */
+
+/* ── Mobile ── */
 @media (max-width: 768px) {
-  .code-block-pre {
-    padding: 12px 12px;
-  }
-  .code-block-pre code {
-    font-size: 0.7rem;
-  }
+  .ide-pre code { font-size: 0.7rem; }
+  .ide-titlebar { padding: 0 10px; }
 }

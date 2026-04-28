@@ -1,6 +1,7 @@
 import { useParams, useNavigate, NavLink } from "react-router-dom";
 import { DSA_CATEGORIES } from "../data/dsa";
 import CodeBlock from "../components/CodeBlock";
+import gopherImg from "../assets/gopher.png";
 import "./DSAPage.css";
 
 const DIFF_CLASS = { Easy: "diff-easy", Medium: "diff-medium", Hard: "diff-hard" };
@@ -23,6 +24,13 @@ export default function DSAPage() {
     <div className="dsa-layout">
       {/* Left panel — category + problem list */}
       <aside className="dsa-panel">
+        <div className="dsa-panel-header">
+          <img src={gopherImg} alt="Go Gopher" className="dsa-panel-gopher" />
+          <div>
+            <div className="dsa-panel-title">DSA in Go</div>
+            <div className="dsa-panel-sub">{DSA_CATEGORIES.length} categories</div>
+          </div>
+        </div>
         {DSA_CATEGORIES.map((cat) => {
           const isOpen = cat.id === categoryId;
           return (
@@ -68,6 +76,10 @@ export default function DSAPage() {
             <span className="dsa-lc-badge">LC #{problem.leetcode}</span>
             <span className={`dsa-diff dsa-diff--lg ${DIFF_CLASS[problem.difficulty]}`}>
               {problem.difficulty}
+            </span>
+            <span className="dsa-lang-badge">
+              <img src={gopherImg} alt="Go" className="dsa-gopher" />
+              Go
             </span>
           </div>
           <h1 className="dsa-detail-title">{problem.title}</h1>

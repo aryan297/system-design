@@ -2,6 +2,7 @@ import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { SYSTEMS } from "../data/systems";
 import { DSA_CATEGORIES } from "../data/dsa";
+import gopherImg from "../assets/gopher.png";
 import "./Sidebar.css";
 
 export default function Sidebar({ open, onClose }) {
@@ -13,8 +14,7 @@ export default function Sidebar({ open, onClose }) {
   return (
     <aside className={`sidebar ${open ? "sidebar--open" : ""}`}>
       <div className="sidebar-logo">
-        <span className="sidebar-logo-icon">⚙️</span>
-        <span className="sidebar-logo-text">SysDesign</span>
+        <span className="sidebar-logo-text">Aryan AlgoScale</span>
         <button className="sidebar-close" onClick={onClose} aria-label="Close sidebar">
           ✕
         </button>
@@ -69,7 +69,10 @@ export default function Sidebar({ open, onClose }) {
           style={{ marginTop: "10px" }}
           onClick={() => setDsaOpen((v) => !v)}
         >
-          <span>DSA — Go</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <img src={gopherImg} alt="" style={{ width: 14, height: 14, objectFit: "contain" }} />
+            DSA — Go
+          </span>
           <span className="sidebar-section-chevron">{dsaOpen ? "▾" : "▸"}</span>
         </button>
 
