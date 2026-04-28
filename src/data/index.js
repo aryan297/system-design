@@ -5,6 +5,7 @@ import { SPOTIFY_HLD, SPOTIFY_LLD, SPOTIFY_QNA } from "./spotify";
 import { INSTAGRAM_HLD, INSTAGRAM_LLD, INSTAGRAM_QNA } from "./instagram";
 import { REVOLUT_HLD, REVOLUT_LLD, REVOLUT_QNA } from "./revolut";
 import { PAYPAL_HLD, PAYPAL_LLD, PAYPAL_QNA } from "./paypal";
+import { ZEPTO_HLD, ZEPTO_LLD, ZEPTO_QNA } from "./zepto";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -49,6 +50,12 @@ const REGISTRY = {
     hld: PAYPAL_HLD,
     lld: PAYPAL_LLD,
     qna: PAYPAL_QNA,
+  },
+  zepto: {
+    meta: { icon: "⚡", color: "#8B2FC9" },
+    hld: ZEPTO_HLD,
+    lld: ZEPTO_LLD,
+    qna: ZEPTO_QNA,
   },
 };
 

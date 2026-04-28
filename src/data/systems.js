@@ -48,4 +48,11 @@ export const SYSTEMS = [
     description: "Global payments — 430M accounts, $1.5T volume, buyer protection, Venmo",
     color: "#003087",
   },
+  {
+    id: "zepto",
+    name: "Zepto",
+    icon: "⚡",
+    description: "Quick commerce — 10-min grocery delivery, dark store model, hyperlocal fulfillment",
+    color: "#8B2FC9",
+  },
 ];
