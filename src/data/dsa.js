@@ -4359,4 +4359,1576 @@ func main() {
       },
     ],
   },
+  // ─────────────────────────────────────────────────────────────────────────
+  // 9. Graphs
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "graphs",
+    icon: "🕸️",
+    title: "Graphs",
+    problems: [
+      {
+        id: "number-of-islands",
+        title: "Number of Islands",
+        difficulty: "Medium",
+        leetcode: 200,
+        description:
+          "Given an m×n grid of '1's (land) and '0's (water), return the number of islands. An island is surrounded by water and formed by connecting adjacent land cells horizontally or vertically.",
+        examples: [
+          { input: 'grid = [["1","1","0"],["0","1","0"],["0","0","1"]]', output: "2", explanation: "Two separate land masses" },
+          { input: 'grid = [["1","1","1"],["0","1","0"],["0","0","1"]]', output: "2", explanation: "Top blob and bottom-right cell" },
+        ],
+        approach:
+          "Iterate every cell. When a '1' is found, increment the island count and run DFS/BFS from that cell, marking all reachable land cells as visited (set to '0'). This ensures each island is counted exactly once.",
+        complexity: { time: "O(m×n)", space: "O(m×n)" },
+        code: `package main
+
+import "fmt"
+
+func numIslands(grid [][]byte) int {
+	count := 0
+	for r := 0; r < len(grid); r++ {
+		for c := 0; c < len(grid[0]); c++ {
+			if grid[r][c] == '1' {
+				count++
+				dfs(grid, r, c)
+			}
+		}
+	}
+	return count
+}
+
+func dfs(grid [][]byte, r, c int) {
+	if r < 0 || r >= len(grid) || c < 0 || c >= len(grid[0]) || grid[r][c] != '1' {
+		return
+	}
+	grid[r][c] = '0' // mark visited
+	dfs(grid, r+1, c)
+	dfs(grid, r-1, c)
+	dfs(grid, r, c+1)
+	dfs(grid, r, c-1)
+}
+
+func main() {
+	grid := [][]byte{
+		{'1', '1', '0'},
+		{'0', '1', '0'},
+		{'0', '0', '1'},
+	}
+	fmt.Println(numIslands(grid))
+	// Output: 2
+
+	grid2 := [][]byte{
+		{'1', '1', '1'},
+		{'0', '1', '0'},
+		{'0', '0', '1'},
+	}
+	fmt.Println(numIslands(grid2))
+	// Output: 2
+}`,
+      },
+      {
+        id: "clone-graph",
+        title: "Clone Graph",
+        difficulty: "Medium",
+        leetcode: 133,
+        description:
+          "Given a reference to a node in a connected undirected graph, return a deep copy of the graph. Each node has a value and a list of neighbours.",
+        examples: [
+          { input: "adjList = [[2,4],[1,3],[2,4],[1,3]]", output: "[[2,4],[1,3],[2,4],[1,3]]", explanation: "Deep copy with same structure, all new node objects" },
+          { input: "adjList = [[]]",                      output: "[[]]",                      explanation: "Single node with no neighbours" },
+        ],
+        approach:
+          "DFS with a hash map (original node → clone). Before recursing into neighbours, create the clone and store it in the map. This prevents infinite loops on cycles and ensures each node is cloned exactly once.",
+        complexity: { time: "O(V+E)", space: "O(V)" },
+        code: `package main
+
+import "fmt"
+
+type Node struct {
+	Val       int
+	Neighbors []*Node
+}
+
+func cloneGraph(node *Node) *Node {
+	if node == nil {
+		return nil
+	}
+	visited := make(map[*Node]*Node)
+	var dfs func(*Node) *Node
+	dfs = func(n *Node) *Node {
+		if clone, ok := visited[n]; ok {
+			return clone
+		}
+		clone := &Node{Val: n.Val}
+		visited[n] = clone
+		for _, nb := range n.Neighbors {
+			clone.Neighbors = append(clone.Neighbors, dfs(nb))
+		}
+		return clone
+	}
+	return dfs(node)
+}
+
+func main() {
+	// Build: 1--2
+	//        |  |
+	//        4--3
+	n1 := &Node{Val: 1}
+	n2 := &Node{Val: 2}
+	n3 := &Node{Val: 3}
+	n4 := &Node{Val: 4}
+	n1.Neighbors = []*Node{n2, n4}
+	n2.Neighbors = []*Node{n1, n3}
+	n3.Neighbors = []*Node{n2, n4}
+	n4.Neighbors = []*Node{n1, n3}
+
+	clone := cloneGraph(n1)
+	fmt.Println(clone.Val, len(clone.Neighbors))
+	// Output: 1 2  (node 1 with 2 neighbours)
+	fmt.Println(clone != n1) // different object
+	// Output: true
+}`,
+      },
+      {
+        id: "course-schedule",
+        title: "Course Schedule",
+        difficulty: "Medium",
+        leetcode: 207,
+        description:
+          "There are numCourses courses (0 to n-1). Given prerequisites pairs [a,b] meaning 'take b before a', return true if you can finish all courses (i.e. no cycle exists in the dependency graph).",
+        examples: [
+          { input: "numCourses=2, prerequisites=[[1,0]]",       output: "true",  explanation: "Take course 0 first, then 1" },
+          { input: "numCourses=2, prerequisites=[[1,0],[0,1]]", output: "false", explanation: "Circular dependency — cycle detected" },
+        ],
+        approach:
+          "Build a directed adjacency list. Run DFS with three states per node: 0=unvisited, 1=visiting (in current path), 2=done. If DFS reaches a node in state 1, a cycle exists. Mark nodes as done (2) after all neighbours are processed.",
+        complexity: { time: "O(V+E)", space: "O(V+E)" },
+        code: `package main
+
+import "fmt"
+
+func canFinish(numCourses int, prerequisites [][]int) bool {
+	graph := make([][]int, numCourses)
+	for _, p := range prerequisites {
+		graph[p[1]] = append(graph[p[1]], p[0])
+	}
+	// 0=unvisited 1=visiting 2=done
+	state := make([]int, numCourses)
+	var dfs func(int) bool
+	dfs = func(node int) bool {
+		if state[node] == 1 { return false } // cycle
+		if state[node] == 2 { return true }  // already processed
+		state[node] = 1
+		for _, nb := range graph[node] {
+			if !dfs(nb) { return false }
+		}
+		state[node] = 2
+		return true
+	}
+	for i := 0; i < numCourses; i++ {
+		if !dfs(i) { return false }
+	}
+	return true
+}
+
+func main() {
+	fmt.Println(canFinish(2, [][]int{{1, 0}}))
+	// Output: true
+
+	fmt.Println(canFinish(2, [][]int{{1, 0}, {0, 1}}))
+	// Output: false
+
+	fmt.Println(canFinish(4, [][]int{{1, 0}, {2, 1}, {3, 2}}))
+	// Output: true
+}`,
+      },
+      {
+        id: "pacific-atlantic-water-flow",
+        title: "Pacific Atlantic Water Flow",
+        difficulty: "Medium",
+        leetcode: 417,
+        description:
+          "Given an m×n island where the top/left borders touch the Pacific Ocean and bottom/right borders touch the Atlantic, return all cells from which water can flow to both oceans (water flows to equal or lower adjacent cells).",
+        examples: [
+          { input: "heights = [[1,2,2,3,5],[3,2,3,4,4],[2,4,5,3,1],[6,7,1,4,5],[5,1,1,2,4]]", output: "[[0,4],[1,3],[1,4],[2,2],[3,0],[3,1],[4,0]]", explanation: "7 cells can reach both oceans" },
+        ],
+        approach:
+          "Reverse the problem: BFS/DFS from all Pacific-border cells (flow uphill from ocean) and separately from all Atlantic-border cells. A cell that appears in both reachable sets flows to both oceans.",
+        complexity: { time: "O(m×n)", space: "O(m×n)" },
+        code: `package main
+
+import "fmt"
+
+func pacificAtlantic(heights [][]int) [][]int {
+	m, n := len(heights), len(heights[0])
+	dirs := [][2]int{{1,0},{-1,0},{0,1},{0,-1}}
+
+	bfs := func(starts [][2]int) [][]bool {
+		visited := make([][]bool, m)
+		for i := range visited { visited[i] = make([]bool, n) }
+		queue := starts
+		for _, s := range starts { visited[s[0]][s[1]] = true }
+		for len(queue) > 0 {
+			cell := queue[0]; queue = queue[1:]
+			for _, d := range dirs {
+				r, c := cell[0]+d[0], cell[1]+d[1]
+				if r >= 0 && r < m && c >= 0 && c < n &&
+					!visited[r][c] && heights[r][c] >= heights[cell[0]][cell[1]] {
+					visited[r][c] = true
+					queue = append(queue, [2]int{r, c})
+				}
+			}
+		}
+		return visited
+	}
+
+	pacStarts, atlStarts := [][2]int{}, [][2]int{}
+	for r := 0; r < m; r++ {
+		pacStarts  = append(pacStarts,  [2]int{r, 0})
+		atlStarts  = append(atlStarts,  [2]int{r, n-1})
+	}
+	for c := 0; c < n; c++ {
+		pacStarts  = append(pacStarts,  [2]int{0, c})
+		atlStarts  = append(atlStarts,  [2]int{m-1, c})
+	}
+
+	pac := bfs(pacStarts)
+	atl := bfs(atlStarts)
+
+	result := [][]int{}
+	for r := 0; r < m; r++ {
+		for c := 0; c < n; c++ {
+			if pac[r][c] && atl[r][c] {
+				result = append(result, []int{r, c})
+			}
+		}
+	}
+	return result
+}
+
+func main() {
+	h := [][]int{{1,2,2,3,5},{3,2,3,4,4},{2,4,5,3,1},{6,7,1,4,5},{5,1,1,2,4}}
+	fmt.Println(pacificAtlantic(h))
+	// Output: [[0 4] [1 3] [1 4] [2 2] [3 0] [3 1] [4 0]]
+}`,
+      },
+      {
+        id: "rotting-oranges",
+        title: "Rotting Oranges",
+        difficulty: "Medium",
+        leetcode: 994,
+        description:
+          "In a grid, 0=empty, 1=fresh orange, 2=rotten orange. Each minute all fresh oranges adjacent to rotten ones become rotten. Return the minimum minutes until no fresh orange remains, or -1 if impossible.",
+        examples: [
+          { input: "grid = [[2,1,1],[1,1,0],[0,1,1]]", output: "4", explanation: "All fresh oranges rot after 4 minutes" },
+          { input: "grid = [[2,1,1],[0,1,1],[1,0,1]]", output: "-1", explanation: "Bottom-left fresh orange is unreachable" },
+        ],
+        approach:
+          "Multi-source BFS starting from all rotten oranges simultaneously. Each BFS level = one minute. Count fresh oranges before BFS; decrement as they rot. If any fresh remain after BFS, return -1.",
+        complexity: { time: "O(m×n)", space: "O(m×n)" },
+        code: `package main
+
+import "fmt"
+
+func orangesRotting(grid [][]int) int {
+	m, n := len(grid), len(grid[0])
+	queue := [][2]int{}
+	fresh := 0
+	for r := 0; r < m; r++ {
+		for c := 0; c < n; c++ {
+			if grid[r][c] == 2 { queue = append(queue, [2]int{r, c}) }
+			if grid[r][c] == 1 { fresh++ }
+		}
+	}
+	dirs := [][2]int{{1,0},{-1,0},{0,1},{0,-1}}
+	minutes := 0
+	for len(queue) > 0 && fresh > 0 {
+		minutes++
+		size := len(queue)
+		for i := 0; i < size; i++ {
+			cell := queue[0]; queue = queue[1:]
+			for _, d := range dirs {
+				r, c := cell[0]+d[0], cell[1]+d[1]
+				if r >= 0 && r < m && c >= 0 && c < n && grid[r][c] == 1 {
+					grid[r][c] = 2
+					fresh--
+					queue = append(queue, [2]int{r, c})
+				}
+			}
+		}
+	}
+	if fresh > 0 { return -1 }
+	return minutes
+}
+
+func main() {
+	fmt.Println(orangesRotting([][]int{{2,1,1},{1,1,0},{0,1,1}}))
+	// Output: 4
+
+	fmt.Println(orangesRotting([][]int{{2,1,1},{0,1,1},{1,0,1}}))
+	// Output: -1
+
+	fmt.Println(orangesRotting([][]int{{0,2}}))
+	// Output: 0
+}`,
+      },
+      {
+        id: "number-of-connected-components",
+        title: "Number of Connected Components",
+        difficulty: "Medium",
+        leetcode: 323,
+        description:
+          "Given n nodes (0 to n-1) and a list of undirected edges, return the number of connected components in the graph.",
+        examples: [
+          { input: "n=5, edges=[[0,1],[1,2],[3,4]]",          output: "2", explanation: "Components: {0,1,2} and {3,4}" },
+          { input: "n=5, edges=[[0,1],[1,2],[2,3],[3,4]]",    output: "1", explanation: "All nodes connected" },
+        ],
+        approach:
+          "Union-Find (Disjoint Set Union). Initialise each node as its own parent. For each edge, union the two nodes. Count the number of nodes that are still their own root — each root represents one component.",
+        complexity: { time: "O(n·α(n)) ≈ O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func countComponents(n int, edges [][]int) int {
+	parent := make([]int, n)
+	rank   := make([]int, n)
+	for i := range parent { parent[i] = i }
+
+	var find func(int) int
+	find = func(x int) int {
+		if parent[x] != x { parent[x] = find(parent[x]) }
+		return parent[x]
+	}
+
+	union := func(a, b int) bool {
+		pa, pb := find(a), find(b)
+		if pa == pb { return false }
+		if rank[pa] < rank[pb] { pa, pb = pb, pa }
+		parent[pb] = pa
+		if rank[pa] == rank[pb] { rank[pa]++ }
+		return true
+	}
+
+	components := n
+	for _, e := range edges {
+		if union(e[0], e[1]) { components-- }
+	}
+	return components
+}
+
+func main() {
+	fmt.Println(countComponents(5, [][]int{{0,1},{1,2},{3,4}}))
+	// Output: 2
+
+	fmt.Println(countComponents(5, [][]int{{0,1},{1,2},{2,3},{3,4}}))
+	// Output: 1
+}`,
+      },
+      {
+        id: "surrounded-regions",
+        title: "Surrounded Regions",
+        difficulty: "Medium",
+        leetcode: 130,
+        description:
+          "Given an m×n board of 'X' and 'O', capture all 'O' regions surrounded by 'X' — flip them to 'X'. 'O's on or connected to the border are never flipped.",
+        examples: [
+          { input: '[["X","X","X","X"],["X","O","O","X"],["X","X","O","X"],["X","O","X","X"]]', output: '[["X","X","X","X"],["X","X","X","X"],["X","X","X","X"],["X","O","X","X"]]', explanation: "Interior O's flipped; border-connected O stays" },
+        ],
+        approach:
+          "Mark all 'O's connected to the border as safe (use DFS/BFS to mark them as 'S'). Then scan the whole board: 'O' → 'X' (captured), 'S' → 'O' (restore safe). This avoids tracing which O's are surrounded.",
+        complexity: { time: "O(m×n)", space: "O(m×n)" },
+        code: `package main
+
+import "fmt"
+
+func solve(board [][]byte) {
+	m, n := len(board), len(board[0])
+
+	var dfs func(r, c int)
+	dfs = func(r, c int) {
+		if r < 0 || r >= m || c < 0 || c >= n || board[r][c] != 'O' { return }
+		board[r][c] = 'S' // safe
+		dfs(r+1, c); dfs(r-1, c); dfs(r, c+1); dfs(r, c-1)
+	}
+
+	// Mark border-connected O's as safe
+	for r := 0; r < m; r++ { dfs(r, 0); dfs(r, n-1) }
+	for c := 0; c < n; c++ { dfs(0, c); dfs(m-1, c) }
+
+	// Flip: O→X (captured), S→O (restore)
+	for r := 0; r < m; r++ {
+		for c := 0; c < n; c++ {
+			if board[r][c] == 'O' { board[r][c] = 'X' }
+			if board[r][c] == 'S' { board[r][c] = 'O' }
+		}
+	}
+}
+
+func main() {
+	board := [][]byte{
+		{'X','X','X','X'},
+		{'X','O','O','X'},
+		{'X','X','O','X'},
+		{'X','O','X','X'},
+	}
+	solve(board)
+	for _, row := range board { fmt.Println(string(row)) }
+	// Output:
+	// XXXX
+	// XXXX
+	// XXXX
+	// XOXX
+}`,
+      },
+      {
+        id: "graph-valid-tree",
+        title: "Graph Valid Tree",
+        difficulty: "Medium",
+        leetcode: 261,
+        description:
+          "Given n nodes and a list of undirected edges, return true if the edges form a valid tree — connected with no cycles.",
+        examples: [
+          { input: "n=5, edges=[[0,1],[0,2],[0,3],[1,4]]", output: "true",  explanation: "Connected, no cycle, exactly n-1 edges" },
+          { input: "n=5, edges=[[0,1],[1,2],[2,3],[1,3],[1,4]]", output: "false", explanation: "Cycle: 1→2→3→1" },
+        ],
+        approach:
+          "A valid tree has exactly n-1 edges and is connected. Use Union-Find: if unioning an edge finds both nodes already in the same component, a cycle exists. After all edges, verify the component count is 1.",
+        complexity: { time: "O(n·α(n))", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func validTree(n int, edges [][]int) bool {
+	if len(edges) != n-1 { return false }
+	parent := make([]int, n)
+	for i := range parent { parent[i] = i }
+
+	var find func(int) int
+	find = func(x int) int {
+		if parent[x] != x { parent[x] = find(parent[x]) }
+		return parent[x]
+	}
+
+	for _, e := range edges {
+		pa, pb := find(e[0]), find(e[1])
+		if pa == pb { return false } // cycle
+		parent[pa] = pb
+	}
+	return true
+}
+
+func main() {
+	fmt.Println(validTree(5, [][]int{{0,1},{0,2},{0,3},{1,4}}))
+	// Output: true
+
+	fmt.Println(validTree(5, [][]int{{0,1},{1,2},{2,3},{1,3},{1,4}}))
+	// Output: false
+}`,
+      },
+      {
+        id: "word-ladder",
+        title: "Word Ladder",
+        difficulty: "Hard",
+        leetcode: 127,
+        description:
+          "Given beginWord, endWord, and a wordList, return the length of the shortest transformation sequence from beginWord to endWord where each step changes exactly one letter and every intermediate word must be in wordList.",
+        examples: [
+          { input: 'beginWord="hit", endWord="cog", wordList=["hot","dot","dog","lot","log","cog"]', output: "5", explanation: "hit→hot→dot→dog→cog (5 words)" },
+          { input: 'beginWord="hit", endWord="cog", wordList=["hot","dot","dog","lot","log"]',       output: "0", explanation: "endWord not in wordList" },
+        ],
+        approach:
+          "BFS from beginWord. At each level try changing every character (a-z) of the current word. If the new word is in the wordSet, add it to the queue and remove it from the set (visited). Return the level count when endWord is reached.",
+        complexity: { time: "O(m²×n) where m=word length, n=list size", space: "O(m×n)" },
+        code: `package main
+
+import "fmt"
+
+func ladderLength(beginWord string, endWord string, wordList []string) int {
+	wordSet := make(map[string]bool)
+	for _, w := range wordList { wordSet[w] = true }
+	if !wordSet[endWord] { return 0 }
+
+	queue := []string{beginWord}
+	steps := 1
+
+	for len(queue) > 0 {
+		size := len(queue)
+		for i := 0; i < size; i++ {
+			word := queue[0]; queue = queue[1:]
+			if word == endWord { return steps }
+			b := []byte(word)
+			for j := 0; j < len(b); j++ {
+				orig := b[j]
+				for c := byte('a'); c <= 'z'; c++ {
+					if c == orig { continue }
+					b[j] = c
+					next := string(b)
+					if wordSet[next] {
+						queue = append(queue, next)
+						delete(wordSet, next)
+					}
+				}
+				b[j] = orig
+			}
+		}
+		steps++
+	}
+	return 0
+}
+
+func main() {
+	fmt.Println(ladderLength("hit", "cog", []string{"hot","dot","dog","lot","log","cog"}))
+	// Output: 5
+
+	fmt.Println(ladderLength("hit", "cog", []string{"hot","dot","dog","lot","log"}))
+	// Output: 0
+}`,
+      },
+      {
+        id: "course-schedule-ii",
+        title: "Course Schedule II",
+        difficulty: "Medium",
+        leetcode: 210,
+        description:
+          "Given numCourses and prerequisites, return any valid order to finish all courses (topological sort). If impossible, return an empty array.",
+        examples: [
+          { input: "numCourses=4, prerequisites=[[1,0],[2,0],[3,1],[3,2]]", output: "[0,1,2,3] or [0,2,1,3]", explanation: "Valid topological orderings" },
+          { input: "numCourses=2, prerequisites=[[1,0],[0,1]]",            output: "[]",                       explanation: "Cycle — impossible" },
+        ],
+        approach:
+          "DFS-based topological sort with three states (0=unvisited, 1=visiting, 2=done). Process each unvisited node: mark visiting, recurse on all neighbours, mark done, append to result. Reverse at the end. Return empty if a cycle is found.",
+        complexity: { time: "O(V+E)", space: "O(V+E)" },
+        code: `package main
+
+import "fmt"
+
+func findOrder(numCourses int, prerequisites [][]int) []int {
+	graph := make([][]int, numCourses)
+	for _, p := range prerequisites {
+		graph[p[1]] = append(graph[p[1]], p[0])
+	}
+	state := make([]int, numCourses) // 0=unvisited 1=visiting 2=done
+	order := []int{}
+	cycle := false
+
+	var dfs func(int)
+	dfs = func(node int) {
+		if cycle || state[node] == 1 { cycle = true; return }
+		if state[node] == 2 { return }
+		state[node] = 1
+		for _, nb := range graph[node] { dfs(nb) }
+		state[node] = 2
+		order = append(order, node)
+	}
+
+	for i := 0; i < numCourses; i++ { dfs(i) }
+	if cycle { return []int{} }
+
+	// reverse
+	for l, r := 0, len(order)-1; l < r; l, r = l+1, r-1 {
+		order[l], order[r] = order[r], order[l]
+	}
+	return order
+}
+
+func main() {
+	fmt.Println(findOrder(4, [][]int{{1,0},{2,0},{3,1},{3,2}}))
+	// Output: [0 2 1 3] or [0 1 2 3]
+
+	fmt.Println(findOrder(2, [][]int{{1,0},{0,1}}))
+	// Output: []
+}`,
+      },
+    ],
+  },
+  // ─────────────────────────────────────────────────────────────────────────
+  // 10. Backtracking
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "backtracking",
+    icon: "↩️",
+    title: "Backtracking",
+    problems: [
+      {
+        id: "subsets",
+        title: "Subsets",
+        difficulty: "Medium",
+        leetcode: 78,
+        description:
+          "Given an integer array nums of unique elements, return all possible subsets (the power set). The solution set must not contain duplicate subsets.",
+        examples: [
+          { input: "nums = [1,2,3]", output: "[[],[1],[1,2],[1,2,3],[1,3],[2],[2,3],[3]]", explanation: "All 2³ = 8 subsets" },
+          { input: "nums = [0]",     output: "[[],[0]]",                                    explanation: "Empty set and {0}" },
+        ],
+        approach:
+          "DFS with a start index. At each call append the current path to results (every node in the decision tree is a valid subset). Loop from start to end: include nums[i], recurse with i+1, then remove nums[i] (backtrack).",
+        complexity: { time: "O(2ⁿ)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func subsets(nums []int) [][]int {
+	result := [][]int{}
+	var dfs func(start int, path []int)
+	dfs = func(start int, path []int) {
+		tmp := make([]int, len(path))
+		copy(tmp, path)
+		result = append(result, tmp)
+		for i := start; i < len(nums); i++ {
+			path = append(path, nums[i])
+			dfs(i+1, path)
+			path = path[:len(path)-1] // backtrack
+		}
+	}
+	dfs(0, []int{})
+	return result
+}
+
+func main() {
+	fmt.Println(subsets([]int{1, 2, 3}))
+	// Output: [[] [1] [1 2] [1 2 3] [1 3] [2] [2 3] [3]]
+
+	fmt.Println(subsets([]int{0}))
+	// Output: [[] [0]]
+}`,
+      },
+      {
+        id: "combination-sum",
+        title: "Combination Sum",
+        difficulty: "Medium",
+        leetcode: 39,
+        description:
+          "Given an array of distinct integers candidates and a target, return all unique combinations where the chosen numbers sum to target. The same number may be used unlimited times.",
+        examples: [
+          { input: "candidates = [2,3,6,7], target = 7", output: "[[2,2,3],[7]]",      explanation: "Two ways to reach 7" },
+          { input: "candidates = [2,3,5], target = 8",   output: "[[2,2,2,2],[2,3,3],[3,5]]", explanation: "Three combinations" },
+        ],
+        approach:
+          "DFS with a start index and remaining target. At each step try including candidates[i] (can reuse — don't increment start). If remaining == 0, record the path. If remaining < 0 or i >= len, backtrack. Sorting candidates enables early pruning.",
+        complexity: { time: "O(2^(t/m)) where t=target, m=min candidate", space: "O(t/m)" },
+        code: `package main
+
+import "fmt"
+
+func combinationSum(candidates []int, target int) [][]int {
+	result := [][]int{}
+	var dfs func(start, remaining int, path []int)
+	dfs = func(start, remaining int, path []int) {
+		if remaining == 0 {
+			tmp := make([]int, len(path))
+			copy(tmp, path)
+			result = append(result, tmp)
+			return
+		}
+		for i := start; i < len(candidates); i++ {
+			if candidates[i] > remaining { continue }
+			path = append(path, candidates[i])
+			dfs(i, remaining-candidates[i], path) // i, not i+1 (reuse allowed)
+			path = path[:len(path)-1]
+		}
+	}
+	dfs(0, target, []int{})
+	return result
+}
+
+func main() {
+	fmt.Println(combinationSum([]int{2, 3, 6, 7}, 7))
+	// Output: [[2 2 3] [7]]
+
+	fmt.Println(combinationSum([]int{2, 3, 5}, 8))
+	// Output: [[2 2 2 2] [2 3 3] [3 5]]
+}`,
+      },
+      {
+        id: "permutations",
+        title: "Permutations",
+        difficulty: "Medium",
+        leetcode: 46,
+        description:
+          "Given an array nums of distinct integers, return all possible permutations in any order.",
+        examples: [
+          { input: "nums = [1,2,3]", output: "[[1,2,3],[1,3,2],[2,1,3],[2,3,1],[3,1,2],[3,2,1]]", explanation: "All 3! = 6 permutations" },
+          { input: "nums = [0,1]",   output: "[[0,1],[1,0]]",                                       explanation: "2! = 2 permutations" },
+        ],
+        approach:
+          "Swap-based backtracking: fix each element at the current position by swapping it with every subsequent element, recurse to fill the next position, then swap back to restore order. No extra visited array needed.",
+        complexity: { time: "O(n!)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func permute(nums []int) [][]int {
+	result := [][]int{}
+	var dfs func(start int)
+	dfs = func(start int) {
+		if start == len(nums) {
+			tmp := make([]int, len(nums))
+			copy(tmp, nums)
+			result = append(result, tmp)
+			return
+		}
+		for i := start; i < len(nums); i++ {
+			nums[start], nums[i] = nums[i], nums[start]
+			dfs(start + 1)
+			nums[start], nums[i] = nums[i], nums[start] // backtrack
+		}
+	}
+	dfs(0)
+	return result
+}
+
+func main() {
+	fmt.Println(permute([]int{1, 2, 3}))
+	// Output: [[1 2 3] [1 3 2] [2 1 3] [2 3 1] [3 2 1] [3 1 2]]
+
+	fmt.Println(permute([]int{0, 1}))
+	// Output: [[0 1] [1 0]]
+}`,
+      },
+      {
+        id: "letter-combinations-phone",
+        title: "Letter Combinations of a Phone Number",
+        difficulty: "Medium",
+        leetcode: 17,
+        description:
+          "Given a string of digits (2-9), return all possible letter combinations the number could represent (like a phone keypad). Return an empty list for empty input.",
+        examples: [
+          { input: 'digits = "23"', output: '["ad","ae","af","bd","be","bf","cd","ce","cf"]', explanation: "2=abc, 3=def — all 9 combinations" },
+          { input: 'digits = "2"',  output: '["a","b","c"]',                                  explanation: "Single digit" },
+        ],
+        approach:
+          "DFS with an index into digits. At each level try every letter mapped to digits[index], append it to the current path, recurse for index+1, then backtrack. When index reaches len(digits), record the path.",
+        complexity: { time: "O(4ⁿ × n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func letterCombinations(digits string) []string {
+	if len(digits) == 0 { return nil }
+	phone := map[byte]string{
+		'2': "abc", '3': "def", '4': "ghi", '5': "jkl",
+		'6': "mno", '7': "pqrs", '8': "tuv", '9': "wxyz",
+	}
+	result := []string{}
+	var dfs func(idx int, path []byte)
+	dfs = func(idx int, path []byte) {
+		if idx == len(digits) {
+			result = append(result, string(path))
+			return
+		}
+		for _, c := range phone[digits[idx]] {
+			path = append(path, byte(c))
+			dfs(idx+1, path)
+			path = path[:len(path)-1]
+		}
+	}
+	dfs(0, []byte{})
+	return result
+}
+
+func main() {
+	fmt.Println(letterCombinations("23"))
+	// Output: [ad ae af bd be bf cd ce cf]
+
+	fmt.Println(letterCombinations("2"))
+	// Output: [a b c]
+}`,
+      },
+      {
+        id: "n-queens",
+        title: "N-Queens",
+        difficulty: "Hard",
+        leetcode: 51,
+        description:
+          "Place n queens on an n×n chessboard so no two queens attack each other. Return all distinct solutions, each as a list of strings where 'Q' is a queen and '.' is empty.",
+        examples: [
+          { input: "n = 4", output: '[["..Q.","Q...","...Q",".Q.."],["Q...","...Q",".Q..","..Q."]]', explanation: "Two solutions for 4-queens" },
+          { input: "n = 1", output: '[["Q"]]',                                                        explanation: "Trivial single solution" },
+        ],
+        approach:
+          "Place queens one row at a time. Track occupied columns and both diagonals (col, row-col, row+col) in sets. For each row try every column — skip if any set contains that position. Backtrack by removing from sets after recursion.",
+        complexity: { time: "O(n!)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func solveNQueens(n int) [][]string {
+	result := [][]string{}
+	cols := make(map[int]bool)
+	diag1 := make(map[int]bool) // row - col
+	diag2 := make(map[int]bool) // row + col
+	board := make([][]byte, n)
+	for i := range board {
+		board[i] = []byte(strings.Repeat(".", n))
+	}
+
+	var dfs func(row int)
+	dfs = func(row int) {
+		if row == n {
+			snapshot := make([]string, n)
+			for i, r := range board { snapshot[i] = string(r) }
+			result = append(result, snapshot)
+			return
+		}
+		for col := 0; col < n; col++ {
+			if cols[col] || diag1[row-col] || diag2[row+col] { continue }
+			board[row][col] = 'Q'
+			cols[col], diag1[row-col], diag2[row+col] = true, true, true
+			dfs(row + 1)
+			board[row][col] = '.'
+			delete(cols, col); delete(diag1, row-col); delete(diag2, row+col)
+		}
+	}
+	dfs(0)
+	return result
+}
+
+func main() {
+	solutions := solveNQueens(4)
+	fmt.Println(len(solutions), "solutions")
+	for _, s := range solutions { fmt.Println(s) }
+	// Output:
+	// 2 solutions
+	// [..Q. Q... ...Q .Q..]
+	// [.Q.. ...Q Q... ..Q.]
+}`,
+      },
+      {
+        id: "word-search",
+        title: "Word Search",
+        difficulty: "Medium",
+        leetcode: 79,
+        description:
+          "Given an m×n character grid and a string word, return true if the word exists in the grid as a sequence of adjacent (horizontally/vertically) cells, each used at most once.",
+        examples: [
+          { input: 'board=[["A","B","C","E"],["S","F","C","S"],["A","D","E","E"]], word="ABCCED"', output: "true",  explanation: "Path A→B→C→C→E→D exists" },
+          { input: 'word="ABCB"',                                                                   output: "false", explanation: "Cannot reuse cell B" },
+        ],
+        approach:
+          "DFS from every cell that matches word[0]. At each step mark the cell as visited (temporarily change to '#'), recurse on 4 neighbours for the next character, then restore the cell (backtrack). Return true as soon as all characters are matched.",
+        complexity: { time: "O(m×n×4^L) where L=word length", space: "O(L)" },
+        code: `package main
+
+import "fmt"
+
+func exist(board [][]byte, word string) bool {
+	m, n := len(board), len(board[0])
+
+	var dfs func(r, c, idx int) bool
+	dfs = func(r, c, idx int) bool {
+		if idx == len(word) { return true }
+		if r < 0 || r >= m || c < 0 || c >= n || board[r][c] != word[idx] {
+			return false
+		}
+		tmp := board[r][c]
+		board[r][c] = '#' // mark visited
+		found := dfs(r+1,c,idx+1) || dfs(r-1,c,idx+1) ||
+		         dfs(r,c+1,idx+1) || dfs(r,c-1,idx+1)
+		board[r][c] = tmp // backtrack
+		return found
+	}
+
+	for r := 0; r < m; r++ {
+		for c := 0; c < n; c++ {
+			if dfs(r, c, 0) { return true }
+		}
+	}
+	return false
+}
+
+func main() {
+	board := [][]byte{
+		{'A','B','C','E'},
+		{'S','F','C','S'},
+		{'A','D','E','E'},
+	}
+	fmt.Println(exist(board, "ABCCED"))
+	// Output: true
+
+	fmt.Println(exist(board, "SEE"))
+	// Output: true
+
+	fmt.Println(exist(board, "ABCB"))
+	// Output: false
+}`,
+      },
+      {
+        id: "palindrome-partitioning",
+        title: "Palindrome Partitioning",
+        difficulty: "Medium",
+        leetcode: 131,
+        description:
+          "Given a string s, partition it such that every substring in the partition is a palindrome. Return all possible palindrome partitionings.",
+        examples: [
+          { input: 's = "aab"', output: '[["a","a","b"],["aa","b"]]', explanation: "Two valid palindrome partitions" },
+          { input: 's = "a"',   output: '[["a"]]',                    explanation: "Single character is always a palindrome" },
+        ],
+        approach:
+          "DFS with a start index. Try every substring s[start:end+1] — if it's a palindrome, add it to the current path and recurse from end+1. When start reaches len(s), record the partition. Backtrack after each recursive call.",
+        complexity: { time: "O(n × 2ⁿ)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func partition(s string) [][]string {
+	result := [][]string{}
+
+	isPalin := func(sub string) bool {
+		for l, r := 0, len(sub)-1; l < r; l, r = l+1, r-1 {
+			if sub[l] != sub[r] { return false }
+		}
+		return true
+	}
+
+	var dfs func(start int, path []string)
+	dfs = func(start int, path []string) {
+		if start == len(s) {
+			tmp := make([]string, len(path))
+			copy(tmp, path)
+			result = append(result, tmp)
+			return
+		}
+		for end := start + 1; end <= len(s); end++ {
+			sub := s[start:end]
+			if isPalin(sub) {
+				path = append(path, sub)
+				dfs(end, path)
+				path = path[:len(path)-1]
+			}
+		}
+	}
+	dfs(0, []string{})
+	return result
+}
+
+func main() {
+	fmt.Println(partition("aab"))
+	// Output: [[a a b] [aa b]]
+
+	fmt.Println(partition("a"))
+	// Output: [[a]]
+}`,
+      },
+      {
+        id: "combination-sum-ii",
+        title: "Combination Sum II",
+        difficulty: "Medium",
+        leetcode: 40,
+        description:
+          "Given a collection of candidate numbers (may have duplicates) and a target, find all unique combinations that sum to target. Each number may only be used once.",
+        examples: [
+          { input: "candidates = [10,1,2,7,6,1,5], target = 8", output: "[[1,1,6],[1,2,5],[1,7],[2,6]]", explanation: "4 unique combinations" },
+          { input: "candidates = [2,5,2,1,2], target = 5",       output: "[[1,2,2],[5]]",                  explanation: "2 unique combinations" },
+        ],
+        approach:
+          "Sort first. DFS with start index; after picking candidates[i], advance to i+1 (no reuse). To avoid duplicate combinations, skip candidates[i] when i > start and candidates[i] == candidates[i-1] — same value already explored at this level.",
+        complexity: { time: "O(2ⁿ)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func combinationSum2(candidates []int, target int) [][]int {
+	sort.Ints(candidates)
+	result := [][]int{}
+	var dfs func(start, remaining int, path []int)
+	dfs = func(start, remaining int, path []int) {
+		if remaining == 0 {
+			tmp := make([]int, len(path))
+			copy(tmp, path)
+			result = append(result, tmp)
+			return
+		}
+		for i := start; i < len(candidates); i++ {
+			if candidates[i] > remaining { break }
+			if i > start && candidates[i] == candidates[i-1] { continue } // skip dup
+			path = append(path, candidates[i])
+			dfs(i+1, remaining-candidates[i], path)
+			path = path[:len(path)-1]
+		}
+	}
+	dfs(0, target, []int{})
+	return result
+}
+
+func main() {
+	fmt.Println(combinationSum2([]int{10, 1, 2, 7, 6, 1, 5}, 8))
+	// Output: [[1 1 6] [1 2 5] [1 7] [2 6]]
+
+	fmt.Println(combinationSum2([]int{2, 5, 2, 1, 2}, 5))
+	// Output: [[1 2 2] [5]]
+}`,
+      },
+      {
+        id: "subsets-ii",
+        title: "Subsets II",
+        difficulty: "Medium",
+        leetcode: 90,
+        description:
+          "Given an integer array nums that may contain duplicates, return all possible unique subsets. The solution set must not contain duplicate subsets.",
+        examples: [
+          { input: "nums = [1,2,2]", output: "[[],[1],[1,2],[1,2,2],[2],[2,2]]", explanation: "6 unique subsets" },
+          { input: "nums = [0]",     output: "[[],[0]]",                          explanation: "2 subsets" },
+        ],
+        approach:
+          "Sort first. Same DFS as Subsets, but skip nums[i] when i > start and nums[i] == nums[i-1] to avoid generating duplicate subsets at the same decision level.",
+        complexity: { time: "O(2ⁿ)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func subsetsWithDup(nums []int) [][]int {
+	sort.Ints(nums)
+	result := [][]int{}
+	var dfs func(start int, path []int)
+	dfs = func(start int, path []int) {
+		tmp := make([]int, len(path))
+		copy(tmp, path)
+		result = append(result, tmp)
+		for i := start; i < len(nums); i++ {
+			if i > start && nums[i] == nums[i-1] { continue } // skip dup
+			path = append(path, nums[i])
+			dfs(i+1, path)
+			path = path[:len(path)-1]
+		}
+	}
+	dfs(0, []int{})
+	return result
+}
+
+func main() {
+	fmt.Println(subsetsWithDup([]int{1, 2, 2}))
+	// Output: [[] [1] [1 2] [1 2 2] [2] [2 2]]
+
+	fmt.Println(subsetsWithDup([]int{0}))
+	// Output: [[] [0]]
+}`,
+      },
+      {
+        id: "generate-parentheses",
+        title: "Generate Parentheses",
+        difficulty: "Medium",
+        leetcode: 22,
+        description:
+          "Given n pairs of parentheses, generate all combinations of well-formed parentheses.",
+        examples: [
+          { input: "n = 3", output: '["((()))","(()())","(())()","()(())","()()()"]', explanation: "All 5 valid combinations for n=3" },
+          { input: "n = 1", output: '["()"]',                                          explanation: "Only one valid combination" },
+        ],
+        approach:
+          "DFS tracking open and close counts. Add '(' if open < n. Add ')' if close < open. When the path length equals 2n, record it. This naturally generates only valid sequences without any post-filtering.",
+        complexity: { time: "O(4ⁿ/√n) — Catalan number", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func generateParenthesis(n int) []string {
+	result := []string{}
+	var dfs func(open, close int, path []byte)
+	dfs = func(open, close int, path []byte) {
+		if len(path) == 2*n {
+			result = append(result, string(path))
+			return
+		}
+		if open < n {
+			dfs(open+1, close, append(path, '('))
+		}
+		if close < open {
+			dfs(open, close+1, append(path, ')'))
+		}
+	}
+	dfs(0, 0, []byte{})
+	return result
+}
+
+func main() {
+	fmt.Println(generateParenthesis(3))
+	// Output: [((()))  (()()) (())() ()(()) ()()()]
+
+	fmt.Println(generateParenthesis(1))
+	// Output: [()]
+}`,
+      },
+    ],
+  },
+  // ─────────────────────────────────────────────────────────────────────────
+  // 11. Dynamic Programming
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "dynamic-programming",
+    icon: "📐",
+    title: "Dynamic Programming",
+    problems: [
+      {
+        id: "climbing-stairs",
+        title: "Climbing Stairs",
+        difficulty: "Easy",
+        leetcode: 70,
+        description:
+          "You are climbing a staircase with n steps. Each time you can climb 1 or 2 steps. In how many distinct ways can you reach the top?",
+        examples: [
+          { input: "n = 2", output: "2",  explanation: "1+1 or 2" },
+          { input: "n = 3", output: "3",  explanation: "1+1+1, 1+2, or 2+1" },
+        ],
+        approach:
+          "ways(n) = ways(n-1) + ways(n-2) — identical to Fibonacci. Use two variables instead of an array: at each step shift prev2=prev1, prev1=prev1+prev2. Base cases: ways(1)=1, ways(2)=2.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func climbStairs(n int) int {
+	if n <= 2 {
+		return n
+	}
+	prev2, prev1 := 1, 2
+	for i := 3; i <= n; i++ {
+		prev2, prev1 = prev1, prev1+prev2
+	}
+	return prev1
+}
+
+func main() {
+	fmt.Println(climbStairs(2))
+	// Output: 2
+
+	fmt.Println(climbStairs(3))
+	// Output: 3
+
+	fmt.Println(climbStairs(10))
+	// Output: 89
+}`,
+      },
+      {
+        id: "house-robber",
+        title: "House Robber",
+        difficulty: "Medium",
+        leetcode: 198,
+        description:
+          "Given an array of non-negative integers representing the amount of money at each house, return the maximum amount you can rob without robbing two adjacent houses.",
+        examples: [
+          { input: "nums = [1,2,3,1]",   output: "4",  explanation: "Rob house 1 (1) + house 3 (3) = 4" },
+          { input: "nums = [2,7,9,3,1]", output: "12", explanation: "Rob house 1 (2) + house 3 (9) + house 5 (1) = 12" },
+        ],
+        approach:
+          "dp[i] = max(dp[i-1], dp[i-2] + nums[i]). Either skip the current house (take dp[i-1]) or rob it and add to the best two houses ago. Track only two variables — no array needed.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func rob(nums []int) int {
+	prev2, prev1 := 0, 0
+	for _, n := range nums {
+		prev2, prev1 = prev1, max(prev1, prev2+n)
+	}
+	return prev1
+}
+
+func max(a, b int) int {
+	if a > b { return a }
+	return b
+}
+
+func main() {
+	fmt.Println(rob([]int{1, 2, 3, 1}))
+	// Output: 4
+
+	fmt.Println(rob([]int{2, 7, 9, 3, 1}))
+	// Output: 12
+
+	fmt.Println(rob([]int{2, 1, 1, 2}))
+	// Output: 4
+}`,
+      },
+      {
+        id: "longest-common-subsequence",
+        title: "Longest Common Subsequence",
+        difficulty: "Medium",
+        leetcode: 1143,
+        description:
+          "Given two strings text1 and text2, return the length of their longest common subsequence. A subsequence is derived by deleting some (or no) characters without changing relative order.",
+        examples: [
+          { input: 'text1 = "abcde", text2 = "ace"', output: "3", explanation: '"ace" is the LCS' },
+          { input: 'text1 = "abc", text2 = "abc"',   output: "3", explanation: "Entire string is the LCS" },
+          { input: 'text1 = "abc", text2 = "def"',   output: "0", explanation: "No common characters" },
+        ],
+        approach:
+          "2D DP table where dp[i][j] = LCS length for text1[:i] and text2[:j]. If characters match: dp[i][j] = dp[i-1][j-1] + 1. Otherwise: dp[i][j] = max(dp[i-1][j], dp[i][j-1]). Can optimise to two rows.",
+        complexity: { time: "O(m×n)", space: "O(m×n)" },
+        code: `package main
+
+import "fmt"
+
+func longestCommonSubsequence(text1 string, text2 string) int {
+	m, n := len(text1), len(text2)
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+	}
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if text1[i-1] == text2[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else {
+				dp[i][j] = dp[i-1][j]
+				if dp[i][j-1] > dp[i][j] {
+					dp[i][j] = dp[i][j-1]
+				}
+			}
+		}
+	}
+	return dp[m][n]
+}
+
+func main() {
+	fmt.Println(longestCommonSubsequence("abcde", "ace"))
+	// Output: 3
+
+	fmt.Println(longestCommonSubsequence("abc", "abc"))
+	// Output: 3
+
+	fmt.Println(longestCommonSubsequence("abc", "def"))
+	// Output: 0
+}`,
+      },
+      {
+        id: "coin-change",
+        title: "Coin Change",
+        difficulty: "Medium",
+        leetcode: 322,
+        description:
+          "Given an array of coin denominations and an amount, return the fewest number of coins needed to make up that amount. Return -1 if it is not possible.",
+        examples: [
+          { input: "coins = [1,5,10], amount = 11", output: "2",  explanation: "10 + 1 = 11" },
+          { input: "coins = [2], amount = 3",        output: "-1", explanation: "Cannot make 3 with only 2s" },
+        ],
+        approach:
+          "Bottom-up DP: dp[i] = minimum coins to make amount i. Initialise dp[0]=0, rest=∞. For each amount from 1 to amount, try every coin: dp[i] = min(dp[i], dp[i-coin]+1) if i >= coin. Answer is dp[amount] or -1 if still ∞.",
+        complexity: { time: "O(amount × coins)", space: "O(amount)" },
+        code: `package main
+
+import "fmt"
+
+func coinChange(coins []int, amount int) int {
+	const inf = 1<<31 - 1
+	dp := make([]int, amount+1)
+	for i := 1; i <= amount; i++ {
+		dp[i] = inf
+	}
+	for i := 1; i <= amount; i++ {
+		for _, c := range coins {
+			if i >= c && dp[i-c] != inf {
+				if dp[i-c]+1 < dp[i] {
+					dp[i] = dp[i-c] + 1
+				}
+			}
+		}
+	}
+	if dp[amount] == inf {
+		return -1
+	}
+	return dp[amount]
+}
+
+func main() {
+	fmt.Println(coinChange([]int{1, 5, 10}, 11))
+	// Output: 2
+
+	fmt.Println(coinChange([]int{2}, 3))
+	// Output: -1
+
+	fmt.Println(coinChange([]int{1, 2, 5}, 11))
+	// Output: 3
+}`,
+      },
+      {
+        id: "longest-increasing-subsequence",
+        title: "Longest Increasing Subsequence",
+        difficulty: "Medium",
+        leetcode: 300,
+        description:
+          "Given an integer array nums, return the length of the longest strictly increasing subsequence.",
+        examples: [
+          { input: "nums = [10,9,2,5,3,7,101,18]", output: "4", explanation: "[2,3,7,101] or [2,5,7,101]" },
+          { input: "nums = [0,1,0,3,2,3]",          output: "4", explanation: "[0,1,2,3]" },
+        ],
+        approach:
+          "Patience sorting with binary search: maintain a tails array where tails[i] is the smallest tail of any increasing subsequence of length i+1. For each number, binary search for the first tail ≥ num and replace it (or append if larger than all). Length of tails is the answer.",
+        complexity: { time: "O(n log n)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func lengthOfLIS(nums []int) int {
+	tails := []int{}
+	for _, n := range nums {
+		pos := sort.SearchInts(tails, n) // first index where tails[pos] >= n
+		if pos == len(tails) {
+			tails = append(tails, n)
+		} else {
+			tails[pos] = n
+		}
+	}
+	return len(tails)
+}
+
+func main() {
+	fmt.Println(lengthOfLIS([]int{10, 9, 2, 5, 3, 7, 101, 18}))
+	// Output: 4
+
+	fmt.Println(lengthOfLIS([]int{0, 1, 0, 3, 2, 3}))
+	// Output: 4
+
+	fmt.Println(lengthOfLIS([]int{7, 7, 7, 7}))
+	// Output: 1
+}`,
+      },
+      {
+        id: "unique-paths",
+        title: "Unique Paths",
+        difficulty: "Medium",
+        leetcode: 62,
+        description:
+          "A robot starts at the top-left of an m×n grid and wants to reach the bottom-right. It can only move right or down. How many unique paths are there?",
+        examples: [
+          { input: "m = 3, n = 7", output: "28",  explanation: "28 distinct paths from top-left to bottom-right" },
+          { input: "m = 3, n = 2", output: "3",   explanation: "Right-Down-Down, Down-Right-Down, Down-Down-Right" },
+        ],
+        approach:
+          "dp[i][j] = paths to reach cell (i,j) = dp[i-1][j] + dp[i][j-1]. First row and column are all 1 (only one way to reach them). Optimise to a single 1D array — update left to right, each cell accumulates paths from above.",
+        complexity: { time: "O(m×n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func uniquePaths(m int, n int) int {
+	dp := make([]int, n)
+	for i := range dp { dp[i] = 1 } // first row all 1s
+	for i := 1; i < m; i++ {
+		for j := 1; j < n; j++ {
+			dp[j] += dp[j-1]
+		}
+	}
+	return dp[n-1]
+}
+
+func main() {
+	fmt.Println(uniquePaths(3, 7))
+	// Output: 28
+
+	fmt.Println(uniquePaths(3, 2))
+	// Output: 3
+
+	fmt.Println(uniquePaths(1, 1))
+	// Output: 1
+}`,
+      },
+      {
+        id: "jump-game",
+        title: "Jump Game",
+        difficulty: "Medium",
+        leetcode: 55,
+        description:
+          "Given an integer array nums where nums[i] is your maximum jump length at position i, return true if you can reach the last index starting from index 0.",
+        examples: [
+          { input: "nums = [2,3,1,1,4]", output: "true",  explanation: "Jump 1 to index 1, then 3 to last index" },
+          { input: "nums = [3,2,1,0,4]", output: "false", explanation: "Always land on index 3 which has value 0" },
+        ],
+        approach:
+          "Greedy: track maxReach — the furthest index reachable so far. For each index i, if i > maxReach we're stuck (return false). Otherwise update maxReach = max(maxReach, i + nums[i]). If maxReach >= last index, return true.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func canJump(nums []int) bool {
+	maxReach := 0
+	for i, v := range nums {
+		if i > maxReach {
+			return false
+		}
+		if i+v > maxReach {
+			maxReach = i + v
+		}
+	}
+	return true
+}
+
+func main() {
+	fmt.Println(canJump([]int{2, 3, 1, 1, 4}))
+	// Output: true
+
+	fmt.Println(canJump([]int{3, 2, 1, 0, 4}))
+	// Output: false
+
+	fmt.Println(canJump([]int{0}))
+	// Output: true
+}`,
+      },
+      {
+        id: "word-break",
+        title: "Word Break",
+        difficulty: "Medium",
+        leetcode: 139,
+        description:
+          "Given a string s and a dictionary of strings wordDict, return true if s can be segmented into a space-separated sequence of dictionary words.",
+        examples: [
+          { input: 's = "leetcode", wordDict = ["leet","code"]',        output: "true",  explanation: '"leetcode" = "leet" + "code"' },
+          { input: 's = "applepenapple", wordDict = ["apple","pen"]',   output: "true",  explanation: '"apple" + "pen" + "apple"' },
+          { input: 's = "catsandog", wordDict = ["cats","dog","sand"]', output: "false", explanation: "Cannot segment completely" },
+        ],
+        approach:
+          "dp[i] = true if s[:i] can be segmented. dp[0] = true (empty string). For each position i, check all j < i: if dp[j] is true and s[j:i] is in the word set, set dp[i] = true. Answer is dp[len(s)].",
+        complexity: { time: "O(n²)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func wordBreak(s string, wordDict []string) bool {
+	wordSet := make(map[string]bool)
+	for _, w := range wordDict {
+		wordSet[w] = true
+	}
+	n := len(s)
+	dp := make([]bool, n+1)
+	dp[0] = true
+	for i := 1; i <= n; i++ {
+		for j := 0; j < i; j++ {
+			if dp[j] && wordSet[s[j:i]] {
+				dp[i] = true
+				break
+			}
+		}
+	}
+	return dp[n]
+}
+
+func main() {
+	fmt.Println(wordBreak("leetcode", []string{"leet", "code"}))
+	// Output: true
+
+	fmt.Println(wordBreak("applepenapple", []string{"apple", "pen"}))
+	// Output: true
+
+	fmt.Println(wordBreak("catsandog", []string{"cats", "dog", "sand", "and", "cat"}))
+	// Output: false
+}`,
+      },
+      {
+        id: "partition-equal-subset-sum",
+        title: "Partition Equal Subset Sum",
+        difficulty: "Medium",
+        leetcode: 416,
+        description:
+          "Given an integer array nums, return true if you can partition it into two subsets with equal sum.",
+        examples: [
+          { input: "nums = [1,5,11,5]", output: "true",  explanation: "[1,5,5] and [11] both sum to 11" },
+          { input: "nums = [1,2,3,5]",  output: "false", explanation: "Cannot partition into equal sums" },
+        ],
+        approach:
+          "Reduce to 0/1 knapsack: target = sum/2 (return false if odd). dp[j] = true if a subset sums to j. Iterate nums; for each num update dp right-to-left: dp[j] |= dp[j-num]. Answer is dp[target].",
+        complexity: { time: "O(n × sum)", space: "O(sum)" },
+        code: `package main
+
+import "fmt"
+
+func canPartition(nums []int) bool {
+	total := 0
+	for _, v := range nums { total += v }
+	if total%2 != 0 { return false }
+	target := total / 2
+
+	dp := make([]bool, target+1)
+	dp[0] = true
+	for _, num := range nums {
+		// iterate right-to-left to avoid reusing the same element
+		for j := target; j >= num; j-- {
+			dp[j] = dp[j] || dp[j-num]
+		}
+	}
+	return dp[target]
+}
+
+func main() {
+	fmt.Println(canPartition([]int{1, 5, 11, 5}))
+	// Output: true
+
+	fmt.Println(canPartition([]int{1, 2, 3, 5}))
+	// Output: false
+
+	fmt.Println(canPartition([]int{2, 2, 3, 5}))
+	// Output: false
+}`,
+      },
+      {
+        id: "edit-distance",
+        title: "Edit Distance",
+        difficulty: "Medium",
+        leetcode: 72,
+        description:
+          "Given two strings word1 and word2, return the minimum number of operations (insert, delete, replace) to convert word1 into word2.",
+        examples: [
+          { input: 'word1 = "horse", word2 = "ros"', output: "3", explanation: "horse→rorse(replace h→r)→rose(delete r)→ros(delete e)" },
+          { input: 'word1 = "intention", word2 = "execution"', output: "5", explanation: "5 operations needed" },
+        ],
+        approach:
+          "2D DP: dp[i][j] = min edits to convert word1[:i] to word2[:j]. If chars match: dp[i][j] = dp[i-1][j-1]. Otherwise: min(dp[i-1][j]+1 delete, dp[i][j-1]+1 insert, dp[i-1][j-1]+1 replace). Base cases: dp[i][0]=i, dp[0][j]=j.",
+        complexity: { time: "O(m×n)", space: "O(m×n)" },
+        code: `package main
+
+import "fmt"
+
+func minDistance(word1 string, word2 string) int {
+	m, n := len(word1), len(word2)
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+		dp[i][0] = i
+	}
+	for j := 0; j <= n; j++ { dp[0][j] = j }
+
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if word1[i-1] == word2[j-1] {
+				dp[i][j] = dp[i-1][j-1]
+			} else {
+				dp[i][j] = 1 + min(dp[i-1][j-1], min(dp[i-1][j], dp[i][j-1]))
+			}
+		}
+	}
+	return dp[m][n]
+}
+
+func min(a, b int) int {
+	if a < b { return a }
+	return b
+}
+
+func main() {
+	fmt.Println(minDistance("horse", "ros"))
+	// Output: 3
+
+	fmt.Println(minDistance("intention", "execution"))
+	// Output: 5
+
+	fmt.Println(minDistance("", "abc"))
+	// Output: 3
+}`,
+      },
+    ],
+  },
 ];
