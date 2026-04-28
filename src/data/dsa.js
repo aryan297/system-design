@@ -3715,4 +3715,648 @@ func main() {
       },
     ],
   },
+  // ─────────────────────────────────────────────────────────────────────────
+  // 8. Trees
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "trees",
+    icon: "🌳",
+    title: "Trees",
+    problems: [
+      {
+        id: "invert-binary-tree",
+        title: "Invert Binary Tree",
+        difficulty: "Easy",
+        leetcode: 226,
+        description:
+          "Given the root of a binary tree, invert the tree (mirror it) and return its root.",
+        examples: [
+          { input: "root = [4,2,7,1,3,6,9]", output: "[4,7,2,9,6,3,1]", explanation: "Every left and right child is swapped at every level" },
+          { input: "root = [2,1,3]",          output: "[2,3,1]",          explanation: "Children of root swapped" },
+        ],
+        approach:
+          "Recursively swap the left and right children of every node. Base case: nil node returns nil. Post-order or pre-order both work — swap first, then recurse (or recurse then swap).",
+        complexity: { time: "O(n)", space: "O(h) where h = height" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func invertTree(root *TreeNode) *TreeNode {
+	if root == nil {
+		return nil
+	}
+	root.Left, root.Right = invertTree(root.Right), invertTree(root.Left)
+	return root
+}
+
+func inorder(root *TreeNode) {
+	if root == nil { return }
+	inorder(root.Left)
+	fmt.Print(root.Val, " ")
+	inorder(root.Right)
+}
+
+func main() {
+	//       4
+	//      / \\
+	//     2   7
+	//    / \\ / \\
+	//   1  3 6  9
+	root := &TreeNode{Val: 4,
+		Left:  &TreeNode{Val: 2, Left: &TreeNode{Val: 1}, Right: &TreeNode{Val: 3}},
+		Right: &TreeNode{Val: 7, Left: &TreeNode{Val: 6}, Right: &TreeNode{Val: 9}},
+	}
+	invertTree(root)
+	inorder(root)
+	fmt.Println()
+	// Output (inorder of inverted): 9 7 6 4 3 2 1
+}`,
+      },
+      {
+        id: "maximum-depth-binary-tree",
+        title: "Maximum Depth of Binary Tree",
+        difficulty: "Easy",
+        leetcode: 104,
+        description:
+          "Given the root of a binary tree, return its maximum depth — the number of nodes along the longest path from the root to the farthest leaf.",
+        examples: [
+          { input: "root = [3,9,20,null,null,15,7]", output: "3", explanation: "Longest path: 3→20→15 or 3→20→7" },
+          { input: "root = [1,null,2]",               output: "2", explanation: "Path: 1→2" },
+        ],
+        approach:
+          "DFS recursion: depth of a node = 1 + max(depth(left), depth(right)). Base case: nil returns 0. Alternatively use BFS and count levels.",
+        complexity: { time: "O(n)", space: "O(h)" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func maxDepth(root *TreeNode) int {
+	if root == nil {
+		return 0
+	}
+	left := maxDepth(root.Left)
+	right := maxDepth(root.Right)
+	if left > right {
+		return 1 + left
+	}
+	return 1 + right
+}
+
+func main() {
+	//     3
+	//    / \\
+	//   9  20
+	//      / \\
+	//     15   7
+	root := &TreeNode{Val: 3,
+		Left: &TreeNode{Val: 9},
+		Right: &TreeNode{Val: 20,
+			Left:  &TreeNode{Val: 15},
+			Right: &TreeNode{Val: 7},
+		},
+	}
+	fmt.Println(maxDepth(root))
+	// Output: 3
+
+	root2 := &TreeNode{Val: 1, Right: &TreeNode{Val: 2}}
+	fmt.Println(maxDepth(root2))
+	// Output: 2
+}`,
+      },
+      {
+        id: "balanced-binary-tree",
+        title: "Balanced Binary Tree",
+        difficulty: "Easy",
+        leetcode: 110,
+        description:
+          "Given a binary tree, determine if it is height-balanced — for every node the heights of its left and right subtrees differ by at most 1.",
+        examples: [
+          { input: "root = [3,9,20,null,null,15,7]", output: "true",  explanation: "All subtrees are balanced" },
+          { input: "root = [1,2,2,3,3,null,null,4,4]", output: "false", explanation: "Left subtree is too deep" },
+        ],
+        approach:
+          "Single-pass DFS: return -1 if a subtree is unbalanced, otherwise return its height. At each node, if either child returns -1 or the height difference > 1, propagate -1 upward immediately. Avoids recomputing heights.",
+        complexity: { time: "O(n)", space: "O(h)" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func height(root *TreeNode) int {
+	if root == nil {
+		return 0
+	}
+	left := height(root.Left)
+	if left == -1 { return -1 }
+	right := height(root.Right)
+	if right == -1 { return -1 }
+
+	diff := left - right
+	if diff < -1 || diff > 1 {
+		return -1 // unbalanced
+	}
+	if left > right { return 1 + left }
+	return 1 + right
+}
+
+func isBalanced(root *TreeNode) bool {
+	return height(root) != -1
+}
+
+func main() {
+	root := &TreeNode{Val: 3,
+		Left: &TreeNode{Val: 9},
+		Right: &TreeNode{Val: 20,
+			Left:  &TreeNode{Val: 15},
+			Right: &TreeNode{Val: 7},
+		},
+	}
+	fmt.Println(isBalanced(root))
+	// Output: true
+
+	root2 := &TreeNode{Val: 1,
+		Left: &TreeNode{Val: 2,
+			Left: &TreeNode{Val: 3,
+				Left:  &TreeNode{Val: 4},
+				Right: &TreeNode{Val: 4},
+			},
+			Right: &TreeNode{Val: 3},
+		},
+		Right: &TreeNode{Val: 2},
+	}
+	fmt.Println(isBalanced(root2))
+	// Output: false
+}`,
+      },
+      {
+        id: "diameter-binary-tree",
+        title: "Diameter of Binary Tree",
+        difficulty: "Easy",
+        leetcode: 543,
+        description:
+          "Given the root of a binary tree, return the length of the diameter — the longest path between any two nodes (measured in edges, not nodes). The path may not pass through the root.",
+        examples: [
+          { input: "root = [1,2,3,4,5]", output: "3", explanation: "Longest path [4,2,1,3] or [5,2,1,3] has 3 edges" },
+          { input: "root = [1,2]",        output: "1", explanation: "Path [2,1] has 1 edge" },
+        ],
+        approach:
+          "DFS that returns the height of each subtree. At each node compute left_height + right_height (the diameter through that node) and update a global best. Return 1 + max(left, right) as the height.",
+        complexity: { time: "O(n)", space: "O(h)" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func diameterOfBinaryTree(root *TreeNode) int {
+	best := 0
+	var dfs func(*TreeNode) int
+	dfs = func(node *TreeNode) int {
+		if node == nil {
+			return 0
+		}
+		left := dfs(node.Left)
+		right := dfs(node.Right)
+		if left+right > best {
+			best = left + right
+		}
+		if left > right { return 1 + left }
+		return 1 + right
+	}
+	dfs(root)
+	return best
+}
+
+func main() {
+	//     1
+	//    / \\
+	//   2   3
+	//  / \\
+	// 4   5
+	root := &TreeNode{Val: 1,
+		Left:  &TreeNode{Val: 2, Left: &TreeNode{Val: 4}, Right: &TreeNode{Val: 5}},
+		Right: &TreeNode{Val: 3},
+	}
+	fmt.Println(diameterOfBinaryTree(root))
+	// Output: 3
+
+	root2 := &TreeNode{Val: 1, Left: &TreeNode{Val: 2}}
+	fmt.Println(diameterOfBinaryTree(root2))
+	// Output: 1
+}`,
+      },
+      {
+        id: "level-order-traversal",
+        title: "Binary Tree Level Order Traversal",
+        difficulty: "Medium",
+        leetcode: 102,
+        description:
+          "Given the root of a binary tree, return the level-order traversal of its nodes' values as a 2D slice (left to right, level by level).",
+        examples: [
+          { input: "root = [3,9,20,null,null,15,7]", output: "[[3],[9,20],[15,7]]", explanation: "Three levels captured separately" },
+          { input: "root = [1]",                      output: "[[1]]",               explanation: "Single node" },
+        ],
+        approach:
+          "BFS with a queue. At the start of each iteration record the current queue length — that's the width of the current level. Process exactly that many nodes, enqueue their children, and collect values into a level slice.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func levelOrder(root *TreeNode) [][]int {
+	if root == nil {
+		return nil
+	}
+	result := [][]int{}
+	queue := []*TreeNode{root}
+	for len(queue) > 0 {
+		levelSize := len(queue)
+		level := make([]int, 0, levelSize)
+		for i := 0; i < levelSize; i++ {
+			node := queue[0]
+			queue = queue[1:]
+			level = append(level, node.Val)
+			if node.Left != nil  { queue = append(queue, node.Left) }
+			if node.Right != nil { queue = append(queue, node.Right) }
+		}
+		result = append(result, level)
+	}
+	return result
+}
+
+func main() {
+	root := &TreeNode{Val: 3,
+		Left: &TreeNode{Val: 9},
+		Right: &TreeNode{Val: 20,
+			Left:  &TreeNode{Val: 15},
+			Right: &TreeNode{Val: 7},
+		},
+	}
+	fmt.Println(levelOrder(root))
+	// Output: [[3] [9 20] [15 7]]
+
+	fmt.Println(levelOrder(&TreeNode{Val: 1}))
+	// Output: [[1]]
+}`,
+      },
+      {
+        id: "binary-tree-right-side-view",
+        title: "Binary Tree Right Side View",
+        difficulty: "Medium",
+        leetcode: 199,
+        description:
+          "Given the root of a binary tree, imagine standing on the right side. Return the values of the nodes visible from the right, top to bottom.",
+        examples: [
+          { input: "root = [1,2,3,null,5,null,4]", output: "[1,3,4]", explanation: "Rightmost node at each level" },
+          { input: "root = [1,null,3]",             output: "[1,3]",   explanation: "Right child visible at every level" },
+        ],
+        approach:
+          "BFS level-order traversal. The last node processed at each level is the rightmost visible node — append it to the result.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func rightSideView(root *TreeNode) []int {
+	if root == nil {
+		return nil
+	}
+	result := []int{}
+	queue := []*TreeNode{root}
+	for len(queue) > 0 {
+		size := len(queue)
+		for i := 0; i < size; i++ {
+			node := queue[0]
+			queue = queue[1:]
+			if i == size-1 {
+				result = append(result, node.Val) // rightmost
+			}
+			if node.Left != nil  { queue = append(queue, node.Left) }
+			if node.Right != nil { queue = append(queue, node.Right) }
+		}
+	}
+	return result
+}
+
+func main() {
+	root := &TreeNode{Val: 1,
+		Left:  &TreeNode{Val: 2, Right: &TreeNode{Val: 5}},
+		Right: &TreeNode{Val: 3, Right: &TreeNode{Val: 4}},
+	}
+	fmt.Println(rightSideView(root))
+	// Output: [1 3 4]
+
+	root2 := &TreeNode{Val: 1, Right: &TreeNode{Val: 3}}
+	fmt.Println(rightSideView(root2))
+	// Output: [1 3]
+}`,
+      },
+      {
+        id: "lowest-common-ancestor-bst",
+        title: "Lowest Common Ancestor of a BST",
+        difficulty: "Medium",
+        leetcode: 235,
+        description:
+          "Given a BST and two nodes p and q, return their lowest common ancestor — the deepest node that has both p and q as descendants (a node is a descendant of itself).",
+        examples: [
+          { input: "root = [6,2,8,0,4,7,9], p=2, q=8", output: "6", explanation: "6 is the root — both 2 and 8 are in different subtrees" },
+          { input: "root = [6,2,8,0,4,7,9], p=2, q=4", output: "2", explanation: "2 is an ancestor of 4, so 2 is the LCA" },
+        ],
+        approach:
+          "Exploit BST property. If both p and q are less than root, LCA is in the left subtree. If both are greater, it's in the right subtree. Otherwise root is the split point — it is the LCA.",
+        complexity: { time: "O(h)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func lowestCommonAncestor(root, p, q *TreeNode) *TreeNode {
+	for root != nil {
+		if p.Val < root.Val && q.Val < root.Val {
+			root = root.Left
+		} else if p.Val > root.Val && q.Val > root.Val {
+			root = root.Right
+		} else {
+			return root // split point — this is the LCA
+		}
+	}
+	return nil
+}
+
+func main() {
+	//        6
+	//       / \\
+	//      2   8
+	//     / \\ / \\
+	//    0  4 7  9
+	n0 := &TreeNode{Val: 0}
+	n4 := &TreeNode{Val: 4}
+	n7 := &TreeNode{Val: 7}
+	n9 := &TreeNode{Val: 9}
+	n2 := &TreeNode{Val: 2, Left: n0, Right: n4}
+	n8 := &TreeNode{Val: 8, Left: n7, Right: n9}
+	root := &TreeNode{Val: 6, Left: n2, Right: n8}
+
+	fmt.Println(lowestCommonAncestor(root, n2, n8).Val)
+	// Output: 6
+
+	fmt.Println(lowestCommonAncestor(root, n2, n4).Val)
+	// Output: 2
+}`,
+      },
+      {
+        id: "validate-binary-search-tree",
+        title: "Validate Binary Search Tree",
+        difficulty: "Medium",
+        leetcode: 98,
+        description:
+          "Given the root of a binary tree, determine if it is a valid BST — every node's value must be strictly greater than all values in its left subtree and strictly less than all values in its right subtree.",
+        examples: [
+          { input: "root = [2,1,3]",       output: "true",  explanation: "1 < 2 < 3, valid BST" },
+          { input: "root = [5,1,4,null,null,3,6]", output: "false", explanation: "Node 4 is in right subtree but 3 < 5" },
+        ],
+        approach:
+          "DFS passing valid range [min, max] for each node. Root is valid in (-∞, +∞). Going left tightens the upper bound to the parent's value; going right tightens the lower bound. Return false if any node falls outside its range.",
+        complexity: { time: "O(n)", space: "O(h)" },
+        code: `package main
+
+import (
+	"fmt"
+	"math"
+)
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func isValidBST(root *TreeNode) bool {
+	var validate func(node *TreeNode, min, max int) bool
+	validate = func(node *TreeNode, min, max int) bool {
+		if node == nil {
+			return true
+		}
+		if node.Val <= min || node.Val >= max {
+			return false
+		}
+		return validate(node.Left, min, node.Val) &&
+			validate(node.Right, node.Val, max)
+	}
+	return validate(root, math.MinInt64, math.MaxInt64)
+}
+
+func main() {
+	root := &TreeNode{Val: 2,
+		Left:  &TreeNode{Val: 1},
+		Right: &TreeNode{Val: 3},
+	}
+	fmt.Println(isValidBST(root))
+	// Output: true
+
+	root2 := &TreeNode{Val: 5,
+		Left: &TreeNode{Val: 1},
+		Right: &TreeNode{Val: 4,
+			Left:  &TreeNode{Val: 3},
+			Right: &TreeNode{Val: 6},
+		},
+	}
+	fmt.Println(isValidBST(root2))
+	// Output: false
+}`,
+      },
+      {
+        id: "binary-tree-maximum-path-sum",
+        title: "Binary Tree Maximum Path Sum",
+        difficulty: "Hard",
+        leetcode: 124,
+        description:
+          "Given the root of a binary tree, return the maximum path sum of any non-empty path. A path is a sequence of nodes where each pair is connected, visiting each node at most once.",
+        examples: [
+          { input: "root = [1,2,3]",             output: "6",  explanation: "Path 2→1→3 sums to 6" },
+          { input: "root = [-10,9,20,null,null,15,7]", output: "42", explanation: "Path 15→20→7 sums to 42" },
+        ],
+        approach:
+          "DFS returning the max gain from each node going downward (only one direction). At each node, compute left_gain = max(0, dfs(left)) and right_gain = max(0, dfs(right)). Update global best with node.Val + left_gain + right_gain (path through this node). Return node.Val + max(left_gain, right_gain) upward.",
+        complexity: { time: "O(n)", space: "O(h)" },
+        code: `package main
+
+import "fmt"
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func maxPathSum(root *TreeNode) int {
+	best := root.Val
+	var dfs func(*TreeNode) int
+	dfs = func(node *TreeNode) int {
+		if node == nil {
+			return 0
+		}
+		left := max(0, dfs(node.Left))
+		right := max(0, dfs(node.Right))
+		// path through this node
+		if node.Val+left+right > best {
+			best = node.Val + left + right
+		}
+		// return best single-branch gain upward
+		if left > right { return node.Val + left }
+		return node.Val + right
+	}
+	dfs(root)
+	return best
+}
+
+func max(a, b int) int {
+	if a > b { return a }
+	return b
+}
+
+func main() {
+	root := &TreeNode{Val: 1,
+		Left:  &TreeNode{Val: 2},
+		Right: &TreeNode{Val: 3},
+	}
+	fmt.Println(maxPathSum(root))
+	// Output: 6
+
+	root2 := &TreeNode{Val: -10,
+		Left: &TreeNode{Val: 9},
+		Right: &TreeNode{Val: 20,
+			Left:  &TreeNode{Val: 15},
+			Right: &TreeNode{Val: 7},
+		},
+	}
+	fmt.Println(maxPathSum(root2))
+	// Output: 42
+}`,
+      },
+      {
+        id: "serialize-deserialize-binary-tree",
+        title: "Serialize and Deserialize Binary Tree",
+        difficulty: "Hard",
+        leetcode: 297,
+        description:
+          "Design an algorithm to serialize a binary tree to a string and deserialize it back to the original tree structure.",
+        examples: [
+          { input: "root = [1,2,3,null,null,4,5]", output: "1,2,N,N,3,4,N,N,5,N,N", explanation: "Pre-order with null markers — deserializes back to the same tree" },
+        ],
+        approach:
+          "Pre-order DFS serialization: write node value then recurse left then right. Use 'N' as a null marker separated by commas. Deserialization uses a pointer into the split tokens array, consuming one token per recursive call — the pre-order structure rebuilds the tree perfectly.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+type TreeNode struct {
+	Val   int
+	Left  *TreeNode
+	Right *TreeNode
+}
+
+func serialize(root *TreeNode) string {
+	var sb strings.Builder
+	var dfs func(*TreeNode)
+	dfs = func(node *TreeNode) {
+		if node == nil {
+			sb.WriteString("N,")
+			return
+		}
+		sb.WriteString(strconv.Itoa(node.Val))
+		sb.WriteByte(',')
+		dfs(node.Left)
+		dfs(node.Right)
+	}
+	dfs(root)
+	return sb.String()
+}
+
+func deserialize(data string) *TreeNode {
+	tokens := strings.Split(data, ",")
+	idx := 0
+	var dfs func() *TreeNode
+	dfs = func() *TreeNode {
+		if tokens[idx] == "N" || tokens[idx] == "" {
+			idx++
+			return nil
+		}
+		val, _ := strconv.Atoi(tokens[idx])
+		idx++
+		return &TreeNode{Val: val, Left: dfs(), Right: dfs()}
+	}
+	return dfs()
+}
+
+func inorder(root *TreeNode) {
+	if root == nil { return }
+	inorder(root.Left)
+	fmt.Print(root.Val, " ")
+	inorder(root.Right)
+}
+
+func main() {
+	root := &TreeNode{Val: 1,
+		Left:  &TreeNode{Val: 2},
+		Right: &TreeNode{Val: 3,
+			Left:  &TreeNode{Val: 4},
+			Right: &TreeNode{Val: 5},
+		},
+	}
+	s := serialize(root)
+	fmt.Println(s)
+	// Output: 1,2,N,N,3,4,N,N,5,N,N,
+
+	restored := deserialize(s)
+	inorder(restored)
+	fmt.Println()
+	// Output: 2 1 4 3 5
+}`,
+      },
+    ],
+  },
 ];
