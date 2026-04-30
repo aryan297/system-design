@@ -6,6 +6,8 @@ import { INSTAGRAM_HLD, INSTAGRAM_LLD, INSTAGRAM_QNA } from "./instagram";
 import { REVOLUT_HLD, REVOLUT_LLD, REVOLUT_QNA } from "./revolut";
 import { PAYPAL_HLD, PAYPAL_LLD, PAYPAL_QNA } from "./paypal";
 import { ZEPTO_HLD, ZEPTO_LLD, ZEPTO_QNA } from "./zepto";
+import { STRIPE_HLD, STRIPE_LLD, STRIPE_QNA } from "./stripe";
+import { GROWW_HLD, GROWW_LLD, GROWW_QNA } from "./groww";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -56,6 +58,18 @@ const REGISTRY = {
     hld: ZEPTO_HLD,
     lld: ZEPTO_LLD,
     qna: ZEPTO_QNA,
+  },
+  stripe: {
+    meta: { icon: "💜", color: "#635BFF" },
+    hld: STRIPE_HLD,
+    lld: STRIPE_LLD,
+    qna: STRIPE_QNA,
+  },
+  groww: {
+    meta: { icon: "📈", color: "#00D09C" },
+    hld: GROWW_HLD,
+    lld: GROWW_LLD,
+    qna: GROWW_QNA,
   },
 };
 

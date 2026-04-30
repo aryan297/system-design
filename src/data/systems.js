@@ -55,4 +55,18 @@ export const SYSTEMS = [
     description: "Quick commerce — 10-min grocery delivery, dark store model, hyperlocal fulfillment",
     color: "#8B2FC9",
   },
+  {
+    id: "stripe",
+    name: "Stripe",
+    icon: "💜",
+    description: "Payments infrastructure — $1T+ volume, API-first, Radar fraud, Connect marketplace",
+    color: "#635BFF",
+  },
+  {
+    id: "groww",
+    name: "Groww",
+    icon: "📈",
+    description: "Retail investment platform — 10M+ investors, stocks, MF, F&O, real-time market data",
+    color: "#00D09C",
+  },
 ];
