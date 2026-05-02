@@ -8,6 +8,8 @@ import { PAYPAL_HLD, PAYPAL_LLD, PAYPAL_QNA } from "./paypal";
 import { ZEPTO_HLD, ZEPTO_LLD, ZEPTO_QNA } from "./zepto";
 import { STRIPE_HLD, STRIPE_LLD, STRIPE_QNA } from "./stripe";
 import { GROWW_HLD, GROWW_LLD, GROWW_QNA } from "./groww";
+import { TIKTOK_HLD, TIKTOK_LLD, TIKTOK_QNA } from "./tiktok";
+import { ZOMATO_HLD, ZOMATO_LLD, ZOMATO_QNA } from "./zomato";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -70,6 +72,18 @@ const REGISTRY = {
     hld: GROWW_HLD,
     lld: GROWW_LLD,
     qna: GROWW_QNA,
+  },
+  tiktok: {
+    meta: { icon: "🎵", color: "#010101" },
+    hld: TIKTOK_HLD,
+    lld: TIKTOK_LLD,
+    qna: TIKTOK_QNA,
+  },
+  zomato: {
+    meta: { icon: "🍔", color: "#E23744" },
+    hld: ZOMATO_HLD,
+    lld: ZOMATO_LLD,
+    qna: ZOMATO_QNA,
   },
 };
 

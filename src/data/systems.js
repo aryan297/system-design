@@ -69,4 +69,18 @@ export const SYSTEMS = [
     description: "Retail investment platform — 10M+ investors, stocks, MF, F&O, real-time market data",
     color: "#00D09C",
   },
+  {
+    id: "tiktok",
+    name: "TikTok",
+    icon: "🎵",
+    description: "Short-video platform — 1.7B users, FYP recommendation engine, live streaming, 34 min/day",
+    color: "#010101",
+  },
+  {
+    id: "zomato",
+    name: "Zomato",
+    icon: "🍔",
+    description: "Food delivery — 100M+ users, 350K restaurants, real-time dispatch, ETA engine, 3M orders/day",
+    color: "#E23744",
+  },
 ];
