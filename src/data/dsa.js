@@ -51,6 +51,51 @@ func main() {
 }`,
       },
       {
+        id: "two-sum-ii",
+        title: "Two Sum II – Input Array Is Sorted",
+        difficulty: "Medium",
+        leetcode: 167,
+        description:
+          "Given a 1-indexed array of integers numbers that is already sorted in non-decreasing order, find two numbers that add up to target. Return their indices (1-indexed) as [index1, index2]. Exactly one solution exists; you may not use the same element twice.",
+        examples: [
+          { input: "numbers = [2,7,11,15], target = 9", output: "[1 2]", explanation: "numbers[0] + numbers[1] = 2 + 7 = 9, return [1, 2]" },
+          { input: "numbers = [2,3,4], target = 6",     output: "[1 3]", explanation: "numbers[0] + numbers[2] = 2 + 4 = 6, return [1, 3]" },
+          { input: "numbers = [-1,0], target = -1",     output: "[1 2]", explanation: "numbers[0] + numbers[1] = -1 + 0 = -1, return [1, 2]" },
+        ],
+        approach:
+          "Because the array is sorted, use two pointers starting at both ends. If their sum equals target, return their 1-based indices. If the sum is too small, advance the left pointer to increase it; if too large, retreat the right pointer to decrease it. No extra space needed — the sorted order guarantees convergence.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func twoSumII(numbers []int, target int) []int {
+	left, right := 0, len(numbers)-1
+	for left < right {
+		sum := numbers[left] + numbers[right]
+		if sum == target {
+			return []int{left + 1, right + 1} // 1-indexed
+		} else if sum < target {
+			left++
+		} else {
+			right--
+		}
+	}
+	return nil
+}
+
+func main() {
+	fmt.Println(twoSumII([]int{2, 7, 11, 15}, 9))
+	// Output: [1 2]
+
+	fmt.Println(twoSumII([]int{2, 3, 4}, 6))
+	// Output: [1 3]
+
+	fmt.Println(twoSumII([]int{-1, 0}, -1))
+	// Output: [1 2]
+}`,
+      },
+      {
         id: "container-with-most-water",
         title: "Container With Most Water",
         difficulty: "Medium",
