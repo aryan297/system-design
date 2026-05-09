@@ -594,6 +594,49 @@ func main() {
 	// Output: 3
 }`,
       },
+      {
+        id: "squares-sorted-array",
+        title: "Squares of a Sorted Array",
+        difficulty: "Easy",
+        leetcode: 977,
+        description:
+          "Given an integer array nums sorted in non-decreasing order, return an array of the squares of each number, also sorted in non-decreasing order.",
+        examples: [
+          { input: "nums = [-4,-1,0,3,10]", output: "[0 1 9 16 100]", explanation: "Squares are [16,1,0,9,100], sorted gives [0,1,9,16,100]" },
+          { input: "nums = [-7,-3,2,3,11]", output: "[4 9 9 49 121]", explanation: "Squares are [49,9,4,9,121], sorted gives [4,9,9,49,121]" },
+        ],
+        approach:
+          "The largest squares are always at the two ends of the sorted array (most negative or most positive). Use two pointers at both ends, compare their absolute values, and fill the result array from the back. This avoids sorting entirely.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func sortedSquares(nums []int) []int {
+	n := len(nums)
+	result := make([]int, n)
+	left, right := 0, n-1
+	for i := n - 1; i >= 0; i-- {
+		l, r := nums[left]*nums[left], nums[right]*nums[right]
+		if l > r {
+			result[i] = l
+			left++
+		} else {
+			result[i] = r
+			right--
+		}
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(sortedSquares([]int{-4, -1, 0, 3, 10}))
+	// Output: [0 1 9 16 100]
+
+	fmt.Println(sortedSquares([]int{-7, -3, 2, 3, 11}))
+	// Output: [4 9 9 49 121]
+}`,
+      },
     ],
   },
 
