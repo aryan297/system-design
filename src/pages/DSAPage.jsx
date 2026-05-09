@@ -31,6 +31,21 @@ export default function DSAPage() {
             <div className="dsa-panel-sub">{DSA_CATEGORIES.length} categories</div>
           </div>
         </div>
+
+        {/* Intro video */}
+        <div className="dsa-intro-video">
+          <div className="dsa-intro-label">▶ Intro Video</div>
+          <div className="dsa-intro-frame-wrap">
+            <iframe
+              src="https://www.youtube.com/embed/FsIOTBRFqkY?start=1"
+              title="DSA Intro"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              className="dsa-intro-frame"
+            />
+          </div>
+        </div>
+
         {DSA_CATEGORIES.map((cat) => {
           const isOpen = cat.id === categoryId;
           return (
@@ -132,6 +147,21 @@ export default function DSAPage() {
           <h2 className="dsa-section-title">Go Solution</h2>
           <CodeBlock code={problem.code} label="Go" />
         </section>
+
+        {/* Visualizer */}
+        {problem.visualizer && (
+          <section className="dsa-section">
+            <h2 className="dsa-section-title">Interactive Visualizer</h2>
+            <div className="dsa-viz-wrap">
+              <iframe
+                src={problem.visualizer}
+                className="dsa-viz-frame"
+                title={`${problem.title} Visualizer`}
+                loading="lazy"
+              />
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

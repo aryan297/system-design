@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trapping Rain Water — Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#04080f;--s1:#07101a;--s2:#0b1520;--s3:#0f1c2a;
+  --border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.12);
+  --text:#d8eaf5;--muted:#3d566e;--dim:#142030;
+  --left:#f472b6;  --left-bg:rgba(244,114,182,0.12);  --left-b:rgba(244,114,182,0.36);
+  --right:#34d399; --right-bg:rgba(52,211,153,0.12);  --right-b:rgba(52,211,153,0.36);
+  --lmax:#fb923c;  --lmax-bg:rgba(251,146,60,0.1);    --lmax-b:rgba(251,146,60,0.32);
+  --rmax:#a78bfa;  --rmax-bg:rgba(167,139,250,0.1);   --rmax-b:rgba(167,139,250,0.32);
+  --water:#38bdf8; --water-bg:rgba(56,189,248,0.18);  --water-b:rgba(56,189,248,0.5);
+  --add:#fbbf24;   --add-bg:rgba(251,191,36,0.12);    --add-b:rgba(251,191,36,0.4);
+  --done:#10b981;
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:'Space Mono',monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2.5rem 1rem 5rem}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.022'/%3E%3C/svg%3E");pointer-events:none;z-index:0}
+.page{position:relative;z-index:1;width:100%;max-width:860px}
+
+/* header */
+.eyebrow{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--water);background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.3);padding:4px 12px;border-radius:100px;display:inline-block;margin-bottom:.9rem}
+h1{font-family:'Space Mono',monospace;font-size:clamp(1.6rem,5vw,2.6rem);font-weight:700;letter-spacing:-.04em;line-height:1;margin-bottom:.5rem;color:#fff}
+h1 em{color:var(--water);font-style:normal}
+.subtitle{font-size:11.5px;color:var(--muted);line-height:1.85;margin-bottom:2rem;max-width:600px}
+
+/* card */
+.card{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:.9rem}
+.card-label{font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:.8rem}
+
+/* presets */
+.presets{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:1rem}
+.preset-btn{font-family:'Space Mono',monospace;font-size:11px;padding:5px 11px;background:var(--s1);border:1px solid var(--border);border-radius:7px;color:var(--muted);cursor:pointer;transition:all .15s}
+.preset-btn:hover{border-color:var(--border2);color:var(--text)}
+.preset-btn.active{border-color:rgba(56,189,248,.4);color:var(--water);background:rgba(56,189,248,.08)}
+
+/* inputs */
+.inputs-row{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:140px}
+.field label{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+.field input{font-family:'Space Mono',monospace;font-size:12px;background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--text);outline:none;transition:border-color .15s}
+.field input:focus{border-color:rgba(56,189,248,.4)}
+
+/* buttons */
+.btn{font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;border:1px solid;transition:all .15s;white-space:nowrap;letter-spacing:.03em}
+.btn:disabled{opacity:.28;cursor:not-allowed}
+.btn-water{background:rgba(56,189,248,.1);border-color:rgba(56,189,248,.35);color:var(--water)}
+.btn-water:not(:disabled):hover{background:rgba(56,189,248,.2)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-ghost:not(:disabled):hover{border-color:var(--border2);color:var(--text)}
+.btn-play{background:var(--add-bg);border-color:var(--add-b);color:var(--add);min-width:88px}
+.btn-play:not(:disabled):hover{background:rgba(251,191,36,.2)}
+
+/* progress */
+.prog-track{height:3px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:1.5rem}
+.prog-fill{height:100%;border-radius:3px;transition:width .3s ease;width:0%;background:linear-gradient(90deg,var(--left),var(--water),var(--right))}
+
+/* ── CANVAS VIZ ── */
+.viz-card{background:var(--s2);border:1px solid var(--border);border-radius:16px;padding:1.5rem;margin-bottom:.9rem}
+canvas{display:block;width:100%;border-radius:10px;background:var(--s1);border:1px solid var(--border);margin-bottom:1.25rem}
+
+/* state pills */
+.state-row{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-bottom:.9rem}
+@media(max-width:560px){.state-row{grid-template-columns:repeat(3,1fr)}}
+.sp{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:8px 10px;text-align:center}
+.sp-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:3px}
+.sp-val{font-family:'Space Mono',monospace;font-size:16px;font-weight:700}
+
+/* action flash */
+.action-area{min-height:28px;display:flex;align-items:center;justify-content:center;margin:.2rem 0 .6rem}
+.action-msg{font-size:12px;animation:fadeUp .3s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* status */
+.status{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:.8rem 1rem;font-size:11px;color:var(--muted);line-height:1.9;min-height:56px}
+.status code{font-family:'Space Mono',monospace;color:var(--add)}
+.tag{display:inline-block;padding:2px 8px;border-radius:100px;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.tag-add{background:var(--add-bg);color:var(--add);border:1px solid var(--add-b)}
+.tag-max{background:var(--lmax-bg);color:var(--lmax);border:1px solid var(--lmax-b)}
+.tag-done{background:rgba(16,185,129,.12);color:var(--done);border:1px solid rgba(16,185,129,.3)}
+
+/* controls */
+.controls-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:1rem}
+
+/* legend */
+.legend{display:flex;gap:13px;flex-wrap:wrap;justify-content:center;margin-bottom:1rem}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted)}
+.legend-dot{width:10px;height:10px;border-radius:3px;border:1.5px solid}
+
+/* trace table */
+.trace-card{background:var(--s2);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:.9rem}
+.trace-hdr{display:grid;grid-template-columns:30px 36px 36px 46px 46px 56px 56px 1fr;background:var(--s3);border-bottom:1px solid var(--border)}
+.trace-hdr div,.trace-row div{padding:6px 8px;font-size:9.5px}
+.trace-hdr div{color:var(--muted);font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.trace-body{max-height:220px;overflow-y:auto}
+.trace-row{display:grid;grid-template-columns:30px 36px 36px 46px 46px 56px 56px 1fr;border-bottom:1px solid var(--border);transition:background .2s}
+.trace-row:last-child{border-bottom:none}
+.trace-row.active{background:rgba(56,189,248,.05)}
+.trace-row div{font-size:10px;color:var(--muted)}
+.trace-row.active div{color:var(--text)}
+
+/* insight */
+.insight-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:.8rem;margin-bottom:.9rem}
+.insight{background:var(--s1);border:1px solid var(--border);border-radius:11px;padding:.9rem}
+.ip-lbl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-bottom:.35rem}
+.ip-val{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;margin-bottom:.3rem}
+.ip-desc{font-size:10px;color:var(--muted);line-height:1.6}
+
+/* code */
+.code-card{background:#050c14;border:1px solid var(--border);border-radius:13px;overflow:hidden;margin-bottom:.9rem}
+.code-hdr{display:flex;align-items:center;gap:7px;padding:8px 13px;border-bottom:1px solid var(--border);background:var(--s1)}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot-r{background:#ff5f57}.dot-y{background:#febc2e}.dot-g{background:#28c840}
+.code-fn{font-size:10px;color:var(--muted);margin-left:4px}
+pre{padding:.9rem 1.25rem;font-size:11.5px;line-height:2;color:#556;overflow-x:auto}
+.kw{color:#c084fc}.fn{color:var(--water)}.ty{color:var(--right)}.num{color:#fb923c}.cm{color:#1a2c3a;font-style:italic}
+.hl{display:block;background:rgba(56,189,248,.08);border-left:2px solid var(--water);margin:0 -1.25rem;padding:0 1.25rem;transition:all .25s}
+
+footer{margin-top:3rem;font-size:10px;color:var(--dim);text-align:center;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">LeetCode 42 · Hard · Two Pointers</div>
+  <h1>Trapping <em>Rain Water</em></h1>
+  <p class="subtitle">Move the pointer on the weaker side — water above a cell is bounded by <code style="color:var(--water)">min(leftMax, rightMax) − height[cell]</code>. The smaller max is always the bottleneck.</p>
+</header>
+
+<div class="presets">
+  <button class="preset-btn active" onclick="loadPreset([0,1,0,2,1,0,1,3,2,1,2,1],this)">[0,1,0,2,1,0,1,3,2,1,2,1]</button>
+  <button class="preset-btn" onclick="loadPreset([4,2,0,3,2,5],this)">[4,2,0,3,2,5]</button>
+  <button class="preset-btn" onclick="loadPreset([3,0,2,0,4],this)">[3,0,2,0,4]</button>
+  <button class="preset-btn" onclick="loadPreset([1,0,1],this)">[1,0,1]</button>
+  <button class="preset-btn" onclick="loadPreset([0,1,0,0,1,0],this)">[0,1,0,0,1,0]</button>
+</div>
+
+<div class="card">
+  <div class="inputs-row">
+    <div class="field">
+      <label>Heights (comma-separated)</label>
+      <input type="text" id="arrInput" value="0,1,0,2,1,0,1,3,2,1,2,1" />
+    </div>
+    <button class="btn btn-water" onclick="init()">Run</button>
+  </div>
+</div>
+
+<div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+
+<!-- legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--left-bg);border-color:var(--left-b)"></div>Left ptr</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--right-bg);border-color:var(--right-b)"></div>Right ptr</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--lmax-bg);border-color:var(--lmax-b)"></div>leftMax wall</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--rmax-bg);border-color:var(--rmax-b)"></div>rightMax wall</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--water-bg);border-color:var(--water-b)"></div>trapped water</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--add-bg);border-color:var(--add-b)"></div>water added now</div>
+</div>
+
+<!-- canvas viz -->
+<div class="viz-card">
+  <canvas id="vizCanvas" height="280"></canvas>
+
+  <div class="state-row">
+    <div class="sp"><div class="sp-lbl">left</div><div class="sp-val" id="sv-l" style="color:var(--left)">—</div></div>
+    <div class="sp"><div class="sp-lbl">right</div><div class="sp-val" id="sv-r" style="color:var(--right)">—</div></div>
+    <div class="sp"><div class="sp-lbl">leftMax</div><div class="sp-val" id="sv-lm" style="color:var(--lmax)">0</div></div>
+    <div class="sp"><div class="sp-lbl">rightMax</div><div class="sp-val" id="sv-rm" style="color:var(--rmax)">0</div></div>
+    <div class="sp"><div class="sp-lbl">added</div><div class="sp-val" id="sv-add" style="color:var(--add)">0</div></div>
+    <div class="sp"><div class="sp-lbl">total water</div><div class="sp-val" id="sv-water" style="color:var(--water)">0</div></div>
+  </div>
+
+  <div class="action-area" id="actionArea"></div>
+  <div class="status" id="statusBox">Press <strong>Next →</strong> or <strong>▶ Play</strong> to begin.</div>
+</div>
+
+<!-- controls -->
+<div class="controls-row">
+  <button class="btn btn-ghost" id="prevBtn" onclick="stepBy(-1)" disabled>← Prev</button>
+  <button class="btn btn-ghost" id="nextBtn" onclick="stepBy(1)">Next →</button>
+  <button class="btn btn-play"  id="playBtn" onclick="autoPlay()">▶ Play</button>
+  <button class="btn btn-ghost"              onclick="init()">↺ Reset</button>
+</div>
+
+<!-- trace table -->
+<div class="trace-card">
+  <div class="trace-hdr">
+    <div>#</div><div>L</div><div>R</div><div>lMax</div><div>rMax</div><div>added</div><div>total</div><div>action</div>
+  </div>
+  <div class="trace-body" id="traceBody"></div>
+</div>
+
+<!-- insight pills -->
+<div class="insight-grid">
+  <div class="insight">
+    <div class="ip-lbl">Time</div>
+    <div class="ip-val" style="color:var(--right)">O(n)</div>
+    <div class="ip-desc">single pass — left+right pointers together visit each bar once</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Space</div>
+    <div class="ip-val" style="color:var(--right)">O(1)</div>
+    <div class="ip-desc">only 4 variables — no precomputed leftMax/rightMax arrays</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Total water</div>
+    <div class="ip-val" id="totalWater" style="color:var(--water)">—</div>
+    <div class="ip-desc">units trapped across all valleys in the elevation map</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Key insight</div>
+    <div class="ip-val" style="font-size:11px;color:var(--add);font-family:'Space Mono',monospace">weaker side first</div>
+    <div class="ip-desc">move the pointer with the smaller max — it's the bottleneck; the other side is guaranteed taller</div>
+  </div>
+</div>
+
+<!-- code -->
+<div class="code-card">
+  <div class="code-hdr">
+    <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+    <span class="code-fn" style="color:var(--water)">trap.go</span>
+  </div>
+  <pre><span class="kw">func</span> <span class="fn">trap</span>(height []<span class="ty">int</span>) <span class="ty">int</span> {
+<span id="cl-init">  left, right := <span class="num">0</span>, <span class="fn">len</span>(height)-<span class="num">1</span>
+  leftMax, rightMax, water := <span class="num">0</span>, <span class="num">0</span>, <span class="num">0</span></span>
+<span id="cl-for">  <span class="kw">for</span> left &lt; right {</span>
+<span id="cl-branch">    <span class="kw">if</span> height[left] &lt; height[right] {</span>
+<span id="cl-l-max">      <span class="kw">if</span> height[left] &gt;= leftMax { leftMax = height[left]</span>
+<span id="cl-l-add">      } <span class="kw">else</span> { water += leftMax - height[left] }</span>
+<span id="cl-l-mv">      left++</span>
+    } <span class="kw">else</span> {
+<span id="cl-r-max">      <span class="kw">if</span> height[right] &gt;= rightMax { rightMax = height[right]</span>
+<span id="cl-r-add">      } <span class="kw">else</span> { water += rightMax - height[right] }</span>
+<span id="cl-r-mv">      right--</span>
+    }
+  }
+<span id="cl-ret">  <span class="kw">return</span> water</span>
+}</pre>
+</div>
+
+<footer>Trapping Rain Water · LeetCode 42 · Hard · Two Pointer O(n) / O(1)</footer>
+</div>
+
+<script>
+// ── roundRect polyfill ────────────────────────────────────────────────────────
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    r=Math.max(0,Math.min(r||0,w/2,h/2));
+    this.moveTo(x+r,y); this.arcTo(x+w,y,x+w,y+h,r); this.arcTo(x+w,y+h,x,y+h,r);
+    this.arcTo(x,y+h,x,y,r); this.arcTo(x,y,x+w,y,r); this.closePath(); return this;
+  };
+}
+
+// ── state ─────────────────────────────────────────────────────────────────────
+let height=[], steps=[], stepIdx=-1;
+let playing=false, playTimer=null;
+
+const canvas=document.getElementById('vizCanvas');
+const ctx=canvas.getContext('2d');
+
+function resizeCanvas(){
+  const w=canvas.parentElement.clientWidth-48;
+  canvas.width=w*devicePixelRatio; canvas.height=280*devicePixelRatio;
+  canvas.style.width=w+'px'; canvas.style.height='280px';
+  ctx.setTransform(1,0,0,1,0,0); ctx.scale(devicePixelRatio,devicePixelRatio);
+}
+
+// ── step builder ──────────────────────────────────────────────────────────────
+function buildSteps(h){
+  const s=[];
+  let left=0, right=h.length-1, leftMax=0, rightMax=0, water=0;
+  // waterAt[i] accumulates water added at each cell for drawing
+  const waterAt=new Array(h.length).fill(0);
+
+  s.push({left,right,leftMax,rightMax,water,waterAt:[...waterAt],added:0,side:null,action:'init'});
+
+  while(left<right){
+    let added=0, action='', side='';
+    if(h[left]<h[right]){
+      side='left';
+      if(h[left]>=leftMax){ leftMax=h[left]; action='lmax'; }
+      else { added=leftMax-h[left]; water+=added; waterAt[left]=added; action='ladd'; }
+      left++;
+    } else {
+      side='right';
+      if(h[right]>=rightMax){ rightMax=h[right]; action='rmax'; }
+      else { added=rightMax-h[right]; water+=added; waterAt[right]=added; action='radd'; }
+      right--;
+    }
+    s.push({left,right,leftMax,rightMax,water,waterAt:[...waterAt],added,side,action});
+  }
+  s.push({left,right,leftMax,rightMax,water,waterAt:[...waterAt],added:0,side:null,action:'done'});
+  return s;
+}
+
+// ── draw ──────────────────────────────────────────────────────────────────────
+function draw(s){
+  const W=canvas.width/devicePixelRatio, H=canvas.height/devicePixelRatio;
+  const n=height.length;
+  const PL=14,PR=14,PT=24,PB=28;
+  const iW=W-PL-PR, iH=H-PT-PB;
+  const maxH=Math.max(...height,1);
+  const cellW=iW/n;
+  const barW=Math.max(cellW*.72,4);
+  const bx=i=>PL+i*cellW+cellW/2;
+  const by=v=>H-PB-(v/maxH)*iH;
+  const bh=v=>(v/maxH)*iH;
+
+  ctx.clearRect(0,0,W,H);
+
+  // ground line
+  ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(PL,H-PB); ctx.lineTo(W-PR,H-PB); ctx.stroke();
+
+  // leftMax dashed line
+  if(s.leftMax>0){
+    const ly=by(s.leftMax);
+    ctx.strokeStyle='rgba(251,146,60,0.35)'; ctx.lineWidth=1; ctx.setLineDash([4,5]);
+    ctx.beginPath(); ctx.moveTo(PL,ly); ctx.lineTo(W-PR,ly); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='rgba(251,146,60,0.7)'; ctx.font='8px Space Mono'; ctx.textAlign='left';
+    ctx.fillText('lMax='+s.leftMax,PL+2,ly-3);
+  }
+  // rightMax dashed line
+  if(s.rightMax>0 && s.rightMax!==s.leftMax){
+    const ry=by(s.rightMax);
+    ctx.strokeStyle='rgba(167,139,250,0.35)'; ctx.lineWidth=1; ctx.setLineDash([4,5]);
+    ctx.beginPath(); ctx.moveTo(PL,ry); ctx.lineTo(W-PR,ry); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='rgba(167,139,250,0.7)'; ctx.font='8px Space Mono'; ctx.textAlign='right';
+    ctx.fillText('rMax='+s.rightMax,W-PR-2,ry-3);
+  }
+
+  // ── draw water fills behind bars ──
+  height.forEach((v,i)=>{
+    const w=s.waterAt[i];
+    if(w<=0) return;
+    const waterTop=by(v+w), waterBot=H-PB;
+    const x=bx(i)-cellW/2;
+    const isAdding=(s.action==='ladd'||s.action==='radd')&&
+      ((s.side==='left'&&i===s.left-1)||(s.side==='right'&&i===s.right+1));
+    ctx.fillStyle=isAdding?'rgba(251,191,36,0.28)':'rgba(56,189,248,0.22)';
+    ctx.fillRect(x,waterTop,cellW,waterBot-waterTop);
+    // shimmer top line
+    ctx.strokeStyle=isAdding?'rgba(251,191,36,0.7)':'rgba(56,189,248,0.55)';
+    ctx.lineWidth=isAdding?2:1;
+    ctx.beginPath(); ctx.moveTo(x,waterTop); ctx.lineTo(x+cellW,waterTop); ctx.stroke();
+  });
+
+  // ── draw bars ──
+  height.forEach((v,i)=>{
+    const isLeft=i===s.left && s.action!=='done';
+    const isRight=i===s.right && s.action!=='done';
+    const isActive=(s.side==='left'&&i===s.left-1)||(s.side==='right'&&i===s.right+1);
+
+    let fill='#0d1e2e', stroke='rgba(255,255,255,0.07)', glow=null;
+    if(isLeft&&isRight){ fill='rgba(244,114,182,0.18)'; stroke='rgba(244,114,182,0.5)'; glow='rgba(244,114,182,0.4)'; }
+    else if(isLeft){     fill='rgba(244,114,182,0.18)'; stroke='rgba(244,114,182,0.5)'; glow='rgba(244,114,182,0.4)'; }
+    else if(isRight){    fill='rgba(52,211,153,0.18)';  stroke='rgba(52,211,153,0.5)';  glow='rgba(52,211,153,0.4)'; }
+    else if(isActive){   fill='rgba(251,191,36,0.15)';  stroke='rgba(251,191,36,0.45)'; glow='rgba(251,191,36,0.4)'; }
+    else if(s.action==='done'){ fill='#0a1824'; stroke='rgba(52,211,153,0.2)'; }
+
+    if(v===0){ fill='#080f18'; stroke='rgba(255,255,255,0.04)'; }
+    if(glow){ ctx.shadowColor=glow; ctx.shadowBlur=10; }
+    ctx.fillStyle=fill; ctx.strokeStyle=stroke; ctx.lineWidth=1.5;
+    if(v>0){
+      ctx.beginPath(); ctx.roundRect(bx(i)-barW/2,by(v),barW,bh(v),3);
+      ctx.fill(); ctx.stroke();
+    } else {
+      // zero height — just a base tick
+      ctx.strokeStyle=stroke; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(bx(i)-barW/2,H-PB); ctx.lineTo(bx(i)+barW/2,H-PB); ctx.stroke();
+    }
+    ctx.shadowBlur=0;
+
+    // height label
+    if(v>0){
+      const lc=isLeft?'#f472b6':isRight?'#34d399':isActive?'#fbbf24':'rgba(255,255,255,0.35)';
+      ctx.fillStyle=lc; ctx.font=(isLeft||isRight)?'bold 10px Space Mono':'9px Space Mono';
+      ctx.textAlign='center'; ctx.fillText(v,bx(i),by(v)-4);
+    }
+
+    // index
+    ctx.fillStyle=(isLeft||isRight)?'#e4dff5':'#1a2e40';
+    ctx.font=(isLeft||isRight)?'bold 8px Space Mono':'8px Space Mono';
+    ctx.textAlign='center'; ctx.fillText(i,bx(i),H-PB+13);
+
+    // pointer letters
+    if(isLeft&&isRight){
+      ctx.fillStyle='#f472b6'; ctx.font='bold 9px Space Mono'; ctx.fillText('L/R',bx(i),H-PB+24);
+    } else if(isLeft){
+      ctx.fillStyle='#f472b6'; ctx.font='bold 9px Space Mono'; ctx.fillText('L',bx(i),H-PB+24);
+    } else if(isRight){
+      ctx.fillStyle='#34d399'; ctx.font='bold 9px Space Mono'; ctx.fillText('R',bx(i),H-PB+24);
+    }
+  });
+
+  // total water label top-right
+  if(s.water>0){
+    ctx.fillStyle='rgba(56,189,248,0.8)'; ctx.font='bold 11px Space Mono'; ctx.textAlign='right';
+    ctx.fillText('water = '+s.water, W-PR-2, PT-8);
+  }
+}
+
+// ── build trace ───────────────────────────────────────────────────────────────
+function buildTrace(){
+  const body=document.getElementById('traceBody'); body.innerHTML='';
+  const h=height;
+  steps.forEach((s,i)=>{
+    if(s.action==='init') return;
+    const row=document.createElement('div');
+    row.className='trace-row'; row.id='tr-'+i;
+    let actHtml='';
+    if(s.action==='lmax')  actHtml=`<span style="color:var(--lmax)">update lMax→${s.leftMax}</span>`;
+    else if(s.action==='rmax')  actHtml=`<span style="color:var(--rmax)">update rMax→${s.rightMax}</span>`;
+    else if(s.action==='ladd')  actHtml=`<span style="color:var(--add)">+${s.added} water (L)</span>`;
+    else if(s.action==='radd')  actHtml=`<span style="color:var(--add)">+${s.added} water (R)</span>`;
+    else if(s.action==='done')  actHtml=`<span style="color:var(--done)">✓ done</span>`;
+    row.innerHTML=`<div style="color:var(--dim)">${i}</div><div style="color:var(--left)">${s.left}</div><div style="color:var(--right)">${s.right}</div><div style="color:var(--lmax)">${s.leftMax}</div><div style="color:var(--rmax)">${s.rightMax}</div><div style="color:var(--add)">${s.added||'—'}</div><div style="color:var(--water)">${s.water}</div><div>${actHtml}</div>`;
+    body.appendChild(row);
+  });
+  document.getElementById('totalWater').textContent=steps[steps.length-1].water;
+}
+
+// ── apply step ────────────────────────────────────────────────────────────────
+function applyStep(idx){
+  const s=steps[idx];
+  draw(s);
+
+  document.getElementById('sv-l').textContent=s.action==='done'?'—':s.left;
+  document.getElementById('sv-r').textContent=s.action==='done'?'—':s.right;
+  document.getElementById('sv-lm').textContent=s.leftMax;
+  document.getElementById('sv-rm').textContent=s.rightMax;
+  document.getElementById('sv-add').textContent=s.added||0;
+  document.getElementById('sv-water').textContent=s.water;
+  document.getElementById('progFill').style.width=Math.round(idx/(steps.length-1)*100)+'%';
+
+  // action flash
+  const aa=document.getElementById('actionArea');
+  if(s.action==='ladd')
+    aa.innerHTML=`<div class="action-msg" style="color:var(--add)">💧 +${s.added} at L=${s.left-1}  (lMax ${s.leftMax} − h[${s.left-1}] ${height[s.left-1]})</div>`;
+  else if(s.action==='radd')
+    aa.innerHTML=`<div class="action-msg" style="color:var(--add)">💧 +${s.added} at R=${s.right+1}  (rMax ${s.rightMax} − h[${s.right+1}] ${height[s.right+1]})</div>`;
+  else if(s.action==='lmax')
+    aa.innerHTML=`<div class="action-msg" style="color:var(--lmax)">↑ leftMax updated to ${s.leftMax}</div>`;
+  else if(s.action==='rmax')
+    aa.innerHTML=`<div class="action-msg" style="color:var(--rmax)">↑ rightMax updated to ${s.rightMax}</div>`;
+  else aa.innerHTML='';
+
+  // status
+  const sb=document.getElementById('statusBox');
+  if(s.action==='init'){
+    sb.innerHTML='Array loaded. L=0, R='+(height.length-1)+'. Press <strong>Next →</strong> to begin.';
+  } else if(s.action==='lmax'){
+    sb.innerHTML=`h[L]=${height[s.left-1]} &lt; h[R]=${height[s.right]} → process left side<br><span class="tag tag-max">h[L]≥leftMax → update leftMax = ${s.leftMax}</span>, move L →`;
+  } else if(s.action==='ladd'){
+    sb.innerHTML=`h[L]=${height[s.left-1]} &lt; h[R]=${height[s.right]} → process left side<br><span class="tag tag-add">water += leftMax(${s.leftMax}) − h[L](${height[s.left-1]}) = ${s.added}</span>, move L →`;
+  } else if(s.action==='rmax'){
+    sb.innerHTML=`h[L]=${height[s.left]} ≥ h[R]=${height[s.right+1]} → process right side<br><span class="tag tag-max">h[R]≥rightMax → update rightMax = ${s.rightMax}</span>, move ← R`;
+  } else if(s.action==='radd'){
+    sb.innerHTML=`h[L]=${height[s.left]} ≥ h[R]=${height[s.right+1]} → process right side<br><span class="tag tag-add">water += rightMax(${s.rightMax}) − h[R](${height[s.right+1]}) = ${s.added}</span>, move ← R`;
+  } else if(s.action==='done'){
+    sb.innerHTML=`<span class="tag tag-done">Complete!</span> Total water trapped = <strong style="color:var(--water)">${s.water}</strong> units.`;
+  }
+
+  // code hl
+  clearHL();
+  if(s.action==='init') setHL(['cl-init']);
+  else if(s.action==='done') setHL(['cl-ret']);
+  else {
+    setHL(['cl-for','cl-branch']);
+    if(s.action==='lmax') setHL(['cl-l-max','cl-l-mv']);
+    else if(s.action==='ladd') setHL(['cl-l-add','cl-l-mv']);
+    else if(s.action==='rmax') setHL(['cl-r-max','cl-r-mv']);
+    else if(s.action==='radd') setHL(['cl-r-add','cl-r-mv']);
+  }
+
+  // trace hl
+  document.querySelectorAll('.trace-row.active').forEach(r=>r.classList.remove('active'));
+  const tr=document.getElementById('tr-'+idx);
+  if(tr){ tr.classList.add('active'); tr.scrollIntoView({block:'nearest',behavior:'smooth'}); }
+
+  document.getElementById('prevBtn').disabled=idx<=0;
+  document.getElementById('nextBtn').disabled=idx>=steps.length-1;
+}
+
+function setHL(ids){ ids.forEach(id=>{const e=document.getElementById(id);if(e)e.classList.add('hl');}); }
+function clearHL(){ document.querySelectorAll('.hl').forEach(e=>e.classList.remove('hl')); }
+
+// ── controls ──────────────────────────────────────────────────────────────────
+function stepBy(dir){
+  const next=stepIdx+dir;
+  if(next<0||next>=steps.length) return;
+  stepIdx=next; applyStep(stepIdx);
+}
+
+function autoPlay(){
+  if(playing){clearInterval(playTimer);playing=false;document.getElementById('playBtn').textContent='▶ Play';return;}
+  if(stepIdx>=steps.length-1){stepIdx=0;applyStep(0);}
+  playing=true; document.getElementById('playBtn').textContent='⏸ Pause';
+  playTimer=setInterval(()=>{
+    if(stepIdx>=steps.length-1){clearInterval(playTimer);playing=false;document.getElementById('playBtn').textContent='▶ Play';return;}
+    stepBy(1);
+  },700);
+}
+
+// ── init ──────────────────────────────────────────────────────────────────────
+function init(){
+  clearInterval(playTimer); playing=false;
+  document.getElementById('playBtn').textContent='▶ Play';
+  const raw=document.getElementById('arrInput').value;
+  height=raw.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  if(height.length<2) return;
+  steps=buildSteps(height);
+  stepIdx=0;
+  resizeCanvas();
+  buildTrace();
+  applyStep(0);
+  document.getElementById('progFill').style.width='0%';
+}
+
+function loadPreset(arr,btn){
+  document.getElementById('arrInput').value=arr.join(',');
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  init();
+}
+
+window.addEventListener('resize',()=>{
+  if(!height.length) return;
+  resizeCanvas();
+  if(stepIdx>=0) applyStep(stepIdx);
+});
+
+loadPreset([0,1,0,2,1,0,1,3,2,1,2,1],document.querySelector('.preset-btn'));
+</script>
+</body>
+</html>

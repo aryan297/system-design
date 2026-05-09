@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Container With Most Water — Brute Force vs Optimal</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07080f;--surface:#0e0f1a;--card:#131424;--border:rgba(255,255,255,0.07);--border-hi:rgba(255,255,255,0.13);
+  --text:#e2e4f0;--muted:#5a5c72;--dim:#2a2b3a;
+  --blue:#5b9cf6;--blue-bg:rgba(91,156,246,0.12);--blue-border:rgba(91,156,246,0.35);
+  --green:#3ecf8e;--green-bg:rgba(62,207,142,0.12);--green-border:rgba(62,207,142,0.35);
+  --amber:#f5a623;--amber-bg:rgba(245,166,35,0.12);--amber-border:rgba(245,166,35,0.35);
+  --teal:#2dd4bf;--teal-bg:rgba(45,212,191,0.12);--teal-border:rgba(45,212,191,0.35);
+  --red:#f87171;--red-bg:rgba(248,113,113,0.1);--red-border:rgba(248,113,113,0.3);
+  --purple:#a78bfa;--purple-bg:rgba(167,139,250,0.1);--purple-border:rgba(167,139,250,0.3);
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:'JetBrains Mono',monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2rem 1rem 4rem}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");pointer-events:none;z-index:0}
+.page{position:relative;z-index:1;width:100%;max-width:1100px}
+
+.badge{display:inline-block;font-size:11px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;padding:4px 12px;border-radius:100px;margin-bottom:.5rem}
+.badge-amber{color:var(--amber);background:var(--amber-bg);border:1px solid var(--amber-border)}
+h1{font-family:'Syne',sans-serif;font-size:clamp(1.6rem,4.5vw,2.4rem);font-weight:800;letter-spacing:-.03em;line-height:1.1;margin-bottom:.4rem}
+h1 span{color:var(--amber)}
+.subtitle{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:1.5rem}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem}
+.card-label{font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:.8rem}
+
+/* presets + inputs */
+.presets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.2rem}
+.preset-btn{font-family:'JetBrains Mono',monospace;font-size:12px;padding:5px 11px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--muted);cursor:pointer;transition:all .15s}
+.preset-btn:hover{border-color:var(--border-hi);color:var(--text)}
+.preset-btn.active{border-color:var(--amber-border);color:var(--amber);background:var(--amber-bg)}
+.inputs-row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:1.2rem}
+.field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px}
+.field label{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.field input{font-family:'JetBrains Mono',monospace;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 11px;color:var(--text);outline:none;transition:border-color .15s}
+.field input:focus{border-color:var(--amber-border)}
+.btn{font-family:'Syne',sans-serif;font-size:13px;font-weight:600;padding:8px 16px;border-radius:8px;cursor:pointer;border:1px solid;transition:all .15s;white-space:nowrap}
+.btn-amber{background:var(--amber-bg);border-color:var(--amber-border);color:var(--amber)}
+.btn-amber:hover{background:rgba(245,166,35,.2)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-ghost:hover{border-color:var(--border-hi);color:var(--text)}
+.btn-red{background:var(--red-bg);border-color:var(--red-border);color:var(--red)}
+.btn-red:hover{background:rgba(248,113,113,.18)}
+.btn-green{background:var(--green-bg);border-color:var(--green-border);color:var(--green)}
+.btn-green:hover{background:rgba(62,207,142,.18)}
+
+/* two-panel layout */
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+@media(max-width:700px){.panels{grid-template-columns:1fr}}
+
+.panel{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1rem;display:flex;flex-direction:column;gap:.75rem}
+.panel-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+.panel-title{font-family:'Syne',sans-serif;font-size:15px;font-weight:700}
+.panel-title.bf{color:var(--red)}
+.panel-title.opt{color:var(--green)}
+.complexity-tag{font-size:11px;font-weight:700;letter-spacing:.08em;padding:3px 10px;border-radius:100px}
+.ct-bf{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.ct-opt{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+
+canvas{display:block;width:100%;border-radius:10px;background:var(--surface);border:1px solid var(--border)}
+
+/* stats mini */
+.mini-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.ms-pill{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:7px 10px;text-align:center}
+.ms-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px}
+.ms-val{font-family:'Syne',sans-serif;font-size:16px;font-weight:800}
+
+.progress-track{height:2px;background:var(--border);border-radius:2px;overflow:hidden}
+.progress-fill{height:100%;border-radius:2px;transition:width .3s ease;width:0%}
+.pf-bf{background:linear-gradient(90deg,var(--red),var(--purple))}
+.pf-opt{background:linear-gradient(90deg,var(--green),var(--teal))}
+
+.status-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:.9rem 1.1rem;font-size:12.5px;color:var(--muted);line-height:1.8;min-height:70px}
+.status-box code{font-family:'JetBrains Mono',monospace;color:var(--amber)}
+
+/* controls shared */
+.controls-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:1rem}
+.panel-controls{display:flex;gap:6px;justify-content:center;flex-wrap:wrap}
+
+/* comparison bar */
+.compare-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:1.25rem 1.5rem;margin-bottom:1rem}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
+@media(max-width:600px){.compare-grid{grid-template-columns:1fr}}
+.compare-col h3{font-family:'Syne',sans-serif;font-size:14px;font-weight:700;margin-bottom:.7rem}
+.compare-col h3.bf{color:var(--red)}
+.compare-col h3.opt{color:var(--green)}
+
+.iter-track{position:relative;height:28px;background:var(--surface);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:.5rem}
+.iter-fill{height:100%;border-radius:8px;transition:width .4s ease;display:flex;align-items:center;padding-left:10px;font-size:11px;font-weight:700;white-space:nowrap}
+.if-bf{background:linear-gradient(90deg,rgba(248,113,113,.25),rgba(248,113,113,.1));color:var(--red)}
+.if-opt{background:linear-gradient(90deg,rgba(62,207,142,.25),rgba(62,207,142,.1));color:var(--green)}
+.iter-label{font-size:11px;color:var(--muted);margin-bottom:.75rem}
+
+/* code panels */
+.code-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+@media(max-width:700px){.code-grid{grid-template-columns:1fr}}
+.code-card{background:#09090f;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.code-header{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+.dot{width:9px;height:9px;border-radius:50%}
+.dot-r{background:#ff5f57}.dot-y{background:#febc2e}.dot-g{background:#28c840}
+.code-filename{font-size:11px;color:var(--muted);margin-left:5px}
+pre{padding:1rem 1.25rem;font-size:11.5px;line-height:1.9;color:#888;overflow-x:auto;tab-size:4}
+.kw{color:#c084fc}.fn{color:#60a5fa}.ty{color:#34d399}.cm{color:#3a3b50;font-style:italic}.num{color:#fb923c}
+.hl-bf{display:block;background:rgba(248,113,113,.1);border-left:2px solid var(--red);margin:0 -1.25rem;padding:0 1.25rem;transition:all .3s}
+.hl-opt{display:block;background:rgba(62,207,142,.09);border-left:2px solid var(--green);margin:0 -1.25rem;padding:0 1.25rem;transition:all .3s}
+
+/* insight */
+.insight-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+@media(max-width:600px){.insight-grid{grid-template-columns:1fr}}
+.insight-pill{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1rem}
+.insight-pill .ip-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:.4rem}
+.insight-pill .ip-val{font-family:'Syne',sans-serif;font-size:22px;font-weight:800;margin-bottom:.3rem}
+.insight-pill .ip-desc{font-size:11.5px;color:var(--muted);line-height:1.6}
+
+footer{margin-top:2.5rem;font-size:11px;color:var(--dim);text-align:center;letter-spacing:.06em}
+.tag{display:inline-block;padding:2px 9px;border-radius:100px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.tag-new{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="badge badge-amber">LeetCode 11 · Two Pointers · Greedy</div>
+  <h1>Container With <span>Most Water</span></h1>
+  <p class="subtitle">Two approaches side-by-side — watch how O(n²) brute force checks every pair while O(n) optimal squeezes inward with two pointers.</p>
+</header>
+
+<div class="presets" id="presets">
+  <button class="preset-btn active" onclick="loadPreset([1,8,6,2,5,4,8,3,7],this)">1,8,6,2,5,4,8,3,7</button>
+  <button class="preset-btn" onclick="loadPreset([1,1],this)">1,1</button>
+  <button class="preset-btn" onclick="loadPreset([4,3,2,1,4],this)">4,3,2,1,4</button>
+  <button class="preset-btn" onclick="loadPreset([1,2,4,3],this)">1,2,4,3</button>
+  <button class="preset-btn" onclick="loadPreset([2,3,4,5,18,17,6],this)">2,3,4,5,18,17,6</button>
+</div>
+
+<div class="card">
+  <div class="inputs-row">
+    <div class="field">
+      <label>Heights (comma-separated)</label>
+      <input type="text" id="arrInput" value="1,8,6,2,5,4,8,3,7" />
+    </div>
+    <button class="btn btn-amber" onclick="init()">Run Both</button>
+  </div>
+</div>
+
+<!-- shared play controls -->
+<div class="controls-row">
+  <button class="btn btn-ghost" id="prevBoth" onclick="stepBoth(-1)">← Prev</button>
+  <button class="btn btn-ghost" id="nextBoth" onclick="stepBoth(1)">Next →</button>
+  <button class="btn btn-green" id="playBoth" onclick="autoPlayBoth()">▶ Play Both</button>
+  <button class="btn btn-ghost" onclick="init()">↺ Reset</button>
+</div>
+
+<!-- side-by-side panels -->
+<div class="panels">
+
+  <!-- BRUTE FORCE -->
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <div class="panel-title bf">Brute Force</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">check every pair (i, j)</div>
+      </div>
+      <span class="complexity-tag ct-bf">O(n²) time</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill pf-bf" id="bfProgress"></div></div>
+    <canvas id="bfCanvas" height="200"></canvas>
+    <div class="mini-stats">
+      <div class="ms-pill"><div class="ms-label">i (outer)</div><div class="ms-val" id="bf-i" style="color:var(--blue)">—</div></div>
+      <div class="ms-pill"><div class="ms-label">j (inner)</div><div class="ms-val" id="bf-j" style="color:var(--purple)">—</div></div>
+      <div class="ms-pill"><div class="ms-label">best area</div><div class="ms-val" id="bf-best" style="color:var(--amber)">—</div></div>
+    </div>
+    <div class="status-box" id="bfStatus">Ready — press Next or Play Both.</div>
+  </div>
+
+  <!-- OPTIMAL -->
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <div class="panel-title opt">Two Pointer (Optimal)</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">squeeze from both ends</div>
+      </div>
+      <span class="complexity-tag ct-opt">O(n) time</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill pf-opt" id="optProgress"></div></div>
+    <canvas id="optCanvas" height="200"></canvas>
+    <div class="mini-stats">
+      <div class="ms-pill"><div class="ms-label">L index</div><div class="ms-val" id="opt-l" style="color:var(--blue)">—</div></div>
+      <div class="ms-pill"><div class="ms-label">R index</div><div class="ms-val" id="opt-r" style="color:var(--green)">—</div></div>
+      <div class="ms-pill"><div class="ms-label">best area</div><div class="ms-val" id="opt-best" style="color:var(--amber)">—</div></div>
+    </div>
+    <div class="status-box" id="optStatus">Ready — press Next or Play Both.</div>
+  </div>
+</div>
+
+<!-- iteration comparison -->
+<div class="compare-card">
+  <div class="card-label">Iterations Comparison — <span id="iterNote" style="color:var(--text)">step through to see the difference</span></div>
+  <div class="compare-grid">
+    <div class="compare-col">
+      <h3 class="bf">Brute Force</h3>
+      <div class="iter-track"><div class="iter-fill if-bf" id="bfIterFill" style="width:0%">0 / ?</div></div>
+      <div class="iter-label" id="bfIterLabel">0 pairs checked</div>
+    </div>
+    <div class="compare-col">
+      <h3 class="opt">Two Pointer</h3>
+      <div class="iter-track"><div class="iter-fill if-opt" id="optIterFill" style="width:0%">0 / ?</div></div>
+      <div class="iter-label" id="optIterLabel">0 pairs checked</div>
+    </div>
+  </div>
+</div>
+
+<!-- insight pills -->
+<div class="insight-grid">
+  <div class="insight-pill">
+    <div class="ip-label">Brute force pairs</div>
+    <div class="ip-val" id="totalBfPairs" style="color:var(--red)">—</div>
+    <div class="ip-desc">n×(n−1)/2 combinations — every possible (i,j) pair is evaluated</div>
+  </div>
+  <div class="insight-pill">
+    <div class="ip-label">Optimal iterations</div>
+    <div class="ip-val" id="totalOptSteps" style="color:var(--green)">—</div>
+    <div class="ip-desc">at most n−1 steps — each pointer moves inward exactly once</div>
+  </div>
+  <div class="insight-pill">
+    <div class="ip-label">Speedup</div>
+    <div class="ip-val" id="speedup" style="color:var(--teal)">—</div>
+    <div class="ip-desc">how many times fewer iterations the optimal approach uses</div>
+  </div>
+  <div class="insight-pill">
+    <div class="ip-label">Greedy insight</div>
+    <div class="ip-val" style="font-size:14px;color:var(--amber);font-family:'Syne',sans-serif">Move shorter wall</div>
+    <div class="ip-desc">moving the taller wall can only shrink area — only the shorter wall has a chance to improve it</div>
+  </div>
+</div>
+
+<!-- code side by side -->
+<div class="code-grid">
+  <div class="code-card">
+    <div class="code-header">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      <span class="code-filename" style="color:var(--red)">brute_force.go</span>
+    </div>
+    <pre><span class="kw">func</span> <span class="fn">bruteForce</span>(height []<span class="ty">int</span>) <span class="ty">int</span> {
+    best := <span class="num">0</span>
+<span id="bf-cl-outer">    <span class="kw">for</span> i := <span class="num">0</span>; i &lt; <span class="fn">len</span>(height); i++ {</span>
+<span id="bf-cl-inner">        <span class="kw">for</span> j := i+<span class="num">1</span>; j &lt; <span class="fn">len</span>(height); j++ {</span>
+<span id="bf-cl-h">            h := height[i]
+            <span class="kw">if</span> height[j] &lt; h { h = height[j] }</span>
+<span id="bf-cl-area">            area := h * (j - i)</span>
+<span id="bf-cl-best">            <span class="kw">if</span> area > best { best = area }</span>
+        }
+    }
+    <span class="kw">return</span> best
+}</pre>
+  </div>
+  <div class="code-card">
+    <div class="code-header">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      <span class="code-filename" style="color:var(--green)">two_pointer.go</span>
+    </div>
+    <pre><span class="kw">func</span> <span class="fn">maxArea</span>(height []<span class="ty">int</span>) <span class="ty">int</span> {
+    left, right := <span class="num">0</span>, <span class="fn">len</span>(height)-<span class="num">1</span>
+    best := <span class="num">0</span>
+<span id="opt-cl-for">    <span class="kw">for</span> left &lt; right {</span>
+<span id="opt-cl-h">        h := height[left]
+        <span class="kw">if</span> height[right] &lt; h { h = height[right] }</span>
+<span id="opt-cl-area">        area := h * (right - left)</span>
+<span id="opt-cl-best">        <span class="kw">if</span> area > best { best = area }</span>
+<span id="opt-cl-move">        <span class="kw">if</span> height[left] &lt; height[right] {
+            left++
+        } <span class="kw">else</span> {
+            right--
+        }</span>
+    }
+    <span class="kw">return</span> best
+}</pre>
+  </div>
+</div>
+
+<footer>Container With Most Water · LeetCode 11 · Brute Force O(n²) vs Two Pointer O(n)</footer>
+</div>
+
+<script>
+// ── state ──────────────────────────────────────────────
+let numbers=[], bfSteps=[], optSteps=[], sharedIdx=-1;
+let playing=false, playTimer=null;
+
+// ── canvas helpers ─────────────────────────────────────
+const bfCanvas  = document.getElementById('bfCanvas');
+const optCanvas = document.getElementById('optCanvas');
+const bfCtx  = bfCanvas.getContext('2d');
+const optCtx = optCanvas.getContext('2d');
+
+// roundRect polyfill (Chrome<99 / Firefox<112 / older Safari / WebViews)
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    r = Math.max(0, Math.min(r||0, w/2, h/2));
+    this.moveTo(x+r, y);
+    this.arcTo(x+w, y,   x+w, y+h, r);
+    this.arcTo(x+w, y+h, x,   y+h, r);
+    this.arcTo(x,   y+h, x,   y,   r);
+    this.arcTo(x,   y,   x+w, y,   r);
+    this.closePath();
+    return this;
+  };
+}
+
+function resizeCanvas(c){
+  const w=c.parentElement.clientWidth-32;
+  c.width=w*devicePixelRatio; c.height=200*devicePixelRatio;
+  c.style.width=w+'px'; c.style.height='200px';
+  // use the stored ctx reference so the scale sticks
+  const storedCtx = c===bfCanvas ? bfCtx : optCtx;
+  storedCtx.setTransform(1,0,0,1,0,0); // reset before re-scaling
+  storedCtx.scale(devicePixelRatio,devicePixelRatio);
+}
+
+// ── step builders ──────────────────────────────────────
+function buildBFSteps(nums){
+  const s=[]; let best=0;
+  for(let i=0;i<nums.length;i++){
+    for(let j=i+1;j<nums.length;j++){
+      const h=Math.min(nums[i],nums[j]);
+      const area=h*(j-i);
+      const newBest=Math.max(best,area);
+      s.push({i,j,h,area,best,newBest,isNew:area>best});
+      best=newBest;
+    }
+  }
+  return s;
+}
+
+function buildOptSteps(nums){
+  const s=[]; let l=0,r=nums.length-1,best=0;
+  while(l<r){
+    const h=Math.min(nums[l],nums[r]);
+    const area=h*(r-l);
+    const newBest=Math.max(best,area);
+    const move=(nums[l]<nums[r])?'left':'right';
+    s.push({l,r,h,area,best,newBest,move,isNew:area>best});
+    best=newBest;
+    if(move==='left') l++; else r--;
+  }
+  return s;
+}
+
+// ── draw ───────────────────────────────────────────────
+function drawPanel(ctx, nums, i1, i2, currentArea, bestArea, bestI, bestJ, mode, passed){
+  const c=ctx.canvas;
+  const W=c.width/devicePixelRatio, H=c.height/devicePixelRatio;
+  const PL=12,PR=12,PT=22,PB=28;
+  const iW=W-PL-PR, iH=H-PT-PB;
+  const n=nums.length, maxH=Math.max(...nums);
+  const cellW=iW/n, barW=Math.max(cellW*.6,5);
+
+  ctx.clearRect(0,0,W,H);
+
+  function bx(i){ return PL+i*cellW+cellW/2; }
+  function bh(v){ return (v/maxH)*iH; }
+  function by(v){ return H-PB-bh(v); }
+
+  // baseline
+  ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(PL,H-PB); ctx.lineTo(W-PR,H-PB); ctx.stroke();
+
+  // best area fill (amber)
+  if(bestArea>0 && bestI>=0 && bestJ>bestI){
+    const minH=Math.min(nums[bestI],nums[bestJ]);
+    const wh=(minH/maxH)*iH;
+    const x1=bx(bestI)+barW/2, x2=bx(bestJ)-barW/2;
+    if(x2>x1){
+      ctx.fillStyle='rgba(245,166,35,0.09)';
+      ctx.strokeStyle='rgba(245,166,35,0.4)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.roundRect(x1,H-PB-wh,x2-x1,wh,2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle='rgba(245,166,35,0.7)'; ctx.font='500 9px JetBrains Mono'; ctx.textAlign='center';
+      ctx.fillText('best='+bestArea,(x1+x2)/2,H-PB-wh-4);
+    }
+  }
+
+  // current water fill
+  if(i1>=0 && i2>i1){
+    const minH=Math.min(nums[i1],nums[i2]);
+    const wh=(minH/maxH)*iH;
+    const x1=bx(i1)+barW/2, x2=bx(i2)-barW/2;
+    if(x2>x1){
+      ctx.fillStyle=mode==='bf'?'rgba(167,139,250,0.15)':'rgba(59,130,246,0.17)';
+      ctx.strokeStyle=mode==='bf'?'rgba(167,139,250,0.45)':'rgba(59,130,246,0.5)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.roundRect(x1,H-PB-wh,x2-x1,wh,2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=mode==='bf'?'rgba(200,180,255,0.8)':'rgba(147,197,253,0.8)';
+      ctx.font='bold 11px JetBrains Mono'; ctx.textAlign='center';
+      ctx.fillText('area='+currentArea,(x1+x2)/2,H-PB-wh/2+4);
+    }
+  }
+
+  // width arrow
+  if(i1>=0 && i2>i1){
+    const ax1=bx(i1),ax2=bx(i2),ay=PT-10;
+    ctx.strokeStyle='rgba(255,255,255,0.08)'; ctx.lineWidth=1; ctx.setLineDash([3,4]);
+    ctx.beginPath(); ctx.moveTo(ax1,ay); ctx.lineTo(ax2,ay); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.font='9px JetBrains Mono'; ctx.textAlign='center';
+    ctx.fillText('w='+(i2-i1),(ax1+ax2)/2,ay-4);
+  }
+
+  // bars
+  nums.forEach((v,idx)=>{
+    const isPassed=passed && passed.has(idx);
+    let fill='#1a1b2e', stroke='transparent', glow=false;
+    if(idx===i1){
+      fill=mode==='bf'?'rgba(91,156,246,0.18)':'rgba(91,156,246,0.18)';
+      stroke=mode==='bf'?'rgba(91,156,246,0.5)':'rgba(91,156,246,0.5)'; glow=true;
+    } else if(idx===i2){
+      fill=mode==='bf'?'rgba(167,139,250,0.18)':'rgba(62,207,142,0.18)';
+      stroke=mode==='bf'?'rgba(167,139,250,0.5)':'rgba(62,207,142,0.5)'; glow=true;
+    } else if(isPassed){ fill='#111120'; }
+
+    if(glow){ ctx.shadowColor=stroke; ctx.shadowBlur=10; }
+    ctx.fillStyle=fill; ctx.strokeStyle=stroke; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.roundRect(bx(idx)-barW/2,by(v),barW,bh(v),3);
+    ctx.fill(); if(stroke!=='transparent') ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // height value
+    const lc=isPassed?'#2a2b3a':idx===i1?'#5b9cf6':idx===i2?(mode==='bf'?'#a78bfa':'#3ecf8e'):'#5a5c72';
+    ctx.fillStyle=lc; ctx.font=(idx===i1||idx===i2)?'700 10px JetBrains Mono':'400 9px JetBrains Mono';
+    ctx.textAlign='center'; ctx.fillText(v,bx(idx),by(v)-3);
+
+    // index below
+    ctx.fillStyle=(idx===i1||idx===i2)?'#e2e4f0':'#2a2b3a';
+    ctx.font=(idx===i1||idx===i2)?'600 9px JetBrains Mono':'400 9px JetBrains Mono';
+    ctx.fillText(idx,bx(idx),H-PB+12);
+  });
+
+  // pointer labels below baseline
+  if(i1>=0){
+    ctx.fillStyle=mode==='bf'?'#5b9cf6':'#5b9cf6';
+    ctx.font='700 9px JetBrains Mono'; ctx.textAlign='center';
+    ctx.fillText(mode==='bf'?'i':'L',bx(i1),H-PB+22);
+  }
+  if(i2>=0){
+    ctx.fillStyle=mode==='bf'?'#a78bfa':'#3ecf8e';
+    ctx.font='700 9px JetBrains Mono'; ctx.textAlign='center';
+    ctx.fillText(mode==='bf'?'j':'R',bx(i2),H-PB+22);
+  }
+}
+
+// ── apply step ─────────────────────────────────────────
+let bfBestTracked={i:-1,j:-1,area:0};
+let optBestTracked={l:-1,r:-1,area:0};
+
+function applyBFStep(idx){
+  const s=bfSteps[idx];
+  if(!s) return;
+  // recompute bestTracked from scratch up to idx (fixes backward stepping)
+  bfBestTracked={i:-1,j:-1,area:0};
+  for(let k=0;k<=idx;k++){
+    if(bfSteps[k].isNew){ bfBestTracked={i:bfSteps[k].i,j:bfSteps[k].j,area:bfSteps[k].newBest}; }
+  }
+  // grey out all i-values whose full j-range is already done
+  const passed=new Set();
+  const lastI=bfSteps[idx].i;
+  for(let k=0;k<idx;k++){
+    if(bfSteps[k].i < lastI) passed.add(bfSteps[k].i);
+  }
+  drawPanel(bfCtx,numbers,s.i,s.j,s.area,s.newBest,bfBestTracked.i,bfBestTracked.j,'bf',null);
+  document.getElementById('bf-i').textContent=s.i;
+  document.getElementById('bf-j').textContent=s.j;
+  document.getElementById('bf-best').textContent=s.newBest;
+  document.getElementById('bfProgress').style.width=Math.round((idx+1)/bfSteps.length*100)+'%';
+  document.getElementById('bfStatus').innerHTML=
+    `<code>h[${s.i}]=${numbers[s.i]}</code>, <code>h[${s.j}]=${numbers[s.j]}</code> → min=${s.h} × width ${s.j-s.i} = <strong style="color:var(--text)">${s.area}</strong>`+
+    (s.isNew?` <span class="tag tag-new">new best!</span>`:'')+
+    `<br>Pairs checked: ${idx+1} of ${bfSteps.length}`;
+  // iter bar
+  document.getElementById('bfIterFill').style.width=Math.round((idx+1)/bfSteps.length*100)+'%';
+  document.getElementById('bfIterFill').textContent=(idx+1)+' / '+bfSteps.length;
+  document.getElementById('bfIterLabel').textContent=(idx+1)+' pairs checked';
+  // code hl
+  clearHL('bf');
+  setHL(['bf-cl-outer','bf-cl-inner','bf-cl-h','bf-cl-area','bf-cl-best'],'bf');
+}
+
+function applyOptStep(idx){
+  const s=optSteps[idx];
+  if(!s) return;
+  // recompute from scratch so backward stepping stays correct
+  optBestTracked={l:-1,r:-1,area:0};
+  for(let k=0;k<=idx;k++){
+    if(optSteps[k].isNew){ optBestTracked={l:optSteps[k].l,r:optSteps[k].r,area:optSteps[k].newBest}; }
+  }
+  const passed=new Set();
+  for(let k=0;k<idx;k++){
+    const p=optSteps[k];
+    if(p.move==='left') passed.add(p.l);
+    else passed.add(p.r);
+  }
+  drawPanel(optCtx,numbers,s.l,s.r,s.area,s.newBest,optBestTracked.l,optBestTracked.r,'opt',passed);
+  document.getElementById('opt-l').textContent=s.l;
+  document.getElementById('opt-r').textContent=s.r;
+  document.getElementById('opt-best').textContent=s.newBest;
+  document.getElementById('optProgress').style.width=Math.round((idx+1)/optSteps.length*100)+'%';
+  const moveMsg=s.move==='left'
+    ?`h[L]=${numbers[s.l]} < h[R]=${numbers[s.r]} → move L →`
+    :`h[L]=${numbers[s.l]} >= h[R]=${numbers[s.r]} → ← move R`;
+  document.getElementById('optStatus').innerHTML=
+    `<code>h[${s.l}]=${numbers[s.l]}</code> + <code>h[${s.r}]=${numbers[s.r]}</code> → min=${s.h} × width ${s.r-s.l} = <strong style="color:var(--text)">${s.area}</strong>`+
+    (s.isNew?` <span class="tag tag-new">new best!</span>`:'')+
+    `<br>${moveMsg}`;
+  // iter bar
+  document.getElementById('optIterFill').style.width=Math.round((idx+1)/optSteps.length*100)+'%';
+  document.getElementById('optIterFill').textContent=(idx+1)+' / '+optSteps.length;
+  document.getElementById('optIterLabel').textContent=(idx+1)+' of '+optSteps.length+' iterations';
+  // code hl
+  clearHL('opt');
+  setHL(['opt-cl-for','opt-cl-h','opt-cl-area','opt-cl-best','opt-cl-move'],'opt');
+}
+
+// ── sync step ──────────────────────────────────────────
+// map shared idx to per-algo idx
+// brute force has more steps; we map proportionally so both finish together
+function getAlgoIdx(totalShared, totalAlgo, sharedI){
+  return Math.min(totalAlgo-1, Math.round(sharedI*(totalAlgo-1)/(totalShared-1||1)));
+}
+
+function applySharedStep(si){
+  const maxSteps=Math.max(bfSteps.length,optSteps.length);
+  const bfi=Math.min(bfSteps.length-1, Math.round(si*(bfSteps.length-1)/(maxSteps-1||1)));
+  const opti=Math.min(optSteps.length-1, Math.round(si*(optSteps.length-1)/(maxSteps-1||1)));
+  applyBFStep(bfi);
+  applyOptStep(opti);
+  // iterNote
+  const savings = bfSteps.length - optSteps.length;
+  document.getElementById('iterNote').textContent =
+    `optimal saved ${savings} iterations vs brute force at this point`;
+}
+
+function stepBoth(dir){
+  const maxSteps=Math.max(bfSteps.length,optSteps.length);
+  const next=sharedIdx+dir;
+  if(next<0||next>=maxSteps) return;
+  sharedIdx=next;
+  applySharedStep(sharedIdx);
+  document.getElementById('prevBoth').disabled=sharedIdx<=0;
+  document.getElementById('nextBoth').disabled=sharedIdx>=maxSteps-1;
+}
+
+function autoPlayBoth(){
+  if(playing){ clearInterval(playTimer); playing=false; document.getElementById('playBoth').textContent='▶ Play Both'; return; }
+  const maxSteps=Math.max(bfSteps.length,optSteps.length);
+  if(sharedIdx>=maxSteps-1){
+    sharedIdx=-1;
+    drawPanel(bfCtx,numbers,-1,-1,0,0,-1,-1,'bf',null);
+    drawPanel(optCtx,numbers,-1,-1,0,0,-1,-1,'opt',null);
+    document.getElementById('prevBoth').disabled=true;
+    document.getElementById('nextBoth').disabled=false;
+  }
+  playing=true; document.getElementById('playBoth').textContent='⏸ Pause';
+  playTimer=setInterval(()=>{
+    if(sharedIdx>=maxSteps-1){ clearInterval(playTimer); playing=false; document.getElementById('playBoth').textContent='▶ Play Both'; return; }
+    stepBoth(1);
+  }, 480);
+}
+
+// ── HL helpers ─────────────────────────────────────────
+function setHL(ids, mode){ ids.forEach(id=>{ const e=document.getElementById(id); if(e) e.classList.add(mode==='bf'?'hl-bf':'hl-opt'); }); }
+function clearHL(mode){ document.querySelectorAll(mode==='bf'?'.hl-bf':'.hl-opt').forEach(e=>e.classList.remove('hl-bf','hl-opt')); }
+
+// ── init ───────────────────────────────────────────────
+function init(){
+  clearInterval(playTimer); playing=false;
+  document.getElementById('playBoth').textContent='▶ Play Both';
+  const raw=document.getElementById('arrInput').value;
+  numbers=raw.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  if(numbers.length<2){ return; }
+
+  bfSteps=buildBFSteps(numbers);
+  optSteps=buildOptSteps(numbers);
+  sharedIdx=-1;
+  bfBestTracked={i:-1,j:-1,area:0};
+  optBestTracked={l:-1,r:-1,area:0};
+
+  resizeCanvas(bfCanvas); resizeCanvas(optCanvas);
+  drawPanel(bfCtx,numbers,-1,-1,0,0,-1,-1,'bf',null);
+  drawPanel(optCtx,numbers,-1,-1,0,0,-1,-1,'opt',null);
+
+  // reset stats
+  ['bf-i','bf-j','bf-best','opt-l','opt-r','opt-best'].forEach(id=>document.getElementById(id).textContent='—');
+  document.getElementById('bfStatus').innerHTML='Ready — press <strong>Next</strong> or <strong>Play Both</strong>.';
+  document.getElementById('optStatus').innerHTML='Ready — press <strong>Next</strong> or <strong>Play Both</strong>.';
+  document.getElementById('bfProgress').style.width='0%';
+  document.getElementById('optProgress').style.width='0%';
+  document.getElementById('bfIterFill').style.width='0%';
+  document.getElementById('optIterFill').style.width='0%';
+  document.getElementById('bfIterFill').textContent='0 / '+bfSteps.length;
+  document.getElementById('optIterFill').textContent='0 / '+optSteps.length;
+  document.getElementById('bfIterLabel').textContent='0 pairs checked';
+  document.getElementById('optIterLabel').textContent='0 of '+optSteps.length+' iterations';
+  document.getElementById('prevBoth').disabled=true;
+  document.getElementById('nextBoth').disabled=false;
+  clearHL('bf'); clearHL('opt');
+
+  // insight pills
+  const n=numbers.length;
+  const bfTotal=n*(n-1)/2;
+  const optTotal=optSteps.length;
+  document.getElementById('totalBfPairs').textContent=bfTotal+' pairs';
+  document.getElementById('totalOptSteps').textContent=optTotal+' steps';
+  document.getElementById('speedup').textContent=(bfTotal/optTotal).toFixed(1)+'×';
+  document.getElementById('iterNote').textContent='step through to see the difference';
+}
+
+function loadPreset(arr,btn){
+  document.getElementById('arrInput').value=arr.join(',');
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  init();
+}
+
+window.addEventListener('resize',()=>{
+  if(!numbers.length) return;
+  resizeCanvas(bfCanvas); resizeCanvas(optCanvas);
+  if(sharedIdx>=0) applySharedStep(sharedIdx);
+  else{ drawPanel(bfCtx,numbers,-1,-1,0,0,-1,-1,'bf',null); drawPanel(optCtx,numbers,-1,-1,0,0,-1,-1,'opt',null); }
+});
+
+loadPreset([1,8,6,2,5,4,8,3,7], document.querySelector('.preset-btn'));
+</script>
+</body>
+</html>

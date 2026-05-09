@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp /Users/administrator/Downloads/max-area-compare.html /Users/administrator/Desktop/basic/design_system/public/visualizers/max-area-compare.html)",
+      "Bash(cp /Users/administrator/Desktop/basic/new_practice/twoSum.html /Users/administrator/Desktop/basic/design_system/public/visualizers/two-sum.html)"
+    ]
+  }
+}

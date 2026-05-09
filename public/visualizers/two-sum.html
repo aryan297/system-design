@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Two Sum Visualizer (Brute vs Optimal)</title>
+
+<style>
+body {
+  font-family: Arial;
+  background: #0f1117;
+  color: #fff;
+  padding: 20px;
+}
+
+input, button {
+  padding: 8px;
+  margin: 5px;
+}
+
+.cell {
+  display: inline-block;
+  width: 55px;
+  height: 55px;
+  margin: 5px;
+  background: #1e2535;
+  text-align: center;
+  line-height: 55px;
+  border-radius: 8px;
+  font-weight: bold;
+}
+
+.active { background: #4d9eff; }
+.compare { background: #f5a623; }
+.found { background: #3dd68c; }
+
+.box {
+  margin-top: 15px;
+  padding: 10px;
+  border: 1px solid #333;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Two Sum Visualizer</h2>
+
+<input id="arr" value="2,7,11,15">
+<input id="target" value="9">
+
+<br>
+
+<button onclick="startBrute()">Start Brute Force</button>
+<button onclick="nextBrute()">Next</button>
+
+<button onclick="startOptimal()">Start Optimal</button>
+<button onclick="nextOptimal()">Next</button>
+
+<div id="array"></div>
+
+<div class="box">
+  <strong>HashMap:</strong> <span id="map"></span>
+</div>
+
+<div class="box">
+  <strong>Operations Count:</strong> <span id="ops">0</span>
+</div>
+
+<p id="result"></p>
+
+<script>
+// COMMON
+let nums = [];
+let target = 0;
+
+// BRUTE FORCE
+let i = 0, j = 1;
+let ops = 0;
+let bruteFound = false;
+let bruteRes = [];
+
+// OPTIMAL
+let map = {};
+let idx = 0;
+let optFound = false;
+let optRes = [];
+
+function init() {
+  nums = document.getElementById("arr").value
+    .split(",")
+    .map(x => Number(x.trim()))
+    .filter(x => !isNaN(x));
+
+  if (!nums.length) {
+    alert("Invalid array");
+    return false;
+  }
+
+  target = Number(document.getElementById("target").value);
+  return true;
+}
+
+// ===== BRUTE FORCE =====
+function startBrute() {
+  if (!init()) return;
+
+  i = 0;
+  j = 1;
+  ops = 0;
+  bruteFound = false;
+  bruteRes = [];
+
+  renderBrute();
+}
+
+function nextBrute() {
+  if (bruteFound) return;
+
+  if (i >= nums.length) return;
+
+  ops++;
+
+  if (nums[i] + nums[j] === target) {
+    bruteFound = true;
+    bruteRes = [i, j];
+  }
+
+  j++;
+
+  if (j >= nums.length) {
+    i++;
+    j = i + 1;
+  }
+
+  renderBrute();
+}
+
+function renderBrute() {
+  const container = document.getElementById("array");
+  container.innerHTML = "";
+
+  nums.forEach((n, index) => {
+    const div = document.createElement("div");
+    div.className = "cell";
+
+    if (index === i) div.classList.add("active");
+    if (index === j) div.classList.add("compare");
+
+    if (bruteFound && bruteRes.includes(index)) {
+      div.classList.add("found");
+    }
+
+    div.innerText = n;
+    container.appendChild(div);
+  });
+
+  document.getElementById("ops").innerText = ops;
+  document.getElementById("map").innerText = "-";
+
+  document.getElementById("result").innerText =
+    bruteFound
+      ? `✅ Found using Brute Force at ${bruteRes}`
+      : "Brute Force Running... (O(n²))";
+}
+
+// ===== OPTIMAL =====
+function startOptimal() {
+  if (!init()) return;
+
+  map = {};
+  idx = 0;
+  ops = 0;
+  optFound = false;
+  optRes = [];
+
+  renderOptimal();
+}
+
+function nextOptimal() {
+  if (optFound || idx >= nums.length) return;
+
+  ops++;
+
+  let num = nums[idx];
+  let complement = target - num;
+
+  if (map.hasOwnProperty(complement)) {
+    optFound = true;
+    optRes = [map[complement], idx];
+  } else {
+    map[num] = idx;
+  }
+
+  idx++;
+  renderOptimal();
+}
+
+function renderOptimal() {
+  const container = document.getElementById("array");
+  container.innerHTML = "";
+
+  nums.forEach((n, index) => {
+    const div = document.createElement("div");
+    div.className = "cell";
+
+    if (index === idx - 1) div.classList.add("active");
+
+    if (optFound && optRes.includes(index)) {
+      div.classList.add("found");
+    }
+
+    div.innerText = n;
+    container.appendChild(div);
+  });
+
+  document.getElementById("ops").innerText = ops;
+  document.getElementById("map").innerText = JSON.stringify(map);
+
+  document.getElementById("result").innerText =
+    optFound
+      ? `✅ Found using Optimal at ${optRes}`
+      : "Optimal Running... (O(n))";
+}
+</script>
+
+</body>
+</html>

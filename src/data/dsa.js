@@ -9,6 +9,7 @@ export const DSA_CATEGORIES = [
     problems: [
       {
         id: "two-sum",
+        visualizer: "/visualizers/two-sum.html",
         title: "Two Sum",
         difficulty: "Easy",
         leetcode: 1,
@@ -52,6 +53,7 @@ func main() {
       },
       {
         id: "two-sum-ii",
+        visualizer: "/visualizers/two-sum-ii.html",
         title: "Two Sum II – Input Array Is Sorted",
         difficulty: "Medium",
         leetcode: 167,
@@ -97,6 +99,7 @@ func main() {
       },
       {
         id: "container-with-most-water",
+        visualizer: "/visualizers/max-area-compare.html",
         title: "Container With Most Water",
         difficulty: "Medium",
         leetcode: 11,
@@ -146,6 +149,7 @@ func main() {
       },
       {
         id: "three-sum",
+        visualizer: "/visualizers/three-sum.html",
         title: "3Sum",
         difficulty: "Medium",
         leetcode: 15,
@@ -205,6 +209,7 @@ func main() {
       },
       {
         id: "four-sum",
+        visualizer: "/visualizers/four-sum.html",
         title: "4Sum",
         difficulty: "Medium",
         leetcode: 18,
@@ -270,6 +275,7 @@ func main() {
       },
       {
         id: "move-zeroes",
+        visualizer: "/visualizers/move-zeroes.html",
         title: "Move Zeroes",
         difficulty: "Easy",
         leetcode: 283,
@@ -358,6 +364,7 @@ func main() {
       },
       {
         id: "trapping-rain-water",
+        visualizer: "/visualizers/trapping-rain-water.html",
         title: "Trapping Rain Water",
         difficulty: "Hard",
         leetcode: 42,
@@ -408,6 +415,7 @@ func main() {
       },
       {
         id: "remove-duplicates-sorted-array",
+        visualizer: "/visualizers/remove-duplicates.html",
         title: "Remove Duplicates from Sorted Array",
         difficulty: "Easy",
         leetcode: 26,
@@ -452,6 +460,7 @@ func main() {
       },
       {
         id: "valid-palindrome",
+        visualizer: "/visualizers/valid-palindrome.html",
         title: "Valid Palindrome",
         difficulty: "Easy",
         leetcode: 125,
@@ -596,6 +605,7 @@ func main() {
       },
       {
         id: "squares-sorted-array",
+        visualizer: "/visualizers/sorted-squares.html",
         title: "Squares of a Sorted Array",
         difficulty: "Easy",
         leetcode: 977,

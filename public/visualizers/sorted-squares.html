@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Squares of a Sorted Array — Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#06050d;--s1:#0a0914;--s2:#0e0d1c;--s3:#131223;
+  --border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.12);
+  --text:#e0dbf5;--muted:#4a4870;--dim:#1c1b2e;
+  --L:#f472b6;   --L-bg:rgba(244,114,182,0.12);  --L-b:rgba(244,114,182,0.36);
+  --R:#34d399;   --R-bg:rgba(52,211,153,0.12);   --R-b:rgba(52,211,153,0.36);
+  --write:#fbbf24; --write-bg:rgba(251,191,36,0.12); --write-b:rgba(251,191,36,0.40);
+  --done:#a78bfa;  --done-bg:rgba(167,139,250,0.1);  --done-b:rgba(167,139,250,0.3);
+  --bf:#f87171;    --bf-bg:rgba(248,113,113,0.1);    --bf-b:rgba(248,113,113,0.3);
+  --opt:#38bdf8;   --opt-bg:rgba(56,189,248,0.1);    --opt-b:rgba(56,189,248,0.3);
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:'Space Mono',monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2.5rem 1rem 5rem}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.022'/%3E%3C/svg%3E");pointer-events:none;z-index:0}
+.page{position:relative;z-index:1;width:100%;max-width:1060px}
+
+/* ── header ── */
+.eyebrow{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--write);background:var(--write-bg);border:1px solid var(--write-b);padding:4px 12px;border-radius:100px;display:inline-block;margin-bottom:.9rem}
+h1{font-family:'Space Mono',monospace;font-size:clamp(1.6rem,4.5vw,2.6rem);font-weight:700;letter-spacing:-.04em;line-height:1;margin-bottom:.5rem;color:#fff}
+h1 em{color:var(--write);font-style:normal}
+.subtitle{font-size:11.5px;color:var(--muted);line-height:1.85;margin-bottom:1.8rem;max-width:600px}
+
+/* ── card ── */
+.card{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:.9rem}
+.card-label{font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:.8rem}
+
+/* ── presets ── */
+.presets{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:1rem}
+.preset-btn{font-family:'Space Mono',monospace;font-size:10px;padding:5px 10px;background:var(--s1);border:1px solid var(--border);border-radius:7px;color:var(--muted);cursor:pointer;transition:all .15s}
+.preset-btn:hover{border-color:var(--border2);color:var(--text)}
+.preset-btn.active{border-color:var(--write-b);color:var(--write);background:var(--write-bg)}
+
+/* ── inputs ── */
+.inputs-row{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:140px}
+.field label{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+.field input{font-family:'Space Mono',monospace;font-size:12px;background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--text);outline:none;transition:border-color .15s}
+.field input:focus{border-color:var(--write-b)}
+
+/* ── buttons ── */
+.btn{font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:8px 13px;border-radius:8px;cursor:pointer;border:1px solid;transition:all .15s;white-space:nowrap;letter-spacing:.03em}
+.btn:disabled{opacity:.28;cursor:not-allowed}
+.btn-amber{background:var(--write-bg);border-color:var(--write-b);color:var(--write)}
+.btn-amber:not(:disabled):hover{background:rgba(251,191,36,.2)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-ghost:not(:disabled):hover{border-color:var(--border2);color:var(--text)}
+.btn-bf{background:var(--bf-bg);border-color:var(--bf-b);color:var(--bf);min-width:82px}
+.btn-bf:not(:disabled):hover{background:rgba(248,113,113,.2)}
+.btn-opt{background:var(--opt-bg);border-color:var(--opt-b);color:var(--opt);min-width:82px}
+.btn-opt:not(:disabled):hover{background:rgba(56,189,248,.2)}
+.btn-both{background:rgba(167,139,250,.1);border-color:rgba(167,139,250,.3);color:var(--done);min-width:88px}
+.btn-both:not(:disabled):hover{background:rgba(167,139,250,.2)}
+
+/* ── mode tabs ── */
+.mode-bar{display:flex;gap:7px;justify-content:center;align-items:center;margin-bottom:1rem;flex-wrap:wrap}
+.mode-label{font-size:10px;color:var(--muted);letter-spacing:.08em}
+.mode-tab{font-family:'Space Mono',monospace;font-size:10px;font-weight:700;padding:6px 14px;border-radius:7px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);transition:all .2s;letter-spacing:.03em}
+.mode-tab:hover{border-color:var(--border2);color:var(--text)}
+.mode-tab.act-both{border-color:rgba(167,139,250,.4)!important;color:var(--done)!important;background:rgba(167,139,250,.08)!important}
+.mode-tab.act-bf  {border-color:var(--bf-b)!important;color:var(--bf)!important;background:var(--bf-bg)!important}
+.mode-tab.act-opt {border-color:var(--opt-b)!important;color:var(--opt)!important;background:var(--opt-bg)!important}
+
+/* ── shared controls ── */
+.controls-row{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin-bottom:1rem}
+
+/* ── panels ── */
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;margin-bottom:.9rem}
+@media(max-width:700px){.panels{grid-template-columns:1fr}}
+.panel{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1rem;display:flex;flex-direction:column;gap:.65rem;transition:opacity .3s,border-color .3s,box-shadow .3s}
+.panel.dimmed{opacity:.35}
+.panel.solo-active{border-color:rgba(255,255,255,.14);box-shadow:0 0 24px rgba(255,255,255,.025)}
+.panel-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.panel-title{font-family:'Space Mono',monospace;font-size:13px;font-weight:700}
+.panel-title.bf{color:var(--bf)}
+.panel-title.opt{color:var(--opt)}
+.panel-sub{font-size:10px;color:var(--muted);margin-top:2px}
+.ctag{font-size:9px;font-weight:700;letter-spacing:.07em;padding:3px 9px;border-radius:100px;white-space:nowrap}
+.ctag-bf{background:var(--bf-bg);color:var(--bf);border:1px solid var(--bf-b)}
+.ctag-opt{background:var(--opt-bg);color:var(--opt);border:1px solid var(--opt-b)}
+
+/* ── progress ── */
+.prog-track{height:2px;background:var(--border);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;border-radius:2px;transition:width .3s ease;width:0%}
+.pf-bf{background:linear-gradient(90deg,var(--bf),rgba(248,113,113,.4))}
+.pf-opt{background:linear-gradient(90deg,var(--opt),var(--write))}
+
+/* ── array rows inside panels ── */
+.arr-label{font-size:8px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.arr-wrap{overflow-x:auto;padding-bottom:2px}
+.arr-row{display:flex;gap:5px;min-width:max-content;margin:0 auto;justify-content:center}
+.cell-col{display:flex;flex-direction:column;align-items:center;gap:2px}
+.ptr-lbl{font-size:8px;font-weight:700;height:12px;text-align:center;letter-spacing:.04em}
+.cell{
+  width:44px;height:44px;display:flex;align-items:center;justify-content:center;
+  font-size:15px;font-weight:700;border-radius:8px;border:1.5px solid var(--border);
+  background:var(--s1);color:var(--muted);
+  transition:all .3s cubic-bezier(.34,1.45,.64,1);
+}
+/* input cells */
+.cell.c-L{background:var(--L-bg);border-color:var(--L-b);color:var(--L);transform:translateY(-4px);box-shadow:0 6px 14px rgba(244,114,182,.2)}
+.cell.c-R{background:var(--R-bg);border-color:var(--R-b);color:var(--R);transform:translateY(-4px);box-shadow:0 6px 14px rgba(52,211,153,.2)}
+.cell.c-scan{background:var(--bf-bg);border-color:var(--bf-b);color:var(--bf);transform:translateY(-3px)}
+.cell.c-used{opacity:.3}
+.cell.c-normal{color:var(--text)}
+/* result cells */
+.cell.c-write{background:var(--write-bg);border-color:var(--write-b);color:var(--write);transform:translateY(-4px) scale(1.06);box-shadow:0 8px 18px rgba(251,191,36,.25);animation:wflash .3s ease}
+@keyframes wflash{0%{filter:brightness(2.2)}100%{filter:brightness(1)}}
+.cell.c-placed{background:var(--done-bg);border-color:var(--done-b);color:var(--done)}
+.cell.c-empty{background:var(--dim);border-color:var(--dim);color:var(--dim);border-style:dashed}
+.cell-val-sub{font-size:8px;color:var(--dim);text-align:center}
+
+/* ── mini stats ── */
+.mini-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.ms{background:var(--s1);border:1px solid var(--border);border-radius:7px;padding:5px 6px;text-align:center}
+.ms-lbl{font-size:7px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px}
+.ms-val{font-family:'Space Mono',monospace;font-size:13px;font-weight:700}
+
+/* ── status ── */
+.status{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:.7rem 1rem;font-size:10.5px;color:var(--muted);line-height:1.9;min-height:54px}
+.status code{font-family:'Space Mono',monospace;color:var(--write)}
+.tag{display:inline-block;padding:2px 7px;border-radius:100px;font-size:8.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.tag-write{background:var(--write-bg);color:var(--write);border:1px solid var(--write-b)}
+.tag-l{background:var(--L-bg);color:var(--L);border:1px solid var(--L-b)}
+.tag-r{background:var(--R-bg);color:var(--R);border:1px solid var(--R-b)}
+.tag-done{background:var(--done-bg);color:var(--done);border:1px solid var(--done-b)}
+
+/* ── panel controls ── */
+.panel-controls{display:flex;gap:5px;justify-content:center;flex-wrap:wrap}
+
+/* ── comparison ── */
+.compare-card{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:.9rem}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
+@media(max-width:580px){.compare-grid{grid-template-columns:1fr}}
+.compare-col h3{font-family:'Space Mono',monospace;font-size:11px;font-weight:700;margin-bottom:.6rem}
+.compare-col h3.bf{color:var(--bf)}
+.compare-col h3.opt{color:var(--opt)}
+.iter-track{height:24px;background:var(--s1);border:1px solid var(--border);border-radius:7px;overflow:hidden;margin-bottom:.4rem}
+.iter-fill{height:100%;border-radius:7px;transition:width .4s ease;display:flex;align-items:center;padding-left:9px;font-size:10px;font-weight:700;font-family:'Space Mono',monospace;white-space:nowrap}
+.if-bf{background:linear-gradient(90deg,rgba(248,113,113,.2),rgba(248,113,113,.04));color:var(--bf)}
+.if-opt{background:linear-gradient(90deg,rgba(56,189,248,.2),rgba(56,189,248,.04));color:var(--opt)}
+.iter-lbl{font-size:10px;color:var(--muted)}
+
+/* ── insight ── */
+.insight-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:.8rem;margin-bottom:.9rem}
+.insight{background:var(--s1);border:1px solid var(--border);border-radius:11px;padding:.9rem}
+.ip-lbl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-bottom:.35rem}
+.ip-val{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;margin-bottom:.3rem}
+.ip-desc{font-size:10px;color:var(--muted);line-height:1.6}
+
+/* ── legend ── */
+.legend{display:flex;gap:13px;flex-wrap:wrap;justify-content:center;margin-bottom:.9rem}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted)}
+.legend-dot{width:10px;height:10px;border-radius:3px;border:1.5px solid}
+
+/* ── code grid ── */
+.code-grid{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;margin-bottom:.9rem}
+@media(max-width:700px){.code-grid{grid-template-columns:1fr}}
+.code-card{background:#06060e;border:1px solid var(--border);border-radius:13px;overflow:hidden}
+.code-hdr{display:flex;align-items:center;gap:7px;padding:8px 13px;border-bottom:1px solid var(--border);background:var(--s1)}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot-r{background:#ff5f57}.dot-y{background:#febc2e}.dot-g{background:#28c840}
+.code-fn{font-size:10px;color:var(--muted);margin-left:4px}
+pre{padding:.9rem 1.1rem;font-size:11px;line-height:1.95;color:#666;overflow-x:auto;tab-size:2}
+.kw{color:#c084fc}.fn{color:var(--write)}.ty{color:var(--R)}.num{color:#fb923c}.cm{color:#252340;font-style:italic}
+.hl-bf {display:block;background:rgba(248,113,113,.08);border-left:2px solid var(--bf);margin:0 -1.1rem;padding:0 1.1rem;transition:all .25s}
+.hl-opt{display:block;background:rgba(56,189,248,.07);border-left:2px solid var(--opt);margin:0 -1.1rem;padding:0 1.1rem;transition:all .25s}
+
+footer{margin-top:3rem;font-size:10px;color:var(--dim);text-align:center;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">LeetCode 977 · Easy · Two Pointers</div>
+  <h1>Squares of a <em>Sorted Array</em></h1>
+  <p class="subtitle">Brute force squares then sorts. The optimal approach uses two pointers at the ends — the largest square is always at one of the two ends — and fills the result array from back to front in O(n).</p>
+</header>
+
+<div class="presets">
+  <button class="preset-btn active" onclick="loadPreset([-4,-1,0,3,10],this)">[-4,-1,0,3,10]</button>
+  <button class="preset-btn" onclick="loadPreset([-7,-3,2,3,11],this)">[-7,-3,2,3,11]</button>
+  <button class="preset-btn" onclick="loadPreset([-5,-3,-2,-1],this)">all negatives</button>
+  <button class="preset-btn" onclick="loadPreset([1,2,3,4,5],this)">all positives</button>
+  <button class="preset-btn" onclick="loadPreset([-3,-2,0,0,2,3],this)">symmetric</button>
+</div>
+
+<div class="card">
+  <div class="inputs-row">
+    <div class="field">
+      <label>Sorted array (comma-separated)</label>
+      <input type="text" id="arrInput" value="-4,-1,0,3,10" />
+    </div>
+    <button class="btn btn-amber" onclick="init()">Run</button>
+  </div>
+</div>
+
+<!-- mode selector -->
+<div class="mode-bar">
+  <span class="mode-label">Mode:</span>
+  <button class="mode-tab act-both" id="tab-both" onclick="setMode('both')">⚡ Both Together</button>
+  <button class="mode-tab"          id="tab-bf"   onclick="setMode('bf')">🔴 Brute Force Only</button>
+  <button class="mode-tab"          id="tab-opt"  onclick="setMode('opt')">🔵 Optimal Only</button>
+</div>
+
+<!-- shared controls -->
+<div class="controls-row" id="sharedControls">
+  <button class="btn btn-ghost" id="prevBoth" onclick="stepBoth(-1)" disabled>← Prev</button>
+  <button class="btn btn-ghost" id="nextBoth" onclick="stepBoth(1)">Next →</button>
+  <button class="btn btn-both"  id="playBoth" onclick="autoPlayBoth()">▶ Play Both</button>
+  <button class="btn btn-ghost"               onclick="init()">↺ Reset</button>
+</div>
+
+<!-- legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--L-bg);border-color:var(--L-b)"></div>Left ptr</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--R-bg);border-color:var(--R-b)"></div>Right ptr</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--write-bg);border-color:var(--write-b)"></div>Writing now</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--done-bg);border-color:var(--done-b)"></div>Placed in result</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--bf-bg);border-color:var(--bf-b)"></div>BF scan ptr</div>
+</div>
+
+<!-- panels -->
+<div class="panels">
+
+  <!-- BRUTE FORCE -->
+  <div class="panel" id="bfPanel">
+    <div class="panel-hdr">
+      <div><div class="panel-title bf">Brute Force</div><div class="panel-sub">square all, then sort</div></div>
+      <span class="ctag ctag-bf">O(n log n)</span>
+    </div>
+    <div class="prog-track"><div class="prog-fill pf-bf" id="bfProg"></div></div>
+
+    <!-- input array -->
+    <div class="arr-label">Input (sorted)</div>
+    <div class="arr-wrap"><div class="arr-row" id="bfInputRow"></div></div>
+
+    <!-- squares array (unsorted) -->
+    <div class="arr-label">Squares (unsorted)</div>
+    <div class="arr-wrap"><div class="arr-row" id="bfSqRow"></div></div>
+
+    <!-- result (sorted) -->
+    <div class="arr-label">Result (sorting squares...)</div>
+    <div class="arr-wrap"><div class="arr-row" id="bfResRow"></div></div>
+
+    <div class="mini-stats">
+      <div class="ms"><div class="ms-lbl">i</div><div class="ms-val" id="bf-i" style="color:var(--bf)">—</div></div>
+      <div class="ms"><div class="ms-lbl">phase</div><div class="ms-val" id="bf-phase" style="color:var(--muted);font-size:9px">—</div></div>
+      <div class="ms"><div class="ms-lbl">comparisons</div><div class="ms-val" id="bf-comps" style="color:var(--bf)">0</div></div>
+      <div class="ms"><div class="ms-lbl">writes</div><div class="ms-val" id="bf-writes" style="color:var(--write)">0</div></div>
+    </div>
+    <div class="status" id="bfStatus">Ready.</div>
+    <div class="panel-controls" id="bfControls" style="display:none">
+      <button class="btn btn-ghost" id="bf-prev" onclick="stepSolo('bf',-1)" disabled>← Prev</button>
+      <button class="btn btn-ghost" id="bf-next" onclick="stepSolo('bf',1)">Next →</button>
+      <button class="btn btn-bf"    id="bf-play" onclick="autoPlaySolo('bf')">▶ Play</button>
+      <button class="btn btn-ghost"              onclick="resetSolo('bf')">↺</button>
+    </div>
+  </div>
+
+  <!-- OPTIMAL -->
+  <div class="panel" id="optPanel">
+    <div class="panel-hdr">
+      <div><div class="panel-title opt">Two Pointer (Optimal)</div><div class="panel-sub">fill result back-to-front</div></div>
+      <span class="ctag ctag-opt">O(n) time</span>
+    </div>
+    <div class="prog-track"><div class="prog-fill pf-opt" id="optProg"></div></div>
+
+    <!-- input array -->
+    <div class="arr-label">Input (L / R pointers)</div>
+    <div class="arr-wrap"><div class="arr-row" id="optInputRow"></div></div>
+
+    <!-- result being built -->
+    <div class="arr-label">Result (filling back → front, i=<span id="optILabel">n-1</span>)</div>
+    <div class="arr-wrap"><div class="arr-row" id="optResRow"></div></div>
+
+    <div class="mini-stats">
+      <div class="ms"><div class="ms-lbl">left</div><div class="ms-val" id="opt-l" style="color:var(--L)">—</div></div>
+      <div class="ms"><div class="ms-lbl">right</div><div class="ms-val" id="opt-r" style="color:var(--R)">—</div></div>
+      <div class="ms"><div class="ms-lbl">i (fill)</div><div class="ms-val" id="opt-i" style="color:var(--write)">—</div></div>
+      <div class="ms"><div class="ms-lbl">writes</div><div class="ms-val" id="opt-writes" style="color:var(--done)">0</div></div>
+    </div>
+    <div class="status" id="optStatus">Ready.</div>
+    <div class="panel-controls" id="optControls" style="display:none">
+      <button class="btn btn-ghost" id="opt-prev" onclick="stepSolo('opt',-1)" disabled>← Prev</button>
+      <button class="btn btn-ghost" id="opt-next" onclick="stepSolo('opt',1)">Next →</button>
+      <button class="btn btn-opt"   id="opt-play" onclick="autoPlaySolo('opt')">▶ Play</button>
+      <button class="btn btn-ghost"              onclick="resetSolo('opt')">↺</button>
+    </div>
+  </div>
+</div>
+
+<!-- comparison -->
+<div class="compare-card">
+  <div class="card-label">Operations Comparison — <span id="iterNote" style="color:var(--text)">step through to compare</span></div>
+  <div class="compare-grid">
+    <div class="compare-col">
+      <h3 class="bf">Brute Force</h3>
+      <div class="iter-track"><div class="iter-fill if-bf" id="bfIterFill" style="width:0%">0 / ?</div></div>
+      <div class="iter-lbl" id="bfIterLbl">0 steps</div>
+    </div>
+    <div class="compare-col">
+      <h3 class="opt">Two Pointer</h3>
+      <div class="iter-track"><div class="iter-fill if-opt" id="optIterFill" style="width:0%">0 / ?</div></div>
+      <div class="iter-lbl" id="optIterLbl">0 steps</div>
+    </div>
+  </div>
+</div>
+
+<!-- insight pills -->
+<div class="insight-grid">
+  <div class="insight">
+    <div class="ip-lbl">Brute force</div>
+    <div class="ip-val" id="totalBf" style="color:var(--bf)">—</div>
+    <div class="ip-desc">n squarings + O(n log n) sort comparisons</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Optimal steps</div>
+    <div class="ip-val" id="totalOpt" style="color:var(--opt)">—</div>
+    <div class="ip-desc">exactly n writes — one per position, back to front</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Speedup</div>
+    <div class="ip-val" id="speedup" style="color:var(--write)">—</div>
+    <div class="ip-desc">optimal avoids the sort step entirely</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Key insight</div>
+    <div class="ip-val" style="font-size:11px;color:var(--done);font-family:'Space Mono',monospace">ends → max</div>
+    <div class="ip-desc">largest square is always at L or R; fill result right-to-left guarantees sorted order</div>
+  </div>
+</div>
+
+<!-- code side by side -->
+<div class="code-grid">
+  <div class="code-card">
+    <div class="code-hdr">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      <span class="code-fn" style="color:var(--bf)">brute_force.go</span>
+    </div>
+    <pre><span class="kw">func</span> <span class="fn">bruteForce</span>(nums []<span class="ty">int</span>) []<span class="ty">int</span> {
+  n := <span class="fn">len</span>(nums)
+  res := <span class="fn">make</span>([]<span class="ty">int</span>, n)
+<span id="bf-cl-sq">  <span class="kw">for</span> i := <span class="num">0</span>; i &lt; n; i++ {</span>
+<span id="bf-cl-sq2">    res[i] = nums[i] * nums[i]  <span class="cm">// square each</span></span>
+  }
+<span id="bf-cl-sort">  sort.Ints(res)  <span class="cm">// O(n log n)</span></span>
+  <span class="kw">return</span> res
+}</pre>
+  </div>
+  <div class="code-card">
+    <div class="code-hdr">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      <span class="code-fn" style="color:var(--opt)">optimal.go</span>
+    </div>
+    <pre><span class="kw">func</span> <span class="fn">sortedSquares</span>(nums []<span class="ty">int</span>) []<span class="ty">int</span> {
+  n := <span class="fn">len</span>(nums)
+  res := <span class="fn">make</span>([]<span class="ty">int</span>, n)
+<span id="opt-cl-init">  left, right := <span class="num">0</span>, n-<span class="num">1</span></span>
+<span id="opt-cl-for">  <span class="kw">for</span> i := n-<span class="num">1</span>; i &gt;= <span class="num">0</span>; i-- {</span>
+<span id="opt-cl-sq">    l, r := nums[left]*nums[left], nums[right]*nums[right]</span>
+<span id="opt-cl-l">    <span class="kw">if</span> l &gt; r { res[i] = l; left++</span>
+<span id="opt-cl-r">    } <span class="kw">else</span> { res[i] = r; right-- }</span>
+  }
+  <span class="kw">return</span> res
+}</pre>
+  </div>
+</div>
+
+<footer>Squares of a Sorted Array · LeetCode 977 · Brute Force O(n log n) vs Two Pointer O(n)</footer>
+</div>
+
+<script>
+// ── roundRect polyfill ────────────────────────────────────────────────────────
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect=function(x,y,w,h,r){r=Math.max(0,Math.min(r||0,w/2,h/2));this.moveTo(x+r,y);this.arcTo(x+w,y,x+w,y+h,r);this.arcTo(x+w,y+h,x,y+h,r);this.arcTo(x,y+h,x,y,r);this.arcTo(x,y,x+w,y,r);this.closePath();return this;};
+}
+
+// ── state ─────────────────────────────────────────────────────────────────────
+let nums=[], bfSteps=[], optSteps=[];
+let sharedIdx=-1, bfIdx=-1, optIdx=-1;
+let playing=false, playTimer=null;
+let bfPlaying=false, bfTimer=null;
+let optPlaying=false, optTimer=null;
+let currentMode='both';
+
+// ── step builders ─────────────────────────────────────────────────────────────
+function buildBFSteps(ns){
+  const steps=[], n=ns.length;
+  const sq=new Array(n).fill(null);
+  let comps=0, writes=0;
+  steps.push({phase:'init',i:-1,sq:[...sq],res:[],comps,writes});
+
+  // phase 1: square each
+  for(let i=0;i<n;i++){
+    sq[i]=ns[i]*ns[i]; writes++;
+    steps.push({phase:'square',i,sq:[...sq],res:[],comps,writes});
+  }
+
+  // phase 2: sort (insertion sort for visibility)
+  const arr=[...sq];
+  for(let i=1;i<n;i++){
+    let j=i;
+    while(j>0){
+      comps++;
+      if(arr[j]<arr[j-1]){
+        const tmp=arr[j]; arr[j]=arr[j-1]; arr[j-1]=tmp; writes++;
+        steps.push({phase:'sort',i,j,sq:[...sq],res:[...arr],comps,writes,swapA:j-1,swapB:j});
+        j--;
+      } else {
+        steps.push({phase:'sort-check',i,j,sq:[...sq],res:[...arr],comps,writes,checkA:j-1,checkB:j});
+        break;
+      }
+    }
+  }
+  steps.push({phase:'done',i:-1,sq:[...sq],res:[...arr],comps,writes});
+  return steps;
+}
+
+function buildOptSteps(ns){
+  const steps=[], n=ns.length;
+  const res=new Array(n).fill(null);
+  let left=0, right=n-1, writes=0;
+  steps.push({i:n,left,right,res:[...res],writes,action:'init',wrote:-1});
+  for(let i=n-1;i>=0;i--){
+    const lsq=ns[left]*ns[left], rsq=ns[right]*ns[right];
+    if(lsq>rsq){ res[i]=lsq; writes++; steps.push({i,left,right,res:[...res],writes,action:'left',wrote:i,lsq,rsq}); left++; }
+    else        { res[i]=rsq; writes++; steps.push({i,left,right:right,res:[...res],writes,action:'right',wrote:i,lsq,rsq}); right--; }
+  }
+  steps.push({i:-1,left,right,res:[...res],writes,action:'done',wrote:-1});
+  return steps;
+}
+
+// ── render helpers ────────────────────────────────────────────────────────────
+function makeCell(val, cls, ptrText, ptrColor, subText){
+  const col=document.createElement('div'); col.className='cell-col';
+  const lbl=document.createElement('div'); lbl.className='ptr-lbl';
+  if(ptrText){ lbl.textContent=ptrText; lbl.style.color=ptrColor||''; }
+  col.appendChild(lbl);
+  const cell=document.createElement('div'); cell.className='cell '+cls;
+  cell.textContent=val!==null?val:'';
+  col.appendChild(cell);
+  if(subText){ const sub=document.createElement('div'); sub.className='cell-val-sub'; sub.textContent=subText; col.appendChild(sub); }
+  return col;
+}
+
+function renderBFStep(idx){
+  const s=bfSteps[idx];
+  const n=nums.length;
+
+  // input row — always static
+  const ir=document.getElementById('bfInputRow'); ir.innerHTML='';
+  nums.forEach((v,i)=>ir.appendChild(makeCell(v,'c-normal','','','')));
+
+  // squares row
+  const sr=document.getElementById('bfSqRow'); sr.innerHTML='';
+  s.sq.forEach((v,i)=>{
+    let cls='c-empty';
+    if(v!==null) cls=(s.phase==='square'&&i===s.i)?'c-scan':'c-normal';
+    const ptrTxt=(s.phase==='square'&&i===s.i)?'i':'';
+    sr.appendChild(makeCell(v!==null?v:'',cls,ptrTxt,'var(--bf)',v!==null?'='+nums[i]+'²':''));
+  });
+
+  // result row
+  const rr=document.getElementById('bfResRow'); rr.innerHTML='';
+  if(s.phase==='square'||s.phase==='init'){
+    for(let i=0;i<n;i++) rr.appendChild(makeCell('','c-empty','','',''));
+  } else {
+    s.res.forEach((v,i)=>{
+      let cls='c-normal';
+      if(s.phase==='sort'&&(i===s.swapA||i===s.swapB)) cls='c-write';
+      else if(s.phase==='sort-check'&&(i===s.checkA||i===s.checkB)) cls='c-scan';
+      else if(s.phase==='done') cls='c-placed';
+      rr.appendChild(makeCell(v!==null?v:'',cls,'','',''));
+    });
+  }
+
+  // stats
+  document.getElementById('bf-i').textContent=s.i>=0?s.i:'—';
+  document.getElementById('bf-phase').textContent=s.phase==='square'?'sq':s.phase==='sort'||s.phase==='sort-check'?'sort':s.phase;
+  document.getElementById('bf-comps').textContent=s.comps;
+  document.getElementById('bf-writes').textContent=s.writes;
+  document.getElementById('bfProg').style.width=Math.round(idx/(bfSteps.length-1)*100)+'%';
+  document.getElementById('bfIterFill').style.width=Math.round(idx/(bfSteps.length-1)*100)+'%';
+  document.getElementById('bfIterFill').textContent=(idx)+' / '+(bfSteps.length-1);
+  document.getElementById('bfIterLbl').textContent=idx+' steps';
+
+  // status
+  const sb=document.getElementById('bfStatus');
+  if(s.phase==='init') sb.textContent='Square each element, then sort the result array.';
+  else if(s.phase==='square') sb.innerHTML=`Squaring: <code>nums[${s.i}]=${nums[s.i]}</code> → <code>${s.sq[s.i]}</code>`;
+  else if(s.phase==='sort') sb.innerHTML=`Insertion sort: swapping <code>res[${s.swapA}]=${s.res[s.swapA]}</code> ↔ <code>res[${s.swapB}]=${s.res[s.swapB]}</code>`;
+  else if(s.phase==='sort-check') sb.innerHTML=`Insertion sort: <code>${s.res[s.checkA]}</code> ≤ <code>${s.res[s.checkB]}</code> → no swap needed`;
+  else if(s.phase==='done') sb.innerHTML=`<span class="tag tag-done">Done!</span> Result: [${s.res.join(', ')}]`;
+
+  // code hl
+  clearHL('bf');
+  if(s.phase==='square'||s.phase==='square') setHL(['bf-cl-sq','bf-cl-sq2'],'bf');
+  else if(s.phase==='sort'||s.phase==='sort-check') setHL(['bf-cl-sort'],'bf');
+}
+
+function renderOptStep(idx){
+  const s=optSteps[idx];
+  const n=nums.length;
+
+  // input row
+  const ir=document.getElementById('optInputRow'); ir.innerHTML='';
+  nums.forEach((v,i)=>{
+    const isL=i===s.left && s.action!=='done';
+    const isR=i===s.right && s.action!=='done';
+    const isUsed=(i<s.left)||(i>s.right);
+    let cls=isUsed?'c-used':isL?'c-L':isR?'c-R':'c-normal';
+    let ptr='', ptrC='';
+    if(isL&&isR){ ptr='L/R'; ptrC='var(--write)'; }
+    else if(isL){ ptr='L'; ptrC='var(--L)'; }
+    else if(isR){ ptr='R'; ptrC='var(--R)'; }
+    ir.appendChild(makeCell(v, cls, ptr, ptrC, ''));
+  });
+
+  // result row
+  document.getElementById('optILabel').textContent=s.i>=0?s.i:'done';
+  const rr=document.getElementById('optResRow'); rr.innerHTML='';
+  s.res.forEach((v,i)=>{
+    let cls=v!==null?(i===s.wrote&&s.action!=='done'?'c-write':'c-placed'):'c-empty';
+    const ptrTxt=(i===s.i&&s.action!=='done')?'i':'';
+    rr.appendChild(makeCell(v!==null?v:'', cls, ptrTxt, 'var(--write)', ''));
+  });
+
+  // stats
+  document.getElementById('opt-l').textContent=s.action==='done'?'—':s.left;
+  document.getElementById('opt-r').textContent=s.action==='done'?'—':s.right;
+  document.getElementById('opt-i').textContent=s.i>=0?s.i:'—';
+  document.getElementById('opt-writes').textContent=s.writes;
+  document.getElementById('optProg').style.width=Math.round(idx/(optSteps.length-1)*100)+'%';
+  document.getElementById('optIterFill').style.width=Math.round(idx/(optSteps.length-1)*100)+'%';
+  document.getElementById('optIterFill').textContent=(idx)+' / '+(optSteps.length-1);
+  document.getElementById('optIterLbl').textContent=idx+' steps';
+
+  // status
+  const sb=document.getElementById('optStatus');
+  if(s.action==='init') sb.innerHTML=`L=0, R=${n-1}, i=${n-1}. Fill result[i] with the larger square.`;
+  else if(s.action==='left')  sb.innerHTML=`L²=${s.lsq} > R²=${s.rsq} → <span class="tag tag-l">place ${s.lsq} at i=${s.i}</span>, L++`;
+  else if(s.action==='right') sb.innerHTML=`L²=${s.lsq} ≤ R²=${s.rsq} → <span class="tag tag-r">place ${s.rsq} at i=${s.i}</span>, R--`;
+  else if(s.action==='done')  sb.innerHTML=`<span class="tag tag-done">Done!</span> Result: [${s.res.join(', ')}]`;
+
+  // code hl
+  clearHL('opt');
+  if(s.action==='init') setHL(['opt-cl-init'],'opt');
+  else if(s.action==='done') {}
+  else {
+    setHL(['opt-cl-for','opt-cl-sq'],'opt');
+    if(s.action==='left')  setHL(['opt-cl-l'],'opt');
+    else                   setHL(['opt-cl-r'],'opt');
+  }
+}
+
+// ── BOTH mode ─────────────────────────────────────────────────────────────────
+function applyShared(si){
+  const max=Math.max(bfSteps.length,optSteps.length);
+  const bi=Math.min(bfSteps.length-1, Math.round(si*(bfSteps.length-1)/(max-1||1)));
+  const oi=Math.min(optSteps.length-1,Math.round(si*(optSteps.length-1)/(max-1||1)));
+  renderBFStep(bi); renderOptStep(oi);
+  document.getElementById('iterNote').textContent=`bf: ${bi} steps, optimal: ${oi} steps`;
+}
+function stepBoth(dir){
+  const max=Math.max(bfSteps.length,optSteps.length);
+  const next=sharedIdx+dir; if(next<0||next>=max) return;
+  sharedIdx=next; applyShared(sharedIdx);
+  document.getElementById('prevBoth').disabled=sharedIdx<=0;
+  document.getElementById('nextBoth').disabled=sharedIdx>=max-1;
+}
+function autoPlayBoth(){
+  if(playing){clearInterval(playTimer);playing=false;document.getElementById('playBoth').textContent='▶ Play Both';return;}
+  const max=Math.max(bfSteps.length,optSteps.length);
+  if(sharedIdx>=max-1){sharedIdx=-1;applyShared(0);document.getElementById('prevBoth').disabled=true;document.getElementById('nextBoth').disabled=false;}
+  playing=true; document.getElementById('playBoth').textContent='⏸ Pause';
+  playTimer=setInterval(()=>{
+    if(sharedIdx>=max-1){clearInterval(playTimer);playing=false;document.getElementById('playBoth').textContent='▶ Play Both';return;}
+    stepBoth(1);
+  },520);
+}
+
+// ── SOLO mode ─────────────────────────────────────────────────────────────────
+function stepSolo(w,dir){
+  const steps=w==='bf'?bfSteps:optSteps;
+  const getI=()=>w==='bf'?bfIdx:optIdx; const setI=v=>{if(w==='bf')bfIdx=v;else optIdx=v;};
+  const next=getI()+dir; if(next<0||next>=steps.length) return;
+  setI(next);
+  if(w==='bf') renderBFStep(bfIdx); else renderOptStep(optIdx);
+  document.getElementById(w+'-prev').disabled=getI()<=0;
+  document.getElementById(w+'-next').disabled=getI()>=steps.length-1;
+}
+function autoPlaySolo(w){
+  const steps=w==='bf'?bfSteps:optSteps, pid=w+'-play';
+  const getP=()=>w==='bf'?bfPlaying:optPlaying, setP=v=>{if(w==='bf')bfPlaying=v;else optPlaying=v;};
+  const getI=()=>w==='bf'?bfIdx:optIdx, setI=v=>{if(w==='bf')bfIdx=v;else optIdx=v;};
+  const getT=()=>w==='bf'?bfTimer:optTimer, setT=v=>{if(w==='bf')bfTimer=v;else optTimer=v;};
+  if(getP()){clearInterval(getT());setP(false);document.getElementById(pid).textContent='▶ Play';return;}
+  if(getI()>=steps.length-1){setI(0);}
+  setP(true); document.getElementById(pid).textContent='⏸ Pause';
+  setT(setInterval(()=>{
+    if(getI()>=steps.length-1){clearInterval(getT());setP(false);document.getElementById(pid).textContent='▶ Play';return;}
+    stepSolo(w,1);
+  },560));
+}
+function resetSolo(w){
+  if(w==='bf'){clearInterval(bfTimer);bfPlaying=false;bfIdx=0;renderBFStep(0);document.getElementById('bf-play').textContent='▶ Play';document.getElementById('bf-prev').disabled=true;document.getElementById('bf-next').disabled=false;}
+  else{clearInterval(optTimer);optPlaying=false;optIdx=0;renderOptStep(0);document.getElementById('opt-play').textContent='▶ Play';document.getElementById('opt-prev').disabled=true;document.getElementById('opt-next').disabled=false;}
+}
+
+// ── mode switching ─────────────────────────────────────────────────────────────
+function setMode(mode){
+  clearInterval(playTimer);playing=false; clearInterval(bfTimer);bfPlaying=false; clearInterval(optTimer);optPlaying=false;
+  document.getElementById('playBoth').textContent='▶ Play Both';
+  document.getElementById('bf-play').textContent='▶ Play'; document.getElementById('opt-play').textContent='▶ Play';
+  currentMode=mode;
+  document.getElementById('tab-both').className='mode-tab'+(mode==='both'?' act-both':'');
+  document.getElementById('tab-bf').className  ='mode-tab'+(mode==='bf'  ?' act-bf':'');
+  document.getElementById('tab-opt').className ='mode-tab'+(mode==='opt' ?' act-opt':'');
+  document.getElementById('sharedControls').style.display=mode==='both'?'flex':'none';
+  document.getElementById('bfControls').style.display   =mode!=='both'?'flex':'none';
+  document.getElementById('optControls').style.display  =mode!=='both'?'flex':'none';
+  document.getElementById('bfPanel').classList.toggle('dimmed',      mode==='opt');
+  document.getElementById('optPanel').classList.toggle('dimmed',     mode==='bf');
+  document.getElementById('bfPanel').classList.toggle('solo-active', mode==='bf');
+  document.getElementById('optPanel').classList.toggle('solo-active',mode==='opt');
+}
+
+// ── HL helpers ────────────────────────────────────────────────────────────────
+function setHL(ids,mode){ids.forEach(id=>{const e=document.getElementById(id);if(e)e.classList.add(mode==='bf'?'hl-bf':'hl-opt');});}
+function clearHL(mode){document.querySelectorAll(mode==='bf'?'.hl-bf':'.hl-opt').forEach(e=>e.classList.remove('hl-bf','hl-opt'));}
+
+// ── init ──────────────────────────────────────────────────────────────────────
+function init(){
+  clearInterval(playTimer);playing=false; clearInterval(bfTimer);bfPlaying=false; clearInterval(optTimer);optPlaying=false;
+  const raw=document.getElementById('arrInput').value;
+  nums=raw.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  if(nums.length<2) return;
+  bfSteps=buildBFSteps(nums); optSteps=buildOptSteps(nums);
+  sharedIdx=0; bfIdx=0; optIdx=0;
+  renderBFStep(0); renderOptStep(0);
+  document.getElementById('prevBoth').disabled=true; document.getElementById('nextBoth').disabled=false;
+  document.getElementById('playBoth').textContent='▶ Play Both';
+  document.getElementById('bf-prev').disabled=true; document.getElementById('bf-next').disabled=false;
+  document.getElementById('opt-prev').disabled=true; document.getElementById('opt-next').disabled=false;
+  // insight pills
+  const n=nums.length;
+  const bfT=bfSteps.length-1, optT=optSteps.length-1;
+  document.getElementById('totalBf').textContent=bfT+' steps';
+  document.getElementById('totalOpt').textContent=optT+' writes';
+  document.getElementById('speedup').textContent=(bfT/Math.max(optT,1)).toFixed(1)+'×';
+  document.getElementById('iterNote').textContent='step through to compare';
+}
+
+function loadPreset(arr,btn){
+  document.getElementById('arrInput').value=arr.join(',');
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  init();
+}
+
+loadPreset([-4,-1,0,3,10],document.querySelector('.preset-btn'));
+</script>
+</body>
+</html>

@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Move Zeroes — Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#06070d;--s1:#0a0c15;--s2:#0e1020;--s3:#13152a;
+  --border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.12);
+  --text:#dde1f5;--muted:#4e5178;--dim:#1c1e35;
+  --fast:#60a5fa;  --fast-bg:rgba(96,165,250,0.12);  --fast-b:rgba(96,165,250,0.35);
+  --ins:#a78bfa;   --ins-bg:rgba(167,139,250,0.12);  --ins-b:rgba(167,139,250,0.35);
+  --swap:#f472b6;  --swap-bg:rgba(244,114,182,0.12); --swap-b:rgba(244,114,182,0.35);
+  --zero:#64748b;  --zero-bg:rgba(100,116,139,0.1);  --zero-b:rgba(100,116,139,0.25);
+  --done:#34d399;  --done-bg:rgba(52,211,153,0.1);   --done-b:rgba(52,211,153,0.3);
+  --skip:#f59e0b;  --skip-bg:rgba(245,158,11,0.1);   --skip-b:rgba(245,158,11,0.3);
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:'Space Mono',monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2.5rem 1rem 5rem}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.025'/%3E%3C/svg%3E");pointer-events:none;z-index:0}
+.page{position:relative;z-index:1;width:100%;max-width:780px}
+
+/* header */
+.eyebrow{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--fast);background:var(--fast-bg);border:1px solid var(--fast-b);padding:4px 12px;border-radius:100px;display:inline-block;margin-bottom:.9rem}
+h1{font-family:'Space Mono',monospace;font-size:clamp(1.8rem,5vw,2.8rem);font-weight:700;letter-spacing:-.04em;line-height:1;margin-bottom:.5rem;color:#fff}
+h1 em{color:var(--fast);font-style:normal}
+.subtitle{font-size:11.5px;color:var(--muted);line-height:1.85;margin-bottom:2rem;max-width:560px}
+
+/* card */
+.card{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:.9rem}
+.card-label{font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:.8rem}
+
+/* presets */
+.presets{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:1rem}
+.preset-btn{font-family:'Space Mono',monospace;font-size:11px;padding:5px 11px;background:var(--s1);border:1px solid var(--border);border-radius:7px;color:var(--muted);cursor:pointer;transition:all .15s}
+.preset-btn:hover{border-color:var(--border2);color:var(--text)}
+.preset-btn.active{border-color:var(--fast-b);color:var(--fast);background:var(--fast-bg)}
+
+/* inputs */
+.inputs-row{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:140px}
+.field label{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+.field input{font-family:'Space Mono',monospace;font-size:12px;background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--text);outline:none;transition:border-color .15s}
+.field input:focus{border-color:var(--fast-b)}
+
+/* buttons */
+.btn{font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;border:1px solid;transition:all .15s;white-space:nowrap;letter-spacing:.03em}
+.btn:disabled{opacity:.28;cursor:not-allowed}
+.btn-blue{background:var(--fast-bg);border-color:var(--fast-b);color:var(--fast)}
+.btn-blue:not(:disabled):hover{background:rgba(96,165,250,.2)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-ghost:not(:disabled):hover{border-color:var(--border2);color:var(--text)}
+.btn-purple{background:var(--ins-bg);border-color:var(--ins-b);color:var(--ins);min-width:88px}
+.btn-purple:not(:disabled):hover{background:rgba(167,139,250,.2)}
+
+/* progress */
+.prog-track{height:3px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:1.5rem}
+.prog-fill{height:100%;border-radius:3px;transition:width .3s ease;width:0%;background:linear-gradient(90deg,var(--fast),var(--ins),var(--swap))}
+
+/* ── MAIN VISUALIZER ── */
+.viz-card{background:var(--s2);border:1px solid var(--border);border-radius:16px;padding:1.5rem;margin-bottom:.9rem}
+
+/* array display */
+.array-wrap{overflow-x:auto;padding-bottom:.5rem}
+.array-row{display:flex;gap:8px;justify-content:center;min-width:max-content;margin:0 auto}
+.cell-col{display:flex;flex-direction:column;align-items:center;gap:4px}
+.ptr-label{font-size:9px;font-weight:700;height:14px;letter-spacing:.04em;text-align:center}
+.cell{
+  width:52px;height:52px;display:flex;align-items:center;justify-content:center;
+  font-size:20px;font-weight:700;border-radius:10px;border:1.5px solid var(--border);
+  background:var(--s1);color:var(--muted);transition:all .3s cubic-bezier(.34,1.4,.64,1);
+  position:relative;
+}
+.cell.is-fast{background:var(--fast-bg);border-color:var(--fast-b);color:var(--fast);transform:translateY(-5px);box-shadow:0 8px 20px rgba(96,165,250,.2)}
+.cell.is-ins{background:var(--ins-bg);border-color:var(--ins-b);color:var(--ins);transform:translateY(-5px);box-shadow:0 8px 20px rgba(167,139,250,.2)}
+.cell.is-both{background:var(--swap-bg);border-color:var(--swap-b);color:var(--swap);transform:translateY(-6px) scale(1.06);box-shadow:0 10px 24px rgba(244,114,182,.25)}
+.cell.is-zero{background:var(--zero-bg);border-color:var(--zero-b);color:var(--zero)}
+.cell.is-done{background:var(--done-bg);border-color:var(--done-b);color:var(--done)}
+.cell.is-skip{opacity:.3}
+.idx-label{font-size:10px;color:var(--dim)}
+
+/* ── STATE INDICATORS ── */
+.state-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:1.25rem 0 .75rem}
+.state-pill{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:8px 14px;text-align:center;min-width:100px}
+.sp-label{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:3px}
+.sp-val{font-family:'Space Mono',monospace;font-size:17px;font-weight:700}
+
+/* ── SWAP ANIMATION LINE ── */
+.swap-area{min-height:32px;display:flex;align-items:center;justify-content:center;margin:.4rem 0}
+.swap-msg{font-size:12px;color:var(--swap);animation:fadeUp .3s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* status */
+.status{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:.8rem 1rem;font-size:11px;color:var(--muted);line-height:1.9;min-height:56px;margin-bottom:.9rem}
+.status code{color:var(--fast);font-family:'Space Mono',monospace}
+.tag{display:inline-block;padding:2px 8px;border-radius:100px;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.tag-swap{background:var(--swap-bg);color:var(--swap);border:1px solid var(--swap-b)}
+.tag-skip{background:var(--skip-bg);color:var(--skip);border:1px solid var(--skip-b)}
+.tag-done{background:var(--done-bg);color:var(--done);border:1px solid var(--done-b)}
+
+/* controls */
+.controls-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:1rem}
+
+/* legend */
+.legend{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-bottom:1rem}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted)}
+.legend-dot{width:10px;height:10px;border-radius:3px;border:1.5px solid}
+
+/* ── TRACE TABLE ── */
+.trace-card{background:var(--s2);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:.9rem}
+.trace-hdr{display:grid;grid-template-columns:40px 40px 40px 1fr 60px;gap:0;background:var(--s3);border-bottom:1px solid var(--border)}
+.trace-hdr div,.trace-row div{padding:7px 10px;font-size:10px}
+.trace-hdr div{color:var(--muted);font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.trace-body{max-height:220px;overflow-y:auto}
+.trace-row{display:grid;grid-template-columns:40px 40px 40px 1fr 60px;gap:0;border-bottom:1px solid var(--border);transition:background .2s}
+.trace-row:last-child{border-bottom:none}
+.trace-row.active{background:var(--s3)}
+.trace-row div{font-size:11px;color:var(--muted)}
+.trace-row.active div{color:var(--text)}
+.tr-step{color:var(--dim)!important}
+.tr-fast{color:var(--fast)!important}
+.tr-ins{color:var(--ins)!important}
+.tr-arr{font-family:'Space Mono',monospace;font-size:10px}
+.tr-action{}
+
+/* insight */
+.insight-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.8rem;margin-bottom:.9rem}
+.insight{background:var(--s1);border:1px solid var(--border);border-radius:11px;padding:.9rem}
+.ip-lbl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-bottom:.35rem}
+.ip-val{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;margin-bottom:.3rem}
+.ip-desc{font-size:10px;color:var(--muted);line-height:1.6}
+
+/* code */
+.code-card{background:#06060e;border:1px solid var(--border);border-radius:13px;overflow:hidden;margin-bottom:.9rem}
+.code-hdr{display:flex;align-items:center;gap:7px;padding:8px 13px;border-bottom:1px solid var(--border);background:var(--s1)}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot-r{background:#ff5f57}.dot-y{background:#febc2e}.dot-g{background:#28c840}
+.code-fn{font-size:10px;color:var(--muted);margin-left:4px}
+pre{padding:.9rem 1.25rem;font-size:12px;line-height:2;color:#666;overflow-x:auto}
+.kw{color:#c084fc}.fn{color:var(--fast)}.ty{color:var(--done)}.num{color:#fb923c}.cm{color:#252840;font-style:italic}
+.hl{display:block;background:rgba(96,165,250,.09);border-left:2px solid var(--fast);margin:0 -1.25rem;padding:0 1.25rem;transition:all .25s}
+
+footer{margin-top:3rem;font-size:10px;color:var(--dim);text-align:center;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">LeetCode 283 · Two Pointers · In-Place</div>
+  <h1>Move <em>Zeroes</em></h1>
+  <p class="subtitle">Shift all zeros to the end while keeping the relative order of non-zero elements — using a write pointer (insert) and a read pointer (fast) in a single pass.</p>
+</header>
+
+<div class="presets">
+  <button class="preset-btn active" onclick="loadPreset([0,1,0,3,12],this)">[0,1,0,3,12]</button>
+  <button class="preset-btn" onclick="loadPreset([0],this)">[0]</button>
+  <button class="preset-btn" onclick="loadPreset([1,2,3],this)">[1,2,3] no zeros</button>
+  <button class="preset-btn" onclick="loadPreset([0,0,0,1],this)">[0,0,0,1]</button>
+  <button class="preset-btn" onclick="loadPreset([4,2,0,0,5,0,3],this)">[4,2,0,0,5,0,3]</button>
+</div>
+
+<div class="card">
+  <div class="inputs-row">
+    <div class="field">
+      <label>Array (comma-separated)</label>
+      <input type="text" id="arrInput" value="0,1,0,3,12" />
+    </div>
+    <button class="btn btn-blue" onclick="init()">Run</button>
+  </div>
+</div>
+
+<div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+
+<!-- legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--fast-bg);border-color:var(--fast-b)"></div>fast (read ptr)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--ins-bg);border-color:var(--ins-b)"></div>insert (write ptr)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--swap-bg);border-color:var(--swap-b)"></div>swap happening</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--done-bg);border-color:var(--done-b)"></div>placed correctly</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--zero-bg);border-color:var(--zero-b)"></div>zero</div>
+</div>
+
+<!-- main visualizer -->
+<div class="viz-card">
+  <div class="array-wrap">
+    <div class="array-row" id="arrayRow"></div>
+  </div>
+
+  <div class="state-row">
+    <div class="state-pill"><div class="sp-label">fast</div><div class="sp-val" id="sv-fast" style="color:var(--fast)">—</div></div>
+    <div class="state-pill"><div class="sp-label">insert</div><div class="sp-val" id="sv-ins" style="color:var(--ins)">—</div></div>
+    <div class="state-pill"><div class="sp-label">nums[fast]</div><div class="sp-val" id="sv-val" style="color:var(--text)">—</div></div>
+    <div class="state-pill"><div class="sp-label">swaps</div><div class="sp-val" id="sv-swaps" style="color:var(--swap)">0</div></div>
+  </div>
+
+  <div class="swap-area" id="swapArea"></div>
+  <div class="status" id="statusBox">Press <strong>Next</strong> or <strong>▶ Play</strong> to begin.</div>
+</div>
+
+<!-- controls -->
+<div class="controls-row">
+  <button class="btn btn-ghost"  id="prevBtn" onclick="stepBy(-1)" disabled>← Prev</button>
+  <button class="btn btn-ghost"  id="nextBtn" onclick="stepBy(1)">Next →</button>
+  <button class="btn btn-purple" id="playBtn" onclick="autoPlay()">▶ Play</button>
+  <button class="btn btn-ghost"               onclick="init()">↺ Reset</button>
+</div>
+
+<!-- step trace table -->
+<div class="trace-card">
+  <div class="trace-hdr">
+    <div>#</div><div>fast</div><div>ins</div><div>Array state</div><div>Action</div>
+  </div>
+  <div class="trace-body" id="traceBody"></div>
+</div>
+
+<!-- insight pills -->
+<div class="insight-grid">
+  <div class="insight">
+    <div class="ip-lbl">Time</div>
+    <div class="ip-val" style="color:var(--done)">O(n)</div>
+    <div class="ip-desc">single pass — fast scans every element once</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Space</div>
+    <div class="ip-val" style="color:var(--done)">O(1)</div>
+    <div class="ip-desc">in-place swaps — no extra array needed</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Swaps</div>
+    <div class="ip-val" id="totalSwaps" style="color:var(--swap)">—</div>
+    <div class="ip-desc">exactly equal to the number of non-zero elements</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Key insight</div>
+    <div class="ip-val" style="font-size:12px;color:var(--ins);font-family:'Space Mono',monospace">write ≤ read</div>
+    <div class="ip-desc">insert always ≤ fast — swap is safe and never overwrites an unseen element</div>
+  </div>
+</div>
+
+<!-- code -->
+<div class="code-card">
+  <div class="code-hdr">
+    <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+    <span class="code-fn" style="color:var(--fast)">move_zeroes.go</span>
+  </div>
+  <pre><span class="kw">func</span> <span class="fn">moveZeroes</span>(nums []<span class="ty">int</span>) {
+<span id="cl-insert">  insert := <span class="num">0</span></span>
+<span id="cl-for">  <span class="kw">for</span> fast := <span class="num">0</span>; fast &lt; <span class="fn">len</span>(nums); fast++ {</span>
+<span id="cl-if">    <span class="kw">if</span> nums[fast] != <span class="num">0</span> {</span>
+<span id="cl-swap">      nums[insert], nums[fast] = nums[fast], nums[insert]</span>
+<span id="cl-inc">      insert++</span>
+    }
+  }
+}</pre>
+</div>
+
+<footer>Move Zeroes · LeetCode 283 · Two Pointer / Write Pointer Pattern</footer>
+</div>
+
+<script>
+// ── roundRect polyfill ──────────────────────────────────────────────────────
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    r=Math.max(0,Math.min(r||0,w/2,h/2));
+    this.moveTo(x+r,y); this.arcTo(x+w,y,x+w,y+h,r); this.arcTo(x+w,y+h,x,y+h,r);
+    this.arcTo(x,y+h,x,y,r); this.arcTo(x,y,x+w,y,r); this.closePath(); return this;
+  };
+}
+
+// ── state ──────────────────────────────────────────────────────────────────
+let original=[], steps=[], stepIdx=-1;
+let playing=false, playTimer=null;
+
+// ── step builder ─────────────────────────────────────────────────────────────
+function buildSteps(ns){
+  const arr=[...ns], s=[];
+  let insert=0, swaps=0;
+  s.push({fast:-1, insert:0, arr:[...arr], action:'init', swapPair:null, swapsTotal:0});
+  for(let fast=0; fast<arr.length; fast++){
+    if(arr[fast]!==0){
+      const didSwap=(fast!==insert);
+      if(didSwap){
+        const tmp=arr[insert]; arr[insert]=arr[fast]; arr[fast]=tmp;
+        swaps++;
+        s.push({fast, insert, arr:[...arr], action:'swap', swapPair:[insert,fast], swapsTotal:swaps});
+      } else {
+        s.push({fast, insert, arr:[...arr], action:'no-swap', swapPair:null, swapsTotal:swaps});
+      }
+      insert++;
+    } else {
+      s.push({fast, insert, arr:[...arr], action:'zero', swapPair:null, swapsTotal:swaps});
+    }
+  }
+  s.push({fast:arr.length, insert, arr:[...arr], action:'done', swapPair:null, swapsTotal:swaps});
+  return s;
+}
+
+// ── render array ─────────────────────────────────────────────────────────────
+function renderArray(s){
+  const row=document.getElementById('arrayRow');
+  row.innerHTML='';
+  const n=s.arr.length;
+  s.arr.forEach((v,i)=>{
+    const col=document.createElement('div');
+    col.className='cell-col';
+
+    // pointer label row
+    const lbl=document.createElement('div');
+    lbl.className='ptr-label';
+    const labels=[];
+    if(i===s.fast && s.fast>=0 && s.fast<n) labels.push({t:'fast',c:'var(--fast)'});
+    if(i===s.insert && s.insert<n) labels.push({t:'ins',c:'var(--ins)'});
+    if(labels.length===1) { lbl.textContent=labels[0].t; lbl.style.color=labels[0].c; }
+    else if(labels.length===2) { lbl.innerHTML=`<span style="color:var(--fast)">f</span><span style="color:var(--muted)">/</span><span style="color:var(--ins)">i</span>`; }
+    col.appendChild(lbl);
+
+    // cell
+    const cell=document.createElement('div');
+    let cls='cell';
+    const isFast=i===s.fast && s.fast>=0 && s.fast<n;
+    const isIns=i===s.insert && s.insert<n;
+    const isBoth=isFast&&isIns;
+    const isSwapped=s.swapPair&&(i===s.swapPair[0]||i===s.swapPair[1]);
+    const isDone=s.action==='done'&&v!==0;
+    const isZero=v===0;
+
+    if(isSwapped)      cls+=' is-both';
+    else if(isBoth)    cls+=' is-both';
+    else if(isFast)    cls+=' is-fast';
+    else if(isIns)     cls+=' is-ins';
+    else if(isDone)    cls+=' is-done';
+    else if(isZero)    cls+=' is-zero';
+
+    cell.className=cls; cell.textContent=v;
+    col.appendChild(cell);
+
+    // index
+    const idx=document.createElement('div');
+    idx.className='idx-label'; idx.textContent=i;
+    col.appendChild(idx);
+
+    row.appendChild(col);
+  });
+}
+
+// ── build trace table ─────────────────────────────────────────────────────────
+function buildTrace(){
+  const body=document.getElementById('traceBody');
+  body.innerHTML='';
+  steps.forEach((s,i)=>{
+    if(s.action==='init') return;
+    const row=document.createElement('div');
+    row.className='trace-row'; row.id='tr-'+i;
+    const arrStr='['+s.arr.join(', ')+']';
+    let actionHtml='';
+    if(s.action==='swap')    actionHtml=`<span style="color:var(--swap)">swap [${s.swapPair[0]}]↔[${s.swapPair[1]}]</span>`;
+    else if(s.action==='no-swap') actionHtml=`<span style="color:var(--done)">already placed</span>`;
+    else if(s.action==='zero')    actionHtml=`<span style="color:var(--zero)">zero — skip</span>`;
+    else if(s.action==='done')    actionHtml=`<span style="color:var(--done)">✓ done</span>`;
+    row.innerHTML=`<div class="tr-step">${i}</div><div class="tr-fast">${s.fast>=0&&s.fast<steps[0].arr.length?s.fast:'—'}</div><div class="tr-ins">${s.insert}</div><div class="tr-arr">${arrStr}</div><div class="tr-action">${actionHtml}</div>`;
+    body.appendChild(row);
+  });
+  document.getElementById('totalSwaps').textContent=steps[steps.length-1].swapsTotal;
+}
+
+// ── apply step ────────────────────────────────────────────────────────────────
+function applyStep(idx){
+  const s=steps[idx];
+  renderArray(s);
+  document.getElementById('sv-fast').textContent=s.fast>=0&&s.fast<s.arr.length?s.fast:'—';
+  document.getElementById('sv-ins').textContent=s.insert<s.arr.length?s.insert:'—';
+  document.getElementById('sv-val').textContent=(s.fast>=0&&s.fast<s.arr.length)?s.arr[s.fast]:'—';
+  document.getElementById('sv-swaps').textContent=s.swapsTotal;
+  document.getElementById('progFill').style.width=Math.round(idx/(steps.length-1)*100)+'%';
+
+  // swap message
+  const sa=document.getElementById('swapArea');
+  if(s.action==='swap')
+    sa.innerHTML=`<div class="swap-msg">↕ swap nums[${s.swapPair[0]}] ↔ nums[${s.swapPair[1]}]</div>`;
+  else sa.innerHTML='';
+
+  // status
+  const sb=document.getElementById('statusBox');
+  if(s.action==='init')
+    sb.innerHTML='Array loaded. Press <strong>Next →</strong> to begin.';
+  else if(s.action==='zero')
+    sb.innerHTML=`<code>fast=${s.fast}</code> → <code>nums[${s.fast}] = 0</code> → <span class="tag tag-skip">skip</span>, zero stays, move fast forward`;
+  else if(s.action==='swap')
+    sb.innerHTML=`<code>nums[${s.fast}] = ${steps[idx-1]?steps[idx-1].arr[s.fast]:''}</code> ≠ 0 → <span class="tag tag-swap">swap</span> with <code>insert=${s.swapPair[0]}</code>, then insert++`;
+  else if(s.action==='no-swap')
+    sb.innerHTML=`<code>nums[${s.fast}]</code> ≠ 0 and <code>fast == insert</code> → no swap needed, just <code>insert++</code>`;
+  else if(s.action==='done')
+    sb.innerHTML=`<span class="tag tag-done">Complete!</span> All ${s.swapsTotal} swap${s.swapsTotal!==1?'s':''} done — non-zeroes at front, zeroes at end.`;
+
+  // code highlight
+  clearHL();
+  if(s.action==='init')         setHL(['cl-insert']);
+  else if(s.action==='done')    {} // no hl
+  else {
+    setHL(['cl-for','cl-if']);
+    if(s.action==='swap')        setHL(['cl-swap','cl-inc']);
+    else if(s.action==='no-swap') setHL(['cl-inc']);
+  }
+
+  // trace highlight
+  document.querySelectorAll('.trace-row.active').forEach(r=>r.classList.remove('active'));
+  const tr=document.getElementById('tr-'+idx);
+  if(tr){
+    tr.classList.add('active');
+    tr.scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
+
+  document.getElementById('prevBtn').disabled=idx<=0;
+  document.getElementById('nextBtn').disabled=idx>=steps.length-1;
+}
+
+function setHL(ids){ ids.forEach(id=>{const e=document.getElementById(id);if(e)e.classList.add('hl');}); }
+function clearHL(){ document.querySelectorAll('.hl').forEach(e=>e.classList.remove('hl')); }
+
+// ── controls ──────────────────────────────────────────────────────────────────
+function stepBy(dir){
+  const next=stepIdx+dir;
+  if(next<0||next>=steps.length) return;
+  stepIdx=next; applyStep(stepIdx);
+}
+
+function autoPlay(){
+  if(playing){clearInterval(playTimer);playing=false;document.getElementById('playBtn').textContent='▶ Play';return;}
+  if(stepIdx>=steps.length-1){stepIdx=0;applyStep(0);}
+  playing=true; document.getElementById('playBtn').textContent='⏸ Pause';
+  playTimer=setInterval(()=>{
+    if(stepIdx>=steps.length-1){clearInterval(playTimer);playing=false;document.getElementById('playBtn').textContent='▶ Play';return;}
+    stepBy(1);
+  },700);
+}
+
+// ── init ──────────────────────────────────────────────────────────────────────
+function init(){
+  clearInterval(playTimer); playing=false;
+  document.getElementById('playBtn').textContent='▶ Play';
+  const raw=document.getElementById('arrInput').value;
+  original=raw.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  if(!original.length) return;
+  steps=buildSteps(original);
+  stepIdx=0;
+  buildTrace();
+  applyStep(0);
+  document.getElementById('progFill').style.width='0%';
+}
+
+function loadPreset(arr,btn){
+  document.getElementById('arrInput').value=arr.join(',');
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  init();
+}
+
+// fix status for zero action (reads from prev arr)
+const _applyStep=applyStep;
+
+loadPreset([0,1,0,3,12],document.querySelector('.preset-btn'));
+</script>
+</body>
+</html>

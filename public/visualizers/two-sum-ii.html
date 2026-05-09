@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Two Sum II — Two Pointer Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --card: #16161f;
+    --border: rgba(255,255,255,0.07);
+    --border-hi: rgba(255,255,255,0.14);
+    --text: #e8e8f0;
+    --muted: #6b6b80;
+    --dim: #3a3a4a;
+
+    --blue: #4f8ef7;
+    --blue-bg: rgba(79,142,247,0.12);
+    --blue-border: rgba(79,142,247,0.35);
+
+    --green: #3ecf8e;
+    --green-bg: rgba(62,207,142,0.12);
+    --green-border: rgba(62,207,142,0.35);
+
+    --teal: #2dd4bf;
+    --teal-bg: rgba(45,212,191,0.12);
+    --teal-border: rgba(45,212,191,0.35);
+
+    --amber: #f59e0b;
+    --amber-bg: rgba(245,158,11,0.1);
+    --amber-border: rgba(245,158,11,0.3);
+
+    --red: #f87171;
+    --red-bg: rgba(248,113,113,0.1);
+    --red-border: rgba(248,113,113,0.3);
+  }
+
+  html { font-size: 16px; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem 1rem 4rem;
+  }
+
+  /* noise overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; width: 100%; max-width: 780px; }
+
+  /* header */
+  header { margin-bottom: 2.5rem; }
+  .badge {
+    display: inline-block;
+    font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--blue); background: var(--blue-bg); border: 1px solid var(--blue-border);
+    padding: 4px 12px; border-radius: 100px; margin-bottom: 1rem;
+  }
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(1.8rem, 5vw, 2.8rem);
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+  }
+  h1 span { color: var(--blue); }
+  .subtitle { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+  /* card */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+  }
+  .card-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 1rem;
+  }
+
+  /* presets */
+  .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .preset-btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; padding: 6px 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--muted); cursor: pointer;
+    transition: all 0.15s;
+  }
+  .preset-btn:hover { border-color: var(--border-hi); color: var(--text); }
+  .preset-btn.active { border-color: var(--blue-border); color: var(--blue); background: var(--blue-bg); }
+
+  /* inputs row */
+  .inputs-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .field { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 160px; }
+  .field label { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .field input {
+    font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; color: var(--text);
+    outline: none; transition: border-color 0.15s;
+  }
+  .field input:focus { border-color: var(--blue-border); }
+  .field.narrow { flex: 0 0 90px; min-width: 90px; }
+
+  .btn {
+    font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 600;
+    padding: 9px 18px; border-radius: 8px; cursor: pointer;
+    border: 1px solid; transition: all 0.15s; white-space: nowrap;
+  }
+  .btn-primary { background: var(--blue-bg); border-color: var(--blue-border); color: var(--blue); }
+  .btn-primary:hover { background: rgba(79,142,247,0.2); }
+  .btn-ghost { background: transparent; border-color: var(--border); color: var(--muted); }
+  .btn-ghost:hover { border-color: var(--border-hi); color: var(--text); }
+  .btn-play { background: var(--green-bg); border-color: var(--green-border); color: var(--green); min-width: 90px; }
+  .btn-play:hover { background: rgba(62,207,142,0.2); }
+
+  /* array visualizer */
+  .viz-section { margin: 0.5rem 0 1.5rem; }
+  .index-row { display: flex; gap: 8px; justify-content: center; margin-bottom: 4px; }
+  .idx-label { width: 56px; text-align: center; font-size: 10px; color: var(--dim); letter-spacing: 0.04em; }
+  .array-row { display: flex; gap: 8px; justify-content: center; }
+
+  .cell {
+    width: 56px; height: 56px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 700;
+    border-radius: 10px; border: 1.5px solid var(--border);
+    background: var(--surface); color: var(--muted);
+    position: relative; transition: all 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    cursor: default;
+  }
+  .cell.active-l {
+    border-color: var(--blue-border); background: var(--blue-bg);
+    color: var(--blue); transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(79,142,247,0.2);
+  }
+  .cell.active-r {
+    border-color: var(--green-border); background: var(--green-bg);
+    color: var(--green); transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(62,207,142,0.2);
+  }
+  .cell.found {
+    border-color: var(--teal-border); background: var(--teal-bg);
+    color: var(--teal); transform: translateY(-6px) scale(1.08);
+    box-shadow: 0 12px 32px rgba(45,212,191,0.25);
+  }
+  .cell.passed { opacity: 0.22; }
+  .cell.normal { color: var(--text); }
+
+  .ptr-label {
+    position: absolute; top: -20px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  }
+  .ptr-l { color: var(--blue); }
+  .ptr-r { color: var(--green); }
+
+  /* status card */
+  .status-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.25rem 1.5rem;
+    margin-bottom: 1.25rem; min-height: 90px;
+  }
+  .status-step {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 8px;
+  }
+  .status-main { font-size: 15px; color: var(--text); line-height: 1.7; }
+  .status-main code { color: var(--blue); font-family: 'JetBrains Mono', monospace; }
+  .sum-display {
+    font-family: 'Syne', sans-serif;
+    font-size: 28px; font-weight: 800; letter-spacing: -0.02em;
+    text-align: center; margin: 0.75rem 0 0.5rem;
+  }
+  .tag {
+    display: inline-block; padding: 3px 10px;
+    border-radius: 100px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    margin-left: 8px;
+  }
+  .tag-lt { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber-border); }
+  .tag-gt { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+  .tag-eq { background: var(--teal-bg); color: var(--teal); border: 1px solid var(--teal-border); }
+
+  .result-row {
+    text-align: center; font-family: 'Syne', sans-serif;
+    font-size: 20px; font-weight: 700;
+    color: var(--teal); margin-top: 0.5rem;
+    animation: fadeUp 0.4s ease; display: none;
+  }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* controls */
+  .controls-row {
+    display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+  }
+
+  /* progress bar */
+  .progress-track {
+    height: 3px; background: var(--border); border-radius: 3px;
+    margin-bottom: 1.5rem; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; background: linear-gradient(90deg, var(--blue), var(--teal));
+    border-radius: 3px; transition: width 0.3s ease; width: 0%;
+  }
+
+  /* code panel */
+  .code-card {
+    background: #0d0d14; border: 1px solid var(--border);
+    border-radius: 16px; overflow: hidden;
+  }
+  .code-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .dot-r { background: #ff5f57; }
+  .dot-y { background: #febc2e; }
+  .dot-g { background: #28c840; }
+  .code-filename { font-size: 11px; color: var(--muted); margin-left: 6px; }
+  pre {
+    padding: 1.25rem 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px; line-height: 1.8;
+    color: #aaa; overflow-x: auto;
+    tab-size: 4;
+  }
+  .kw { color: #c084fc; }
+  .fn { color: #60a5fa; }
+  .ty { color: #34d399; }
+  .cm { color: #4b5563; font-style: italic; }
+  .num { color: #fb923c; }
+  .str { color: #a3e635; }
+  .hl-line {
+    display: block; background: rgba(79,142,247,0.1);
+    border-left: 2px solid var(--blue);
+    margin: 0 -1.5rem; padding: 0 1.5rem;
+    transition: all 0.3s;
+  }
+
+  /* legend */
+  .legend {
+    display: flex; gap: 20px; flex-wrap: wrap;
+    justify-content: center; margin-bottom: 1.5rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+  .legend-swatch {
+    width: 14px; height: 14px; border-radius: 4px;
+    border: 1.5px solid;
+  }
+
+  /* complexity */
+  .complexity-row { display: flex; gap: 10px; margin-top: 1rem; flex-wrap: wrap; }
+  .complexity-pill {
+    flex: 1; min-width: 120px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px;
+    text-align: center;
+  }
+  .complexity-pill .cp-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px; }
+  .complexity-pill .cp-val { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 800; color: var(--teal); }
+
+  footer {
+    margin-top: 3rem; font-size: 11px; color: var(--dim);
+    text-align: center; letter-spacing: 0.06em;
+  }
+
+  @media (max-width: 600px) {
+    .cell { width: 44px; height: 44px; font-size: 16px; }
+    .idx-label { width: 44px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div class="badge">LeetCode 167 · Two Pointers</div>
+    <h1>Two Sum <span>II</span></h1>
+    <p class="subtitle">Input array is sorted — squeeze two pointers inward until the sum matches the target.</p>
+  </header>
+
+  <!-- Presets -->
+  <div class="presets" id="presets">
+    <button class="preset-btn active" onclick="loadPreset([2,7,11,15],9,this)">2,7,11,15 → 9</button>
+    <button class="preset-btn" onclick="loadPreset([2,3,4],6,this)">2,3,4 → 6</button>
+    <button class="preset-btn" onclick="loadPreset([-1,0],-1,this)">-1,0 → -1</button>
+    <button class="preset-btn" onclick="loadPreset([1,3,4,5,7,11],9,this)">1,3,4,5,7,11 → 9</button>
+  </div>
+
+  <!-- Inputs -->
+  <div class="card">
+    <div class="card-label">Custom Input</div>
+    <div class="inputs-row">
+      <div class="field">
+        <label>Array (sorted, comma-separated)</label>
+        <input type="text" id="arrInput" value="2,7,11,15" placeholder="e.g. 1,3,5,7,9" />
+      </div>
+      <div class="field narrow">
+        <label>Target</label>
+        <input type="number" id="targetInput" value="9" />
+      </div>
+      <button class="btn btn-primary" onclick="init()">Run</button>
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--blue-bg);border-color:var(--blue-border)"></div>
+      Left pointer (L)
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--green-bg);border-color:var(--green-border)"></div>
+      Right pointer (R)
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--teal-bg);border-color:var(--teal-border)"></div>
+      Found!
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--surface);border-color:var(--border);opacity:0.4"></div>
+      Eliminated
+    </div>
+  </div>
+
+  <!-- Progress bar -->
+  <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+
+  <!-- Array viz -->
+  <div class="viz-section">
+    <div class="index-row" id="indexRow"></div>
+    <div class="array-row" id="arrayRow"></div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-card">
+    <div class="status-step" id="statusStep">Step 0</div>
+    <div class="status-main" id="statusMain">Press <strong>Next</strong> or <strong>Play</strong> to start the animation.</div>
+    <div class="sum-display" id="sumDisplay"></div>
+    <div class="result-row" id="resultRow"></div>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls-row">
+    <button class="btn btn-ghost" id="prevBtn" onclick="stepBy(-1)" disabled>← Prev</button>
+    <button class="btn btn-ghost" id="nextBtn" onclick="stepBy(1)" disabled>Next →</button>
+    <button class="btn btn-play" id="playBtn" onclick="autoPlay()">▶ Play</button>
+    <button class="btn btn-ghost" onclick="init()">↺ Reset</button>
+  </div>
+
+  <!-- Complexity -->
+  <div class="card">
+    <div class="card-label">Complexity</div>
+    <div class="complexity-row">
+      <div class="complexity-pill">
+        <div class="cp-label">Time</div>
+        <div class="cp-val">O(n)</div>
+      </div>
+      <div class="complexity-pill">
+        <div class="cp-label">Space</div>
+        <div class="cp-val">O(1)</div>
+      </div>
+      <div class="complexity-pill">
+        <div class="cp-label">Pointers</div>
+        <div class="cp-val">2</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Code Panel -->
+  <div class="code-card">
+    <div class="code-header">
+      <div class="dot dot-r"></div>
+      <div class="dot dot-y"></div>
+      <div class="dot dot-g"></div>
+      <span class="code-filename">two_sum_ii.go</span>
+    </div>
+    <pre id="codeBlock"><span class="kw">package</span> main
+
+<span class="kw">func</span> <span class="fn">twoSumII</span>(numbers []<span class="ty">int</span>, target <span class="ty">int</span>) []<span class="ty">int</span> {
+    left, right := <span class="num">0</span>, <span class="fn">len</span>(numbers)-<span class="num">1</span>
+
+    <span id="cl-for"><span class="kw">for</span> left < right {</span>
+<span id="cl-sum">        sum := numbers[left] + numbers[right]</span>
+
+<span id="cl-eq">        <span class="kw">if</span> sum == target {</span>
+<span id="cl-ret">            <span class="kw">return</span> []<span class="ty">int</span>{left + <span class="num">1</span>, right + <span class="num">1</span>}</span>
+<span id="cl-lt">        } <span class="kw">else if</span> sum < target {</span>
+<span id="cl-lp">            left++</span>
+<span id="cl-gt">        } <span class="kw">else</span> {</span>
+<span id="cl-rp">            right--</span>
+        }
+    }
+    <span class="kw">return</span> <span class="kw">nil</span>
+}</pre>
+  </div>
+
+  <footer>Two Sum II · LeetCode 167 · Two Pointer Pattern</footer>
+</div>
+
+<script>
+let numbers = [], target = 0, steps = [], stepIdx = -1, playing = false, playTimer = null;
+
+function loadPreset(arr, t, btn) {
+  document.getElementById('arrInput').value = arr.join(',');
+  document.getElementById('targetInput').value = t;
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  init();
+}
+
+function buildSteps(nums, tgt) {
+  const s = [];
+  let l = 0, r = nums.length - 1;
+  while (l < r) {
+    const sum = nums[l] + nums[r];
+    if (sum === tgt) { s.push({ l, r, sum, status: 'found' }); break; }
+    else if (sum < tgt) { s.push({ l, r, sum, status: 'lt' }); l++; }
+    else { s.push({ l, r, sum, status: 'gt' }); r--; }
+  }
+  return s;
+}
+
+function init() {
+  clearInterval(playTimer); playing = false;
+  document.getElementById('playBtn').textContent = '▶ Play';
+
+  const raw = document.getElementById('arrInput').value;
+  target = parseInt(document.getElementById('targetInput').value) || 0;
+  numbers = raw.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+  if (numbers.length < 2) {
+    document.getElementById('statusMain').textContent = 'Need at least 2 numbers.';
+    return;
+  }
+
+  steps = buildSteps(numbers, target);
+  stepIdx = -1;
+  renderArray(-1, -1, new Set());
+  setStatus(0, 'Press Next or Play to begin.', '', '');
+  document.getElementById('resultRow').style.display = 'none';
+  document.getElementById('nextBtn').disabled = false;
+  document.getElementById('prevBtn').disabled = true;
+  setProgress(0);
+  clearCodeHighlight();
+}
+
+function renderArray(l, r, passed, found) {
+  const row = document.getElementById('arrayRow');
+  const idxRow = document.getElementById('indexRow');
+  row.innerHTML = ''; idxRow.innerHTML = '';
+  numbers.forEach((n, i) => {
+    const div = document.createElement('div');
+    let cls = 'cell';
+    if (found && (i === l || i === r)) cls += ' found';
+    else if (i === l) cls += ' active-l';
+    else if (i === r) cls += ' active-r';
+    else if (passed.has(i)) cls += ' passed';
+    else cls += ' normal';
+    div.className = cls;
+    div.textContent = n;
+    if (i === l && !found) { const lbl = document.createElement('div'); lbl.className = 'ptr-label ptr-l'; lbl.textContent = 'L'; div.appendChild(lbl); }
+    if (i === r && !found) { const lbl = document.createElement('div'); lbl.className = 'ptr-label ptr-r'; lbl.textContent = 'R'; div.appendChild(lbl); }
+    if (found && i === l) { const lbl = document.createElement('div'); lbl.className = 'ptr-label ptr-l'; lbl.textContent = 'L'; div.appendChild(lbl); }
+    if (found && i === r && i !== l) { const lbl = document.createElement('div'); lbl.className = 'ptr-label ptr-r'; lbl.textContent = 'R'; div.appendChild(lbl); }
+    row.appendChild(div);
+    const idiv = document.createElement('div'); idiv.className = 'idx-label'; idiv.textContent = i + 1; idxRow.appendChild(idiv);
+  });
+}
+
+function setStatus(n, main, sumHTML, resultText) {
+  document.getElementById('statusStep').textContent = n > 0 ? `Step ${n} of ${steps.length}` : 'Ready';
+  document.getElementById('statusMain').innerHTML = main;
+  document.getElementById('sumDisplay').innerHTML = sumHTML;
+  const rb = document.getElementById('resultRow');
+  if (resultText) { rb.textContent = resultText; rb.style.display = 'block'; }
+  else { rb.style.display = 'none'; }
+}
+
+function setProgress(idx) {
+  const pct = steps.length ? Math.round((idx + 1) / steps.length * 100) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
+}
+
+function getPassed(upTo) {
+  const p = new Set();
+  for (let k = 0; k < upTo; k++) {
+    if (steps[k].status === 'lt') p.add(steps[k].l);
+    if (steps[k].status === 'gt') p.add(steps[k].r);
+  }
+  return p;
+}
+
+function applyStep(idx) {
+  const s = steps[idx];
+  const passed = getPassed(idx);
+  const lv = numbers[s.l], rv = numbers[s.r];
+
+  if (s.status === 'found') {
+    renderArray(s.l, s.r, passed, true);
+    setStatus(idx + 1,
+      `<code>numbers[${s.l}]</code> + <code>numbers[${s.r}]</code> = <code>${lv}</code> + <code>${rv}</code>`,
+      `${s.sum} <span class="tag tag-eq">= target ✓</span>`,
+      `→ return [${s.l + 1}, ${s.r + 1}]  (1-indexed)`
+    );
+    highlightCode(['cl-eq', 'cl-ret']);
+    document.getElementById('nextBtn').disabled = true;
+  } else if (s.status === 'lt') {
+    renderArray(s.l, s.r, passed, false);
+    setStatus(idx + 1,
+      `<code>numbers[${s.l}]</code> + <code>numbers[${s.r}]</code> = <code>${lv}</code> + <code>${rv}</code>`,
+      `${s.sum} < ${target} <span class="tag tag-lt">move L →</span>`,
+      ''
+    );
+    highlightCode(['cl-lt', 'cl-lp']);
+  } else {
+    renderArray(s.l, s.r, passed, false);
+    setStatus(idx + 1,
+      `<code>numbers[${s.l}]</code> + <code>numbers[${s.r}]</code> = <code>${lv}</code> + <code>${rv}</code>`,
+      `${s.sum} > ${target} <span class="tag tag-gt">← move R</span>`,
+      ''
+    );
+    highlightCode(['cl-gt', 'cl-rp']);
+  }
+  setProgress(idx);
+}
+
+function highlightCode(ids) {
+  document.querySelectorAll('.hl-line').forEach(el => {
+    el.classList.remove('hl-line');
+    el.style.cssText = '';
+  });
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hl-line');
+  });
+}
+
+function clearCodeHighlight() {
+  document.querySelectorAll('.hl-line').forEach(el => el.classList.remove('hl-line'));
+}
+
+function stepBy(dir) {
+  const next = stepIdx + dir;
+  if (next < 0 || next >= steps.length) return;
+  stepIdx = next;
+  applyStep(stepIdx);
+  document.getElementById('prevBtn').disabled = stepIdx <= 0;
+  document.getElementById('nextBtn').disabled = stepIdx >= steps.length - 1;
+}
+
+function autoPlay() {
+  if (playing) {
+    clearInterval(playTimer); playing = false;
+    document.getElementById('playBtn').textContent = '▶ Play';
+    return;
+  }
+  if (stepIdx >= steps.length - 1) {
+    stepIdx = -1;
+    renderArray(-1, -1, new Set());
+    document.getElementById('sumDisplay').textContent = '';
+    document.getElementById('resultRow').style.display = 'none';
+    document.getElementById('nextBtn').disabled = false;
+    document.getElementById('prevBtn').disabled = true;
+    clearCodeHighlight();
+    setProgress(0);
+  }
+  playing = true;
+  document.getElementById('playBtn').textContent = '⏸ Pause';
+  playTimer = setInterval(() => {
+    if (stepIdx >= steps.length - 1) {
+      clearInterval(playTimer); playing = false;
+      document.getElementById('playBtn').textContent = '▶ Play';
+      return;
+    }
+    stepBy(1);
+  }, 950);
+}
+
+loadPreset([2, 7, 11, 15], 9, document.querySelector('.preset-btn'));
+</script>
+</body>
+</html>

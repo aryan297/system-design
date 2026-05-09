@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3Sum — Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Clash+Display:wght@500;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#050508;--s1:#0a0a10;--s2:#0f0f18;--s3:#14141f;
+  --border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.1);
+  --text:#dde1f0;--muted:#545470;--dim:#252535;
+  --i:#6ee7f7;  --i-bg:rgba(110,231,247,0.1); --i-b:rgba(110,231,247,0.3);
+  --l:#a78bfa;  --l-bg:rgba(167,139,250,0.1); --l-b:rgba(167,139,250,0.3);
+  --r:#34d399;  --r-bg:rgba(52,211,153,0.1);  --r-b:rgba(52,211,153,0.3);
+  --found:#f59e0b; --found-bg:rgba(245,158,11,0.12); --found-b:rgba(245,158,11,0.4);
+  --skip:#f87171; --skip-bg:rgba(248,113,113,0.08); --skip-b:rgba(248,113,113,0.25);
+  --pass:rgba(255,255,255,0.04);
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:'Space Mono',monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2.5rem 1rem 5rem;overflow-x:hidden}
+
+/* ── noise grain ── */
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.03'/%3E%3C/svg%3E");pointer-events:none;z-index:0}
+
+.page{position:relative;z-index:1;width:100%;max-width:980px}
+
+/* ── header ── */
+.eyebrow{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--i);background:var(--i-bg);border:1px solid var(--i-b);padding:4px 12px;border-radius:100px;display:inline-block;margin-bottom:.9rem}
+h1{font-family:'Space Mono',monospace;font-size:clamp(1.8rem,5vw,3rem);font-weight:700;letter-spacing:-.04em;line-height:1;margin-bottom:.5rem;color:#fff}
+h1 em{color:var(--i);font-style:normal}
+.subtitle{font-size:12px;color:var(--muted);line-height:1.8;margin-bottom:2rem;max-width:600px}
+
+/* ── cards ── */
+.card{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:.9rem}
+.card-label{font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:.8rem}
+
+/* ── presets ── */
+.presets{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:1rem}
+.preset-btn{font-family:'Space Mono',monospace;font-size:11px;padding:5px 11px;background:var(--s1);border:1px solid var(--border);border-radius:7px;color:var(--muted);cursor:pointer;transition:all .15s}
+.preset-btn:hover{border-color:var(--border2);color:var(--text)}
+.preset-btn.active{border-color:var(--i-b);color:var(--i);background:var(--i-bg)}
+
+/* ── inputs ── */
+.inputs-row{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:160px}
+.field label{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+.field input{font-family:'Space Mono',monospace;font-size:12px;background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--text);outline:none;transition:border-color .15s}
+.field input:focus{border-color:var(--i-b)}
+
+/* ── buttons ── */
+.btn{font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;border:1px solid;transition:all .15s;white-space:nowrap;letter-spacing:.04em}
+.btn:disabled{opacity:.3;cursor:not-allowed}
+.btn-cyan{background:var(--i-bg);border-color:var(--i-b);color:var(--i)}
+.btn-cyan:not(:disabled):hover{background:rgba(110,231,247,.18)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-ghost:not(:disabled):hover{border-color:var(--border2);color:var(--text)}
+.btn-purple{background:var(--l-bg);border-color:var(--l-b);color:var(--l);min-width:88px}
+.btn-purple:not(:disabled):hover{background:rgba(167,139,250,.18)}
+.btn-green{background:var(--r-bg);border-color:var(--r-b);color:var(--r);min-width:88px}
+.btn-green:not(:disabled):hover{background:rgba(52,211,153,.18)}
+.btn-amber{background:var(--found-bg);border-color:var(--found-b);color:var(--found);min-width:88px}
+.btn-amber:not(:disabled):hover{background:rgba(245,158,11,.18)}
+
+/* ── mode tabs ── */
+.mode-bar{display:flex;gap:7px;justify-content:center;align-items:center;margin-bottom:1rem;flex-wrap:wrap}
+.mode-label{font-size:10px;color:var(--muted);letter-spacing:.08em}
+.mode-tab{font-family:'Space Mono',monospace;font-size:10px;font-weight:700;padding:6px 14px;border-radius:7px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);transition:all .2s;letter-spacing:.04em}
+.mode-tab:hover{border-color:var(--border2);color:var(--text)}
+.mode-tab.act-both{border-color:var(--i-b)!important;color:var(--i)!important;background:var(--i-bg)!important}
+.mode-tab.act-bf  {border-color:var(--skip-b)!important;color:var(--skip)!important;background:var(--skip-bg)!important}
+.mode-tab.act-opt {border-color:var(--r-b)!important;color:var(--r)!important;background:var(--r-bg)!important}
+
+/* ── shared controls ── */
+.controls-row{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin-bottom:1rem}
+
+/* ── two panels ── */
+.panels{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;margin-bottom:.9rem}
+@media(max-width:680px){.panels{grid-template-columns:1fr}}
+.panel{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1rem;display:flex;flex-direction:column;gap:.6rem;transition:opacity .3s,border-color .3s,box-shadow .3s}
+.panel.dimmed{opacity:.38}
+.panel.solo-active{border-color:rgba(255,255,255,0.15);box-shadow:0 0 24px rgba(255,255,255,0.03)}
+.panel-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.panel-title{font-family:'Space Mono',monospace;font-size:13px;font-weight:700}
+.panel-title.bf{color:var(--skip)}
+.panel-title.opt{color:var(--r)}
+.panel-sub{font-size:10px;color:var(--muted);margin-top:2px}
+.ctag{font-size:9px;font-weight:700;letter-spacing:.08em;padding:3px 9px;border-radius:100px;white-space:nowrap}
+.ctag-bf{background:var(--skip-bg);color:var(--skip);border:1px solid var(--skip-b)}
+.ctag-opt{background:var(--r-bg);color:var(--r);border:1px solid var(--r-b)}
+
+canvas{display:block;width:100%;border-radius:9px;background:var(--s1);border:1px solid var(--border)}
+
+/* ── mini stats ── */
+.mini-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.ms{background:var(--s1);border:1px solid var(--border);border-radius:7px;padding:6px 8px;text-align:center}
+.ms-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px}
+.ms-val{font-family:'Space Mono',monospace;font-size:13px;font-weight:700}
+
+/* ── progress ── */
+.prog-track{height:2px;background:var(--border);border-radius:2px;overflow:hidden}
+.prog-fill{height:100%;border-radius:2px;transition:width .3s ease;width:0%}
+.pf-bf{background:linear-gradient(90deg,var(--skip),var(--l))}
+.pf-opt{background:linear-gradient(90deg,var(--r),var(--i))}
+
+/* ── status ── */
+.status{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:.8rem 1rem;font-size:11px;color:var(--muted);line-height:1.9;min-height:60px}
+.status code{font-family:'Space Mono',monospace;color:var(--i)}
+.tag{display:inline-block;padding:2px 8px;border-radius:100px;font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.tag-found{background:var(--found-bg);color:var(--found);border:1px solid var(--found-b)}
+.tag-skip{background:var(--skip-bg);color:var(--skip);border:1px solid var(--skip-b)}
+.tag-move{background:var(--l-bg);color:var(--l);border:1px solid var(--l-b)}
+
+/* ── panel controls ── */
+.panel-controls{display:flex;gap:5px;justify-content:center;flex-wrap:wrap}
+
+/* ── found triplets ── */
+.found-section{margin-bottom:.9rem}
+.found-grid{display:flex;gap:7px;flex-wrap:wrap;min-height:36px;align-items:center}
+.triplet-chip{font-family:'Space Mono',monospace;font-size:11px;padding:5px 12px;border-radius:7px;background:var(--found-bg);border:1px solid var(--found-b);color:var(--found);animation:popIn .25s cubic-bezier(.34,1.56,.64,1)}
+@keyframes popIn{from{opacity:0;transform:scale(.8)}to{opacity:1;transform:scale(1)}}
+.found-empty{font-size:11px;color:var(--dim);font-style:italic}
+
+/* ── comparison ── */
+.compare-card{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:.9rem}
+.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
+@media(max-width:580px){.compare-grid{grid-template-columns:1fr}}
+.compare-col h3{font-family:'Space Mono',monospace;font-size:12px;font-weight:700;margin-bottom:.6rem}
+.compare-col h3.bf{color:var(--skip)}
+.compare-col h3.opt{color:var(--r)}
+.iter-track{height:24px;background:var(--s1);border:1px solid var(--border);border-radius:7px;overflow:hidden;margin-bottom:.4rem}
+.iter-fill{height:100%;border-radius:7px;transition:width .4s ease;display:flex;align-items:center;padding-left:9px;font-size:10px;font-weight:700;font-family:'Space Mono',monospace;white-space:nowrap}
+.if-bf{background:linear-gradient(90deg,rgba(248,113,113,.2),rgba(248,113,113,.06));color:var(--skip)}
+.if-opt{background:linear-gradient(90deg,rgba(52,211,153,.2),rgba(52,211,153,.06));color:var(--r)}
+.iter-lbl{font-size:10px;color:var(--muted)}
+
+/* ── insight pills ── */
+.insight-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.8rem;margin-bottom:.9rem}
+.insight{background:var(--s1);border:1px solid var(--border);border-radius:11px;padding:.9rem}
+.ip-lbl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-bottom:.35rem}
+.ip-val{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;margin-bottom:.3rem}
+.ip-desc{font-size:10px;color:var(--muted);line-height:1.6}
+
+/* ── legend ── */
+.legend{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-bottom:.9rem}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted)}
+.legend-dot{width:10px;height:10px;border-radius:3px;border:1.5px solid}
+
+/* ── code grid ── */
+.code-grid{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;margin-bottom:.9rem}
+@media(max-width:680px){.code-grid{grid-template-columns:1fr}}
+.code-card{background:#060608;border:1px solid var(--border);border-radius:13px;overflow:hidden}
+.code-hdr{display:flex;align-items:center;gap:7px;padding:8px 13px;border-bottom:1px solid var(--border);background:var(--s1)}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot-r{background:#ff5f57}.dot-y{background:#febc2e}.dot-g{background:#28c840}
+.code-fn{font-size:10px;color:var(--muted);margin-left:4px}
+pre{padding:.9rem 1.1rem;font-size:11px;line-height:1.95;color:#777;overflow-x:auto;tab-size:2}
+.kw{color:#c084fc}.fn{color:var(--i)}.ty{color:var(--r)}.num{color:#fb923c}.cm{color:#333350;font-style:italic}
+.hl-bf {display:block;background:rgba(248,113,113,.09);border-left:2px solid var(--skip);margin:0 -1.1rem;padding:0 1.1rem;transition:all .25s}
+.hl-opt{display:block;background:rgba(52,211,153,.08);border-left:2px solid var(--r);margin:0 -1.1rem;padding:0 1.1rem;transition:all .25s}
+
+footer{margin-top:3rem;font-size:10px;color:var(--dim);text-align:center;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">LeetCode 15 · Two Pointers · Sort</div>
+  <h1>3<em>Sum</em></h1>
+  <p class="subtitle">Find all unique triplets summing to zero. Sort first, fix one element with an outer loop, then squeeze two pointers inward to find the pair — skipping duplicates at both levels.</p>
+</header>
+
+<div class="presets">
+  <button class="preset-btn active" onclick="loadPreset([-1,0,1,2,-1,-4],this)">-1,0,1,2,-1,-4</button>
+  <button class="preset-btn" onclick="loadPreset([0,0,0],this)">0,0,0</button>
+  <button class="preset-btn" onclick="loadPreset([-2,0,1,1,2],this)">-2,0,1,1,2</button>
+  <button class="preset-btn" onclick="loadPreset([-4,-1,-1,0,1,2],this)">-4,-1,-1,0,1,2</button>
+  <button class="preset-btn" onclick="loadPreset([1,2,-2,-1],this)">1,2,-2,-1</button>
+</div>
+
+<div class="card">
+  <div class="inputs-row">
+    <div class="field">
+      <label>Array (comma-separated)</label>
+      <input type="text" id="arrInput" value="-1,0,1,2,-1,-4" />
+    </div>
+    <button class="btn btn-cyan" onclick="init()">Run</button>
+  </div>
+</div>
+
+<!-- mode selector -->
+<div class="mode-bar">
+  <span class="mode-label">Mode:</span>
+  <button class="mode-tab act-both" id="tab-both" onclick="setMode('both')">⚡ Both Together</button>
+  <button class="mode-tab"          id="tab-bf"   onclick="setMode('bf')">🔴 Brute Force Only</button>
+  <button class="mode-tab"          id="tab-opt"  onclick="setMode('opt')">🟢 Optimal Only</button>
+</div>
+
+<!-- shared controls -->
+<div class="controls-row" id="sharedControls">
+  <button class="btn btn-ghost"  id="prevBoth" onclick="stepBoth(-1)" disabled>← Prev</button>
+  <button class="btn btn-ghost"  id="nextBoth" onclick="stepBoth(1)">Next →</button>
+  <button class="btn btn-cyan"   id="playBoth" onclick="autoPlayBoth()">▶ Play Both</button>
+  <button class="btn btn-ghost"               onclick="init()">↺ Reset</button>
+</div>
+
+<!-- legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--i-bg);border-color:var(--i-b)"></div>Fixed i</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--l-bg);border-color:var(--l-b)"></div>Left ptr</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--r-bg);border-color:var(--r-b)"></div>Right ptr</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--found-bg);border-color:var(--found-b)"></div>Found triplet</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--skip-bg);border-color:var(--skip-b)"></div>Skipped / passed</div>
+</div>
+
+<!-- panels -->
+<div class="panels">
+
+  <!-- BRUTE FORCE -->
+  <div class="panel" id="bfPanel">
+    <div class="panel-hdr">
+      <div><div class="panel-title bf">Brute Force</div><div class="panel-sub">3 nested loops — check every triple</div></div>
+      <span class="ctag ctag-bf">O(n³) time</span>
+    </div>
+    <div class="prog-track"><div class="prog-fill pf-bf" id="bfProg"></div></div>
+    <canvas id="bfCanvas" height="190"></canvas>
+    <div class="mini-stats">
+      <div class="ms"><div class="ms-lbl">i</div><div class="ms-val" id="bf-i" style="color:var(--i)">—</div></div>
+      <div class="ms"><div class="ms-lbl">j</div><div class="ms-val" id="bf-j" style="color:var(--l)">—</div></div>
+      <div class="ms"><div class="ms-lbl">k</div><div class="ms-val" id="bf-k" style="color:var(--r)">—</div></div>
+      <div class="ms"><div class="ms-lbl">found</div><div class="ms-val" id="bf-found" style="color:var(--found)">0</div></div>
+    </div>
+    <div class="status" id="bfStatus">Ready.</div>
+    <div class="panel-controls" id="bfControls" style="display:none">
+      <button class="btn btn-ghost"  id="bf-prev" onclick="stepSolo('bf',-1)" disabled>← Prev</button>
+      <button class="btn btn-ghost"  id="bf-next" onclick="stepSolo('bf',1)">Next →</button>
+      <button class="btn btn-purple" id="bf-play" onclick="autoPlaySolo('bf')">▶ Play</button>
+      <button class="btn btn-ghost"              onclick="resetSolo('bf')">↺</button>
+    </div>
+  </div>
+
+  <!-- OPTIMAL -->
+  <div class="panel" id="optPanel">
+    <div class="panel-hdr">
+      <div><div class="panel-title opt">Two Pointer (Optimal)</div><div class="panel-sub">Sort + fix i + two pointers</div></div>
+      <span class="ctag ctag-opt">O(n²) time</span>
+    </div>
+    <div class="prog-track"><div class="prog-fill pf-opt" id="optProg"></div></div>
+    <canvas id="optCanvas" height="190"></canvas>
+    <div class="mini-stats">
+      <div class="ms"><div class="ms-lbl">i (fixed)</div><div class="ms-val" id="opt-i" style="color:var(--i)">—</div></div>
+      <div class="ms"><div class="ms-lbl">L</div><div class="ms-val" id="opt-l" style="color:var(--l)">—</div></div>
+      <div class="ms"><div class="ms-lbl">R</div><div class="ms-val" id="opt-r" style="color:var(--r)">—</div></div>
+      <div class="ms"><div class="ms-lbl">found</div><div class="ms-val" id="opt-found" style="color:var(--found)">0</div></div>
+    </div>
+    <div class="status" id="optStatus">Ready.</div>
+    <div class="panel-controls" id="optControls" style="display:none">
+      <button class="btn btn-ghost" id="opt-prev" onclick="stepSolo('opt',-1)" disabled>← Prev</button>
+      <button class="btn btn-ghost" id="opt-next" onclick="stepSolo('opt',1)">Next →</button>
+      <button class="btn btn-green" id="opt-play" onclick="autoPlaySolo('opt')">▶ Play</button>
+      <button class="btn btn-ghost"              onclick="resetSolo('opt')">↺</button>
+    </div>
+  </div>
+</div>
+
+<!-- found triplets -->
+<div class="card found-section">
+  <div class="card-label">Triplets Found</div>
+  <div class="found-grid" id="foundGrid"><span class="found-empty">None yet — step through to find them</span></div>
+</div>
+
+<!-- iteration comparison -->
+<div class="compare-card">
+  <div class="card-label">Iterations Comparison — <span id="iterNote" style="color:var(--text)">step through to compare</span></div>
+  <div class="compare-grid">
+    <div class="compare-col">
+      <h3 class="bf">Brute Force</h3>
+      <div class="iter-track"><div class="iter-fill if-bf" id="bfIterFill" style="width:0%">0 / ?</div></div>
+      <div class="iter-lbl" id="bfIterLbl">0 triples checked</div>
+    </div>
+    <div class="compare-col">
+      <h3 class="opt">Two Pointer</h3>
+      <div class="iter-track"><div class="iter-fill if-opt" id="optIterFill" style="width:0%">0 / ?</div></div>
+      <div class="iter-lbl" id="optIterLbl">0 steps</div>
+    </div>
+  </div>
+</div>
+
+<!-- insight pills -->
+<div class="insight-grid">
+  <div class="insight">
+    <div class="ip-lbl">Brute force</div>
+    <div class="ip-val" id="totalBf" style="color:var(--skip)">—</div>
+    <div class="ip-desc">O(n³) — n×(n-1)×(n-2)/6 triples checked</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Optimal steps</div>
+    <div class="ip-val" id="totalOpt" style="color:var(--r)">—</div>
+    <div class="ip-desc">O(n²) — outer loop × inner two-pointer scan</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Speedup</div>
+    <div class="ip-val" id="speedup" style="color:var(--i)">—</div>
+    <div class="ip-desc">fewer iterations using sort + two pointers</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Key insight</div>
+    <div class="ip-val" style="font-size:12px;color:var(--found);font-family:'Space Mono',monospace">Skip dupes</div>
+    <div class="ip-desc">skip equal values after fixing i and after finding a triplet to guarantee unique results</div>
+  </div>
+</div>
+
+<!-- code side by side -->
+<div class="code-grid">
+  <div class="code-card">
+    <div class="code-hdr">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      <span class="code-fn" style="color:var(--skip)">brute_force.go</span>
+    </div>
+    <pre><span class="kw">func</span> <span class="fn">bruteForce3Sum</span>(nums []<span class="ty">int</span>) [][]<span class="ty">int</span> {
+  res := [][]<span class="ty">int</span>{}
+  seen := map[<span class="ty">string</span>]<span class="ty">bool</span>{}
+  sort.Ints(nums)
+<span id="bf-cl-i">  <span class="kw">for</span> i := <span class="num">0</span>; i &lt; <span class="fn">len</span>(nums)-<span class="num">2</span>; i++ {</span>
+<span id="bf-cl-j">    <span class="kw">for</span> j := i+<span class="num">1</span>; j &lt; <span class="fn">len</span>(nums)-<span class="num">1</span>; j++ {</span>
+<span id="bf-cl-k">      <span class="kw">for</span> k := j+<span class="num">1</span>; k &lt; <span class="fn">len</span>(nums); k++ {</span>
+<span id="bf-cl-sum">        <span class="kw">if</span> nums[i]+nums[j]+nums[k] == <span class="num">0</span> {</span>
+<span id="bf-cl-add">          key := fmt.Sprintf(<span class="num">"%d,%d,%d"</span>,nums[i],nums[j],nums[k])
+          <span class="kw">if</span> !seen[key] { res = append(res, []<span class="ty">int</span>{nums[i],nums[j],nums[k]}); seen[key]=<span class="kw">true</span> }</span>
+        }
+      }
+    }
+  }
+  <span class="kw">return</span> res
+}</pre>
+  </div>
+  <div class="code-card">
+    <div class="code-hdr">
+      <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+      <span class="code-fn" style="color:var(--r)">two_pointer.go</span>
+    </div>
+    <pre><span class="kw">func</span> <span class="fn">threeSum</span>(nums []<span class="ty">int</span>) [][]<span class="ty">int</span> {
+  sort.Ints(nums)
+  res := [][]<span class="ty">int</span>{}
+<span id="opt-cl-i">  <span class="kw">for</span> i := <span class="num">0</span>; i &lt; <span class="fn">len</span>(nums)-<span class="num">2</span>; i++ {</span>
+<span id="opt-cl-skip-i">    <span class="kw">if</span> i &gt; <span class="num">0</span> &amp;&amp; nums[i] == nums[i-<span class="num">1</span>] { <span class="kw">continue</span> }</span>
+<span id="opt-cl-lr">    left, right := i+<span class="num">1</span>, <span class="fn">len</span>(nums)-<span class="num">1</span></span>
+<span id="opt-cl-while">    <span class="kw">for</span> left &lt; right {</span>
+<span id="opt-cl-sum">      sum := nums[i]+nums[left]+nums[right]</span>
+<span id="opt-cl-found">      <span class="kw">if</span> sum == <span class="num">0</span> {
+        res = append(res, []<span class="ty">int</span>{nums[i],nums[left],nums[right]})
+        <span class="cm">// skip dupes</span>
+        <span class="kw">for</span> left &lt; right &amp;&amp; nums[left]==nums[left+<span class="num">1</span>] { left++ }
+        <span class="kw">for</span> left &lt; right &amp;&amp; nums[right]==nums[right-<span class="num">1</span>] { right-- }
+        left++; right--</span>
+<span id="opt-cl-lt">      } <span class="kw">else if</span> sum &lt; <span class="num">0</span> { left++</span>
+<span id="opt-cl-gt">      } <span class="kw">else</span> { right-- }</span>
+    }
+  }
+  <span class="kw">return</span> res
+}</pre>
+  </div>
+</div>
+
+<footer>3Sum · LeetCode 15 · Brute Force O(n³) vs Two Pointer O(n²)</footer>
+</div>
+
+<script>
+// ── roundRect polyfill ────────────────────────────────────────────────────────
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+    r=Math.max(0,Math.min(r||0,w/2,h/2));
+    this.moveTo(x+r,y); this.arcTo(x+w,y,x+w,y+h,r); this.arcTo(x+w,y+h,x,y+h,r);
+    this.arcTo(x,y+h,x,y,r); this.arcTo(x,y,x+w,y,r); this.closePath(); return this;
+  };
+}
+
+// ── state ─────────────────────────────────────────────────────────────────────
+let nums=[], sorted=[];
+let bfSteps=[], optSteps=[];
+let sharedIdx=-1, bfIdx=-1, optIdx=-1;
+let playing=false, playTimer=null;
+let bfPlaying=false, bfTimer=null;
+let optPlaying=false, optTimer=null;
+let currentMode='both';
+let bfFoundSet=new Set(), optFoundSet=new Set();
+
+// ── canvas ────────────────────────────────────────────────────────────────────
+const bfCv=document.getElementById('bfCanvas'), optCv=document.getElementById('optCanvas');
+const bfCtx=bfCv.getContext('2d'), optCtx=optCv.getContext('2d');
+
+function resizeCv(c){
+  const w=c.parentElement.clientWidth-32;
+  c.width=w*devicePixelRatio; c.height=190*devicePixelRatio;
+  c.style.width=w+'px'; c.style.height='190px';
+  const ctx=c===bfCv?bfCtx:optCtx;
+  ctx.setTransform(1,0,0,1,0,0); ctx.scale(devicePixelRatio,devicePixelRatio);
+}
+
+// ── step builders ─────────────────────────────────────────────────────────────
+function buildBFSteps(ns){
+  const s=[], seen=new Set(); let fc=0;
+  for(let i=0;i<ns.length-2;i++)
+    for(let j=i+1;j<ns.length-1;j++)
+      for(let k=j+1;k<ns.length;k++){
+        const sum=ns[i]+ns[j]+ns[k];
+        let isFound=false, tripKey='';
+        if(sum===0){ tripKey=ns[i]+','+ns[j]+','+ns[k]; if(!seen.has(tripKey)){seen.add(tripKey);fc++;isFound=true;} }
+        s.push({i,j,k,sum,isFound,foundCount:fc,tripKey:isFound?tripKey:''});
+      }
+  return s;
+}
+
+function buildOptSteps(ns){
+  const s=[], seen=new Set(); let fc=0;
+  for(let i=0;i<ns.length-2;i++){
+    if(i>0 && ns[i]===ns[i-1]){ s.push({type:'skip-i',i,l:-1,r:-1,sum:null,isFound:false,foundCount:fc,tripKey:''}); continue; }
+    let l=i+1, r=ns.length-1;
+    while(l<r){
+      const sum=ns[i]+ns[l]+ns[r];
+      if(sum===0){
+        const tk=ns[i]+','+ns[l]+','+ns[r]; const isNew=!seen.has(tk); if(isNew){seen.add(tk);fc++;}
+        s.push({type:'found',i,l,r,sum,isFound:true,isNew,foundCount:fc,tripKey:isNew?tk:''});
+        while(l<r && ns[l]===ns[l+1]) l++;
+        while(l<r && ns[r]===ns[r-1]) r--;
+        l++; r--;
+      } else if(sum<0){
+        s.push({type:'lt',i,l,r,sum,isFound:false,foundCount:fc,tripKey:''}); l++;
+      } else {
+        s.push({type:'gt',i,l,r,sum,isFound:false,foundCount:fc,tripKey:''}); r--;
+      }
+    }
+  }
+  return s;
+}
+
+// ── draw ──────────────────────────────────────────────────────────────────────
+function drawArr(ctx, ns, hi, hl, hr, foundIdx, passedIdx, skipIdx){
+  const c=ctx.canvas, W=c.width/devicePixelRatio, H=c.height/devicePixelRatio;
+  const PL=10,PR=10,PT=20,PB=32, iW=W-PL-PR, iH=H-PT-PB;
+  const n=ns.length;
+  // compute max abs for bar scale
+  const maxA=Math.max(...ns.map(Math.abs),1);
+  const cellW=iW/n, barW=Math.max(cellW*.6,6);
+  const midY=H-PB-iH*0.5; // midline for signed bars
+
+  ctx.clearRect(0,0,W,H);
+
+  // midline
+  ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=1;
+  ctx.setLineDash([3,5]); ctx.beginPath(); ctx.moveTo(PL,midY); ctx.lineTo(W-PR,midY); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.font='8px Space Mono'; ctx.textAlign='left';
+  ctx.fillText('0',PL+2,midY-3);
+
+  const bx=i=>PL+i*cellW+cellW/2;
+  const bh=v=>(Math.abs(v)/maxA)*(iH*0.48);
+
+  // triplet highlight band
+  if(hi>=0 && hl>=0 && hr>=0){
+    const x1=bx(hi)-barW/2, x2=bx(hr)+barW/2;
+    ctx.fillStyle='rgba(245,158,11,0.04)';
+    ctx.beginPath(); ctx.roundRect(x1-4,PT,x2-x1+8,H-PT-PB,4); ctx.fill();
+  }
+
+  ns.forEach((v,idx)=>{
+    const isPassed=passedIdx&&passedIdx.has(idx);
+    const isSkip=skipIdx&&skipIdx.has(idx);
+    const isI=idx===hi, isL=idx===hl, isR=idx===hr;
+    const isTriplet=(foundIdx&&foundIdx.has(idx));
+
+    let fill='#1a1a28', stroke='transparent';
+    if(isTriplet){ fill='rgba(245,158,11,0.2)'; stroke='rgba(245,158,11,0.6)'; }
+    else if(isI){ fill='rgba(110,231,247,0.18)'; stroke='rgba(110,231,247,0.55)'; }
+    else if(isL){ fill='rgba(167,139,250,0.18)'; stroke='rgba(167,139,250,0.55)'; }
+    else if(isR){ fill='rgba(52,211,153,0.18)'; stroke='rgba(52,211,153,0.55)'; }
+    else if(isPassed){ fill='#0f0f18'; }
+    else if(isSkip){ fill='rgba(248,113,113,0.07)'; stroke='rgba(248,113,113,0.2)'; }
+
+    const bh2=bh(v), byPos=v>=0?midY-bh2:midY, bSign=v>=0?1:-1;
+    const shadow=isTriplet?'rgba(245,158,11,0.5)':isI?'rgba(110,231,247,0.4)':isL?'rgba(167,139,250,0.4)':isR?'rgba(52,211,153,0.4)':'none';
+    if(shadow!=='none'){ ctx.shadowColor=shadow; ctx.shadowBlur=8; }
+    ctx.fillStyle=fill; ctx.strokeStyle=stroke; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.roundRect(bx(idx)-barW/2, byPos, barW, Math.max(bh2,3), 3);
+    ctx.fill(); if(stroke!=='transparent') ctx.stroke(); ctx.shadowBlur=0;
+
+    // value label
+    const lc=isTriplet?'#f59e0b':isI?'#6ee7f7':isL?'#a78bfa':isR?'#34d399':isPassed?'#252535':'#545470';
+    ctx.fillStyle=lc; ctx.font=(isI||isL||isR||isTriplet)?'bold 10px Space Mono':'9px Space Mono';
+    ctx.textAlign='center';
+    ctx.fillText(v, bx(idx), v>=0?byPos-4:byPos+bh2+10);
+
+    // index label
+    ctx.fillStyle=(isI||isL||isR)?'#e2e4f0':'#252535';
+    ctx.font=(isI||isL||isR)?'bold 9px Space Mono':'8px Space Mono';
+    ctx.fillText(idx, bx(idx), H-PB+13);
+
+    // pointer labels
+    if(isI){ ctx.fillStyle='#6ee7f7'; ctx.font='bold 9px Space Mono'; ctx.fillText('i',bx(idx),H-PB+23); }
+    if(isL){ ctx.fillStyle='#a78bfa'; ctx.font='bold 9px Space Mono'; ctx.fillText('L',bx(idx),H-PB+23); }
+    if(isR){ ctx.fillStyle='#34d399'; ctx.font='bold 9px Space Mono'; ctx.fillText('R',bx(idx),H-PB+23); }
+  });
+}
+
+// ── found triplets display ────────────────────────────────────────────────────
+function renderFoundGrid(foundSet){
+  const g=document.getElementById('foundGrid');
+  if(!foundSet||foundSet.size===0){ g.innerHTML='<span class="found-empty">None yet — step through to find them</span>'; return; }
+  g.innerHTML=[...foundSet].map(k=>`<div class="triplet-chip">[${k}]</div>`).join('');
+}
+
+// ── apply BF step ─────────────────────────────────────────────────────────────
+function applyBFStep(idx){
+  const s=bfSteps[idx]; if(!s) return;
+  // rebuild foundSet up to idx
+  bfFoundSet=new Set();
+  for(let k=0;k<=idx;k++) if(bfSteps[k].tripKey) bfFoundSet.add(bfSteps[k].tripKey);
+  const foundIdx=new Set([s.i,s.j,s.k].filter((_,pi)=>s.isFound));
+  drawArr(bfCtx,sorted,s.i,s.j,s.k,s.isFound?new Set([s.i,s.j,s.k]):new Set(),new Set(),new Set());
+  document.getElementById('bf-i').textContent=s.i;
+  document.getElementById('bf-j').textContent=s.j;
+  document.getElementById('bf-k').textContent=s.k;
+  document.getElementById('bf-found').textContent=s.foundCount;
+  document.getElementById('bfProg').style.width=Math.round((idx+1)/bfSteps.length*100)+'%';
+  document.getElementById('bfStatus').innerHTML=
+    `<code>nums[${s.i}]=${sorted[s.i]}</code> + <code>nums[${s.j}]=${sorted[s.j]}</code> + <code>nums[${s.k}]=${sorted[s.k]}</code> = <strong style="color:var(--text)">${s.sum}</strong>`+
+    (s.isFound?` <span class="tag tag-found">found!</span>`:` <span class="tag tag-move">sum ≠ 0</span>`)+
+    `<br>Triples checked: ${idx+1} / ${bfSteps.length}`;
+  document.getElementById('bfIterFill').style.width=Math.round((idx+1)/bfSteps.length*100)+'%';
+  document.getElementById('bfIterFill').textContent=(idx+1)+' / '+bfSteps.length;
+  document.getElementById('bfIterLbl').textContent=(idx+1)+' triples checked';
+  if(currentMode!=='opt') renderFoundGrid(bfFoundSet);
+  clearHL('bf');
+  const bfHl=['bf-cl-i','bf-cl-j','bf-cl-k','bf-cl-sum'];
+  if(s.isFound) bfHl.push('bf-cl-add');
+  setHL(bfHl,'bf');
+}
+
+// ── apply Opt step ────────────────────────────────────────────────────────────
+function applyOptStep(idx){
+  const s=optSteps[idx]; if(!s) return;
+  optFoundSet=new Set();
+  for(let k=0;k<=idx;k++) if(optSteps[k].tripKey) optFoundSet.add(optSteps[k].tripKey);
+
+  const passed=new Set();
+  // grey out i values already completed
+  for(let k=0;k<idx;k++){
+    const p=optSteps[k];
+    if(p.i<s.i) passed.add(p.i);
+  }
+  const skipSet=s.type==='skip-i'?new Set([s.i]):new Set();
+  const foundSet=s.isFound?new Set([s.i,s.l,s.r]):new Set();
+
+  if(s.type==='skip-i'){
+    drawArr(optCtx,sorted,s.i,-1,-1,new Set(),passed,skipSet);
+    document.getElementById('opt-i').textContent=s.i;
+    document.getElementById('opt-l').textContent='—';
+    document.getElementById('opt-r').textContent='—';
+    document.getElementById('optStatus').innerHTML=
+      `<code>nums[${s.i}]=${sorted[s.i]}</code> == <code>nums[${s.i-1}]=${sorted[s.i-1]}</code> → <span class="tag tag-skip">skip duplicate i</span>`;
+    clearHL('opt'); setHL(['opt-cl-skip-i'],'opt');
+  } else {
+    drawArr(optCtx,sorted,s.i,s.l,s.r,foundSet,passed,skipSet);
+    document.getElementById('opt-i').textContent=s.i;
+    document.getElementById('opt-l').textContent=s.l;
+    document.getElementById('opt-r').textContent=s.r;
+    const moveMsg=s.type==='found'
+      ?`sum=0 → <span class="tag tag-found">triplet found!</span> skip dupes, move both`
+      :s.type==='lt'
+        ?`sum=${s.sum} &lt; 0 → <span class="tag tag-move">move L →</span>`
+        :`sum=${s.sum} &gt; 0 → <span class="tag tag-move">← move R</span>`;
+    document.getElementById('optStatus').innerHTML=
+      `<code>nums[${s.i}]=${sorted[s.i]}</code> + <code>nums[${s.l}]=${sorted[s.l]}</code> + <code>nums[${s.r}]=${sorted[s.r]}</code> = <strong style="color:var(--text)">${s.sum}</strong><br>${moveMsg}`;
+    clearHL('opt');
+    if(s.type==='found')     setHL(['opt-cl-sum','opt-cl-found'],'opt');
+    else if(s.type==='lt')   setHL(['opt-cl-sum','opt-cl-lt'],'opt');
+    else                     setHL(['opt-cl-sum','opt-cl-gt'],'opt');
+  }
+  document.getElementById('opt-found').textContent=s.foundCount;
+  document.getElementById('optProg').style.width=Math.round((idx+1)/optSteps.length*100)+'%';
+  document.getElementById('optIterFill').style.width=Math.round((idx+1)/optSteps.length*100)+'%';
+  document.getElementById('optIterFill').textContent=(idx+1)+' / '+optSteps.length;
+  document.getElementById('optIterLbl').textContent=(idx+1)+' steps';
+  if(currentMode!=='bf') renderFoundGrid(optFoundSet);
+}
+
+// ── BOTH mode ─────────────────────────────────────────────────────────────────
+function applyShared(si){
+  const max=Math.max(bfSteps.length,optSteps.length);
+  const bi=Math.min(bfSteps.length-1,  Math.round(si*(bfSteps.length-1) /(max-1||1)));
+  const oi=Math.min(optSteps.length-1, Math.round(si*(optSteps.length-1)/(max-1||1)));
+  applyBFStep(bi); applyOptStep(oi);
+  // show opt found (more accurate for user)
+  renderFoundGrid(optFoundSet);
+  document.getElementById('iterNote').textContent=`optimal used ${optSteps.length} steps vs ${bfSteps.length} for brute force`;
+}
+function stepBoth(dir){
+  const max=Math.max(bfSteps.length,optSteps.length);
+  const next=sharedIdx+dir; if(next<0||next>=max) return;
+  sharedIdx=next; applyShared(sharedIdx);
+  document.getElementById('prevBoth').disabled=sharedIdx<=0;
+  document.getElementById('nextBoth').disabled=sharedIdx>=max-1;
+}
+function autoPlayBoth(){
+  if(playing){clearInterval(playTimer);playing=false;document.getElementById('playBoth').textContent='▶ Play Both';return;}
+  const max=Math.max(bfSteps.length,optSteps.length);
+  if(sharedIdx>=max-1){
+    sharedIdx=-1;
+    drawArr(bfCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());
+    drawArr(optCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());
+    document.getElementById('prevBoth').disabled=true; document.getElementById('nextBoth').disabled=false;
+  }
+  playing=true; document.getElementById('playBoth').textContent='⏸ Pause';
+  playTimer=setInterval(()=>{
+    if(sharedIdx>=max-1){clearInterval(playTimer);playing=false;document.getElementById('playBoth').textContent='▶ Play Both';return;}
+    stepBoth(1);
+  },550);
+}
+
+// ── SOLO mode ─────────────────────────────────────────────────────────────────
+function stepSolo(w,dir){
+  const steps=w==='bf'?bfSteps:optSteps;
+  const getI=()=>w==='bf'?bfIdx:optIdx;
+  const setI=v=>{if(w==='bf')bfIdx=v;else optIdx=v;};
+  const next=getI()+dir; if(next<0||next>=steps.length) return;
+  setI(next);
+  if(w==='bf'){applyBFStep(bfIdx);renderFoundGrid(bfFoundSet);}
+  else{applyOptStep(optIdx);renderFoundGrid(optFoundSet);}
+  document.getElementById(w+'-prev').disabled=getI()<=0;
+  document.getElementById(w+'-next').disabled=getI()>=steps.length-1;
+}
+function autoPlaySolo(w){
+  const steps=w==='bf'?bfSteps:optSteps;
+  const pid=w+'-play';
+  const getPlay=()=>w==='bf'?bfPlaying:optPlaying;
+  const setPlay=v=>{if(w==='bf')bfPlaying=v;else optPlaying=v;};
+  const getI=()=>w==='bf'?bfIdx:optIdx;
+  const setI=v=>{if(w==='bf')bfIdx=v;else optIdx=v;};
+  const getT=()=>w==='bf'?bfTimer:optTimer;
+  const setT=v=>{if(w==='bf')bfTimer=v;else optTimer=v;};
+  if(getPlay()){clearInterval(getT());setPlay(false);document.getElementById(pid).textContent='▶ Play';return;}
+  if(getI()>=steps.length-1){
+    setI(-1);
+    drawArr(w==='bf'?bfCtx:optCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());
+    if(w==='bf'){resetBFDisplay();}else{resetOptDisplay();}
+    document.getElementById(w+'-prev').disabled=true; document.getElementById(w+'-next').disabled=false;
+  }
+  setPlay(true); document.getElementById(pid).textContent='⏸ Pause';
+  setT(setInterval(()=>{
+    if(getI()>=steps.length-1){clearInterval(getT());setPlay(false);document.getElementById(pid).textContent='▶ Play';return;}
+    stepSolo(w,1);
+  },620));
+}
+function resetSolo(w){
+  if(w==='bf'){clearInterval(bfTimer);bfPlaying=false;bfIdx=-1;drawArr(bfCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());resetBFDisplay();document.getElementById('bf-play').textContent='▶ Play';document.getElementById('bf-prev').disabled=true;document.getElementById('bf-next').disabled=false;}
+  else{clearInterval(optTimer);optPlaying=false;optIdx=-1;drawArr(optCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());resetOptDisplay();document.getElementById('opt-play').textContent='▶ Play';document.getElementById('opt-prev').disabled=true;document.getElementById('opt-next').disabled=false;}
+  renderFoundGrid(new Set());
+}
+function resetBFDisplay(){
+  ['bf-i','bf-j','bf-k'].forEach(id=>document.getElementById(id).textContent='—');
+  document.getElementById('bf-found').textContent='0';
+  document.getElementById('bfStatus').textContent='Ready.';
+  document.getElementById('bfProg').style.width='0%';
+  document.getElementById('bfIterFill').style.width='0%';
+  document.getElementById('bfIterFill').textContent='0 / '+bfSteps.length;
+  document.getElementById('bfIterLbl').textContent='0 triples checked';
+  clearHL('bf');
+}
+function resetOptDisplay(){
+  ['opt-i','opt-l','opt-r'].forEach(id=>document.getElementById(id).textContent='—');
+  document.getElementById('opt-found').textContent='0';
+  document.getElementById('optStatus').textContent='Ready.';
+  document.getElementById('optProg').style.width='0%';
+  document.getElementById('optIterFill').style.width='0%';
+  document.getElementById('optIterFill').textContent='0 / '+optSteps.length;
+  document.getElementById('optIterLbl').textContent='0 steps';
+  clearHL('opt');
+}
+
+// ── mode switching ────────────────────────────────────────────────────────────
+function setMode(mode){
+  clearInterval(playTimer);playing=false; clearInterval(bfTimer);bfPlaying=false; clearInterval(optTimer);optPlaying=false;
+  document.getElementById('playBoth').textContent='▶ Play Both';
+  document.getElementById('bf-play').textContent='▶ Play';
+  document.getElementById('opt-play').textContent='▶ Play';
+  currentMode=mode;
+  document.getElementById('tab-both').className='mode-tab'+(mode==='both'?' act-both':'');
+  document.getElementById('tab-bf').className  ='mode-tab'+(mode==='bf'  ?' act-bf':'');
+  document.getElementById('tab-opt').className ='mode-tab'+(mode==='opt' ?' act-opt':'');
+  document.getElementById('sharedControls').style.display=mode==='both'?'flex':'none';
+  document.getElementById('bfControls').style.display   =mode!=='both'?'flex':'none';
+  document.getElementById('optControls').style.display  =mode!=='both'?'flex':'none';
+  document.getElementById('bfPanel').classList.toggle('dimmed',      mode==='opt');
+  document.getElementById('optPanel').classList.toggle('dimmed',     mode==='bf');
+  document.getElementById('bfPanel').classList.toggle('solo-active', mode==='bf');
+  document.getElementById('optPanel').classList.toggle('solo-active',mode==='opt');
+  const hint=mode==='both'?'Use controls above to step both together.':'Use controls below each panel independently.';
+  document.getElementById('bfStatus').textContent='Ready. '+hint;
+  document.getElementById('optStatus').textContent='Ready. '+hint;
+}
+
+// ── HL helpers ────────────────────────────────────────────────────────────────
+function setHL(ids,mode){
+  const flat=ids.join?ids:ids.split(',');
+  flat.forEach(id=>{const e=document.getElementById(id);if(e)e.classList.add(mode==='bf'?'hl-bf':'hl-opt');});
+}
+function clearHL(mode){document.querySelectorAll(mode==='bf'?'.hl-bf':'.hl-opt').forEach(e=>e.classList.remove('hl-bf','hl-opt'));}
+
+// ── init ──────────────────────────────────────────────────────────────────────
+function init(){
+  clearInterval(playTimer);playing=false; clearInterval(bfTimer);bfPlaying=false; clearInterval(optTimer);optPlaying=false;
+  const raw=document.getElementById('arrInput').value;
+  nums=raw.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  if(nums.length<3) return;
+  sorted=[...nums].sort((a,b)=>a-b);
+  bfSteps=buildBFSteps(sorted); optSteps=buildOptSteps(sorted);
+  sharedIdx=-1; bfIdx=-1; optIdx=-1;
+  bfFoundSet=new Set(); optFoundSet=new Set();
+  resizeCv(bfCv); resizeCv(optCv);
+  drawArr(bfCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());
+  drawArr(optCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());
+  resetBFDisplay(); resetOptDisplay();
+  document.getElementById('prevBoth').disabled=true; document.getElementById('nextBoth').disabled=false;
+  document.getElementById('playBoth').textContent='▶ Play Both';
+  document.getElementById('bf-prev').disabled=true; document.getElementById('bf-next').disabled=false;
+  document.getElementById('opt-prev').disabled=true; document.getElementById('opt-next').disabled=false;
+  renderFoundGrid(new Set());
+  // insight pills
+  const n=nums.length, bfT=Math.round(n*(n-1)*(n-2)/6), optT=optSteps.length;
+  document.getElementById('totalBf').textContent=bfT+' triples';
+  document.getElementById('totalOpt').textContent=optT+' steps';
+  document.getElementById('speedup').textContent=(bfT/Math.max(optT,1)).toFixed(1)+'×';
+  document.getElementById('iterNote').textContent='step through to compare';
+  const hint=currentMode==='both'?'Use controls above to step both together.':'Use controls below each panel independently.';
+  document.getElementById('bfStatus').textContent='Ready. '+hint;
+  document.getElementById('optStatus').textContent='Ready. Sorted: ['+sorted.join(', ')+']';
+}
+
+function loadPreset(arr,btn){
+  document.getElementById('arrInput').value=arr.join(',');
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  init();
+}
+
+window.addEventListener('resize',()=>{
+  if(!sorted.length) return;
+  resizeCv(bfCv); resizeCv(optCv);
+  const max=Math.max(bfSteps.length,optSteps.length);
+  const bi=currentMode==='both'?Math.min(bfSteps.length-1,Math.max(0,Math.round(sharedIdx*(bfSteps.length-1)/(max-1||1)))):bfIdx;
+  const oi=currentMode==='both'?Math.min(optSteps.length-1,Math.max(0,Math.round(sharedIdx*(optSteps.length-1)/(max-1||1)))):optIdx;
+  if(bi>=0) applyBFStep(bi); else drawArr(bfCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());
+  if(oi>=0) applyOptStep(oi); else drawArr(optCtx,sorted,-1,-1,-1,new Set(),new Set(),new Set());
+});
+
+loadPreset([-1,0,1,2,-1,-4], document.querySelector('.preset-btn'));
+</script>
+</body>
+</html>

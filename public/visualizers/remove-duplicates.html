@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Remove Duplicates — Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07050d;--s1:#0c0a16;--s2:#100e1e;--s3:#161428;
+  --border:rgba(255,255,255,0.06);--border2:rgba(255,255,255,0.12);
+  --text:#e4dff5;--muted:#504d72;--dim:#1e1c30;
+  --k:#f472b6;    --k-bg:rgba(244,114,182,0.12);   --k-b:rgba(244,114,182,0.36);
+  --i:#60a5fa;    --i-bg:rgba(96,165,250,0.12);    --i-b:rgba(96,165,250,0.36);
+  --write:#a78bfa; --write-bg:rgba(167,139,250,0.13); --write-b:rgba(167,139,250,0.38);
+  --dup:#f59e0b;   --dup-bg:rgba(245,158,11,0.1);   --dup-b:rgba(245,158,11,0.3);
+  --done:#34d399;  --done-bg:rgba(52,211,153,0.1);  --done-b:rgba(52,211,153,0.3);
+  --ghost:rgba(255,255,255,0.06);
+}
+html{font-size:16px}
+body{background:var(--bg);color:var(--text);font-family:'Space Mono',monospace;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:2.5rem 1rem 5rem}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.025'/%3E%3C/svg%3E");pointer-events:none;z-index:0}
+.page{position:relative;z-index:1;width:100%;max-width:800px}
+
+/* header */
+.eyebrow{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--k);background:var(--k-bg);border:1px solid var(--k-b);padding:4px 12px;border-radius:100px;display:inline-block;margin-bottom:.9rem}
+h1{font-family:'Space Mono',monospace;font-size:clamp(1.6rem,5vw,2.6rem);font-weight:700;letter-spacing:-.04em;line-height:1;margin-bottom:.5rem;color:#fff}
+h1 em{color:var(--k);font-style:normal}
+.subtitle{font-size:11.5px;color:var(--muted);line-height:1.85;margin-bottom:2rem;max-width:560px}
+
+/* card */
+.card{background:var(--s2);border:1px solid var(--border);border-radius:14px;padding:1.25rem 1.5rem;margin-bottom:.9rem}
+.card-label{font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:.8rem}
+
+/* presets */
+.presets{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:1rem}
+.preset-btn{font-family:'Space Mono',monospace;font-size:11px;padding:5px 11px;background:var(--s1);border:1px solid var(--border);border-radius:7px;color:var(--muted);cursor:pointer;transition:all .15s}
+.preset-btn:hover{border-color:var(--border2);color:var(--text)}
+.preset-btn.active{border-color:var(--k-b);color:var(--k);background:var(--k-bg)}
+
+/* inputs */
+.inputs-row{display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:4px;flex:1;min-width:140px}
+.field label{font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+.field input{font-family:'Space Mono',monospace;font-size:12px;background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--text);outline:none;transition:border-color .15s}
+.field input:focus{border-color:var(--k-b)}
+
+/* buttons */
+.btn{font-family:'Space Mono',monospace;font-size:11px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;border:1px solid;transition:all .15s;white-space:nowrap;letter-spacing:.03em}
+.btn:disabled{opacity:.28;cursor:not-allowed}
+.btn-pink{background:var(--k-bg);border-color:var(--k-b);color:var(--k)}
+.btn-pink:not(:disabled):hover{background:rgba(244,114,182,.2)}
+.btn-ghost{background:transparent;border-color:var(--border);color:var(--muted)}
+.btn-ghost:not(:disabled):hover{border-color:var(--border2);color:var(--text)}
+.btn-purple{background:var(--write-bg);border-color:var(--write-b);color:var(--write);min-width:88px}
+.btn-purple:not(:disabled):hover{background:rgba(167,139,250,.2)}
+
+/* progress */
+.prog-track{height:3px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:1.5rem}
+.prog-fill{height:100%;border-radius:3px;transition:width .3s ease;width:0%;background:linear-gradient(90deg,var(--k),var(--i),var(--write))}
+
+/* ── VIZ CARD ── */
+.viz-card{background:var(--s2);border:1px solid var(--border);border-radius:16px;padding:1.5rem;margin-bottom:.9rem}
+
+/* TWO-ROW array display */
+.array-section{display:flex;flex-direction:column;gap:1.5rem}
+.arr-label{font-size:9px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:.6rem}
+.array-wrap{overflow-x:auto;padding-bottom:.4rem}
+.array-row{display:flex;gap:7px;min-width:max-content;margin:0 auto;justify-content:center}
+.cell-col{display:flex;flex-direction:column;align-items:center;gap:3px}
+.ptr-lbl{font-size:9px;font-weight:700;height:14px;text-align:center;letter-spacing:.04em}
+
+/* cells */
+.cell{
+  width:50px;height:50px;display:flex;align-items:center;justify-content:center;
+  font-size:19px;font-weight:700;border-radius:10px;border:1.5px solid var(--border);
+  background:var(--s1);color:var(--muted);
+  transition:all .32s cubic-bezier(.34,1.45,.64,1);
+}
+.cell.c-i       {background:var(--i-bg);  border-color:var(--i-b);  color:var(--i);  transform:translateY(-5px);box-shadow:0 8px 18px rgba(96,165,250,.2)}
+.cell.c-k       {background:var(--k-bg);  border-color:var(--k-b);  color:var(--k);  transform:translateY(-5px);box-shadow:0 8px 18px rgba(244,114,182,.2)}
+.cell.c-both    {background:var(--write-bg);border-color:var(--write-b);color:var(--write);transform:translateY(-6px) scale(1.07);box-shadow:0 10px 22px rgba(167,139,250,.28)}
+.cell.c-write   {background:var(--write-bg);border-color:var(--write-b);color:var(--write);transform:translateY(-5px) scale(1.04);box-shadow:0 9px 20px rgba(167,139,250,.22);animation:writeFlash .35s ease}
+@keyframes writeFlash{0%{filter:brightness(2)}100%{filter:brightness(1)}}
+.cell.c-dup     {background:var(--dup-bg);border-color:var(--dup-b);color:var(--dup);opacity:.65}
+.cell.c-unique  {background:var(--done-bg);border-color:var(--done-b);color:var(--done)}
+.cell.c-tail    {background:var(--ghost);border-color:rgba(255,255,255,.04);color:var(--dim);border-style:dashed}
+.cell.c-normal  {color:var(--text)}
+.idx-lbl{font-size:10px;color:var(--dim)}
+
+/* divider line between unique / tail zones */
+.arr-divider{display:flex;align-items:center;gap:8px;margin:.5rem 0 0}
+.div-line{flex:1;height:1px;background:linear-gradient(90deg,transparent,var(--k-b),transparent)}
+.div-label{font-size:10px;color:var(--k);white-space:nowrap}
+
+/* state pills */
+.state-row{display:flex;gap:9px;justify-content:center;flex-wrap:wrap;margin:1.25rem 0 .75rem}
+.state-pill{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:8px 14px;text-align:center;min-width:90px}
+.sp-label{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:3px}
+.sp-val{font-family:'Space Mono',monospace;font-size:17px;font-weight:700}
+
+/* write flash area */
+.write-area{min-height:30px;display:flex;align-items:center;justify-content:center;margin:.4rem 0}
+.write-msg{font-size:12px;color:var(--write);animation:fadeUp .3s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* status */
+.status{background:var(--s1);border:1px solid var(--border);border-radius:9px;padding:.8rem 1rem;font-size:11px;color:var(--muted);line-height:1.9;min-height:56px;margin-bottom:.9rem}
+.status code{color:var(--i);font-family:'Space Mono',monospace}
+.tag{display:inline-block;padding:2px 8px;border-radius:100px;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.tag-write{background:var(--write-bg);color:var(--write);border:1px solid var(--write-b)}
+.tag-dup{background:var(--dup-bg);color:var(--dup);border:1px solid var(--dup-b)}
+.tag-done{background:var(--done-bg);color:var(--done);border:1px solid var(--done-b)}
+
+/* controls */
+.controls-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:1rem}
+
+/* legend */
+.legend{display:flex;gap:13px;flex-wrap:wrap;justify-content:center;margin-bottom:1rem}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--muted)}
+.legend-dot{width:10px;height:10px;border-radius:3px;border:1.5px solid}
+
+/* trace table */
+.trace-card{background:var(--s2);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:.9rem}
+.trace-hdr{display:grid;grid-template-columns:36px 36px 36px 1fr 1fr 80px;background:var(--s3);border-bottom:1px solid var(--border)}
+.trace-hdr div,.trace-row div{padding:7px 9px;font-size:10px}
+.trace-hdr div{color:var(--muted);font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.trace-body{max-height:210px;overflow-y:auto}
+.trace-row{display:grid;grid-template-columns:36px 36px 36px 1fr 1fr 80px;border-bottom:1px solid var(--border);transition:background .2s}
+.trace-row:last-child{border-bottom:none}
+.trace-row.active{background:rgba(167,139,250,.07)}
+.trace-row div{font-size:10.5px;color:var(--muted)}
+.trace-row.active div{color:var(--text)}
+.tc-step{color:var(--dim)!important}
+.tc-i{color:var(--i)!important;font-weight:700}
+.tc-k{color:var(--k)!important;font-weight:700}
+.tc-arr{font-family:'Space Mono',monospace;font-size:9.5px!important}
+.tc-prev{font-family:'Space Mono',monospace;font-size:9.5px!important;color:var(--muted)!important}
+
+/* insight */
+.insight-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.8rem;margin-bottom:.9rem}
+.insight{background:var(--s1);border:1px solid var(--border);border-radius:11px;padding:.9rem}
+.ip-lbl{font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-bottom:.35rem}
+.ip-val{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;margin-bottom:.3rem}
+.ip-desc{font-size:10px;color:var(--muted);line-height:1.6}
+
+/* code */
+.code-card{background:#060610;border:1px solid var(--border);border-radius:13px;overflow:hidden;margin-bottom:.9rem}
+.code-hdr{display:flex;align-items:center;gap:7px;padding:8px 13px;border-bottom:1px solid var(--border);background:var(--s1)}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot-r{background:#ff5f57}.dot-y{background:#febc2e}.dot-g{background:#28c840}
+.code-fn{font-size:10px;color:var(--muted);margin-left:4px}
+pre{padding:.9rem 1.25rem;font-size:12px;line-height:2.05;color:#666;overflow-x:auto}
+.kw{color:#c084fc}.fn{color:var(--k)}.ty{color:var(--done)}.num{color:#fb923c}.cm{color:#23213a;font-style:italic}
+.hl{display:block;background:rgba(244,114,182,.08);border-left:2px solid var(--k);margin:0 -1.25rem;padding:0 1.25rem;transition:all .25s}
+
+footer{margin-top:3rem;font-size:10px;color:var(--dim);text-align:center;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="eyebrow">LeetCode 26 · Two Pointers · In-Place</div>
+  <h1>Remove <em>Duplicates</em></h1>
+  <p class="subtitle">Write pointer <code style="color:var(--k)">k</code> starts at 1. Scan with <code style="color:var(--i)">i</code>: whenever <code style="color:var(--i)">nums[i] != nums[i-1]</code>, it's a new unique — write it at <code style="color:var(--k)">nums[k]</code> and advance <code style="color:var(--k)">k</code>. Sorted array means all duplicates are adjacent.</p>
+</header>
+
+<div class="presets">
+  <button class="preset-btn active" onclick="loadPreset([1,1,2],this)">[1,1,2]</button>
+  <button class="preset-btn" onclick="loadPreset([0,0,1,1,1,2,2,3,3,4],this)">[0,0,1,1,1,2,2,3,3,4]</button>
+  <button class="preset-btn" onclick="loadPreset([1,2,3,4],this)">[1,2,3,4] no dups</button>
+  <button class="preset-btn" onclick="loadPreset([1,1,1,1],this)">[1,1,1,1] all same</button>
+  <button class="preset-btn" onclick="loadPreset([-3,-1,-1,0,0,2,4],this)">[-3,-1,-1,0,0,2,4]</button>
+</div>
+
+<div class="card">
+  <div class="inputs-row">
+    <div class="field">
+      <label>Sorted array (comma-separated)</label>
+      <input type="text" id="arrInput" value="1,1,2" />
+    </div>
+    <button class="btn btn-pink" onclick="init()">Run</button>
+  </div>
+</div>
+
+<div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+
+<!-- legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--i-bg);border-color:var(--i-b)"></div>i (read ptr)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--k-bg);border-color:var(--k-b)"></div>k (write ptr)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--write-bg);border-color:var(--write-b)"></div>write happening</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--done-bg);border-color:var(--done-b)"></div>confirmed unique</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--dup-bg);border-color:var(--dup-b)"></div>duplicate skipped</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--ghost);border-color:rgba(255,255,255,.07);border-style:dashed"></div>tail / overwritten</div>
+</div>
+
+<!-- main viz -->
+<div class="viz-card">
+  <!-- original array (read view) -->
+  <div class="arr-label">Original array (read)</div>
+  <div class="array-wrap"><div class="array-row" id="origRow"></div></div>
+
+  <div style="height:.75rem"></div>
+
+  <!-- output array (write view) -->
+  <div class="arr-label">Output array (write — first <span id="kLabel" style="color:var(--k)">k</span> cells are result)</div>
+  <div class="array-wrap"><div class="array-row" id="outRow"></div></div>
+
+  <!-- divider showing k boundary -->
+  <div class="arr-divider" id="arrDivider" style="display:none">
+    <div class="div-line"></div>
+    <div class="div-label">← unique zone · k=<span id="kDivVal">1</span> · tail →</div>
+    <div class="div-line"></div>
+  </div>
+
+  <div class="state-row">
+    <div class="state-pill"><div class="sp-label">i (read)</div><div class="sp-val" id="sv-i" style="color:var(--i)">—</div></div>
+    <div class="state-pill"><div class="sp-label">k (write)</div><div class="sp-val" id="sv-k" style="color:var(--k)">—</div></div>
+    <div class="state-pill"><div class="sp-label">nums[i]</div><div class="sp-val" id="sv-val" style="color:var(--text)">—</div></div>
+    <div class="state-pill"><div class="sp-label">nums[i-1]</div><div class="sp-val" id="sv-prev" style="color:var(--muted)">—</div></div>
+    <div class="state-pill"><div class="sp-label">writes</div><div class="sp-val" id="sv-writes" style="color:var(--write)">0</div></div>
+  </div>
+
+  <div class="write-area" id="writeArea"></div>
+  <div class="status" id="statusBox">Press <strong>Next →</strong> or <strong>▶ Play</strong> to begin.</div>
+</div>
+
+<!-- controls -->
+<div class="controls-row">
+  <button class="btn btn-ghost"  id="prevBtn" onclick="stepBy(-1)" disabled>← Prev</button>
+  <button class="btn btn-ghost"  id="nextBtn" onclick="stepBy(1)">Next →</button>
+  <button class="btn btn-purple" id="playBtn" onclick="autoPlay()">▶ Play</button>
+  <button class="btn btn-ghost"               onclick="init()">↺ Reset</button>
+</div>
+
+<!-- step trace -->
+<div class="trace-card">
+  <div class="trace-hdr">
+    <div>#</div><div>i</div><div>k</div><div>nums[i] vs [i-1]</div><div>Array state</div><div>Action</div>
+  </div>
+  <div class="trace-body" id="traceBody"></div>
+</div>
+
+<!-- insight pills -->
+<div class="insight-grid">
+  <div class="insight">
+    <div class="ip-lbl">Time</div>
+    <div class="ip-val" style="color:var(--done)">O(n)</div>
+    <div class="ip-desc">single pass — i scans every element exactly once</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Space</div>
+    <div class="ip-val" style="color:var(--done)">O(1)</div>
+    <div class="ip-desc">in-place writes — no extra array needed</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Result k</div>
+    <div class="ip-val" id="totalK" style="color:var(--k)">—</div>
+    <div class="ip-desc">count of unique elements = number of writes + 1</div>
+  </div>
+  <div class="insight">
+    <div class="ip-lbl">Key insight</div>
+    <div class="ip-val" style="font-size:11px;color:var(--i);font-family:'Space Mono',monospace">sorted → adj</div>
+    <div class="ip-desc">sorted array guarantees all duplicates are adjacent — one compare per step</div>
+  </div>
+</div>
+
+<!-- code -->
+<div class="code-card">
+  <div class="code-hdr">
+    <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+    <span class="code-fn" style="color:var(--k)">remove_duplicates.go</span>
+  </div>
+  <pre><span class="kw">func</span> <span class="fn">removeDuplicates</span>(nums []<span class="ty">int</span>) <span class="ty">int</span> {
+<span id="cl-guard">  <span class="kw">if</span> <span class="fn">len</span>(nums) == <span class="num">0</span> { <span class="kw">return</span> <span class="num">0</span> }</span>
+<span id="cl-k">  k := <span class="num">1</span></span>
+<span id="cl-for">  <span class="kw">for</span> i := <span class="num">1</span>; i &lt; <span class="fn">len</span>(nums); i++ {</span>
+<span id="cl-if">    <span class="kw">if</span> nums[i] != nums[i-<span class="num">1</span>] {</span>
+<span id="cl-write">      nums[k] = nums[i]</span>
+<span id="cl-inc">      k++</span>
+    }
+  }
+<span id="cl-ret">  <span class="kw">return</span> k</span>
+}</pre>
+</div>
+
+<footer>Remove Duplicates from Sorted Array · LeetCode 26 · Write Pointer Pattern</footer>
+</div>
+
+<script>
+// ── state ─────────────────────────────────────────────────────────────────────
+let original=[], steps=[], stepIdx=-1;
+let playing=false, playTimer=null;
+
+// ── step builder ──────────────────────────────────────────────────────────────
+function buildSteps(ns){
+  if(!ns.length) return [{i:-1,k:0,arr:[],action:'empty',writes:0,wroteAt:-1}];
+  const arr=[...ns], s=[];
+  let k=1, writes=0;
+
+  // init state
+  s.push({i:-1,k:1,arr:[...arr],action:'init',writes:0,wroteAt:-1});
+
+  for(let i=1;i<arr.length;i++){
+    if(arr[i]!==arr[i-1]){
+      // unique — write
+      const prevK=k;
+      arr[k]=arr[i];
+      writes++;
+      k++;
+      s.push({i,k,arr:[...arr],action:'write',writes,wroteAt:prevK,prevVal:ns[i],prevPrev:ns[i-1]});
+    } else {
+      // duplicate — skip
+      s.push({i,k,arr:[...arr],action:'dup',writes,wroteAt:-1,prevVal:ns[i],prevPrev:ns[i-1]});
+    }
+  }
+  s.push({i:arr.length,k,arr:[...arr],action:'done',writes,wroteAt:-1,prevVal:null,prevPrev:null});
+  return s;
+}
+
+// ── render array rows ─────────────────────────────────────────────────────────
+function renderRows(s){
+  const orig=original;
+  const n=orig.length;
+
+  // ── ORIG ROW (always shows original, just highlights i) ──
+  const origRow=document.getElementById('origRow');
+  origRow.innerHTML='';
+  orig.forEach((v,idx)=>{
+    const col=document.createElement('div'); col.className='cell-col';
+    const lbl=document.createElement('div'); lbl.className='ptr-lbl';
+    if(idx===s.i && s.i>=0 && s.i<n){ lbl.textContent='i'; lbl.style.color='var(--i)'; }
+    col.appendChild(lbl);
+    const cell=document.createElement('div');
+    let cls='cell';
+    if(idx===s.i && s.i>=0 && s.i<n) cls+=' c-i';
+    else if(idx<s.k && s.action!=='init') cls+=' c-unique';
+    else cls+=' c-normal';
+    cell.className=cls; cell.textContent=v;
+    col.appendChild(cell);
+    const il=document.createElement('div'); il.className='idx-lbl'; il.textContent=idx;
+    col.appendChild(il);
+    origRow.appendChild(col);
+  });
+
+  // ── OUT ROW (shows modified array) ──
+  const outRow=document.getElementById('outRow');
+  outRow.innerHTML='';
+  s.arr.forEach((v,idx)=>{
+    const col=document.createElement('div'); col.className='cell-col';
+    const lbl=document.createElement('div'); lbl.className='ptr-lbl';
+    const isK=idx===s.k && s.k<n && s.action!=='done';
+    const isWrote=idx===s.wroteAt && s.action==='write';
+    if(isWrote){ lbl.textContent='k'; lbl.style.color='var(--write)'; }
+    else if(isK){ lbl.textContent='k'; lbl.style.color='var(--k)'; }
+    col.appendChild(lbl);
+    const cell=document.createElement('div');
+    let cls='cell';
+    if(isWrote)              cls+=' c-write';
+    else if(isK)             cls+=' c-k';
+    else if(s.action==='done' && idx<s.k) cls+=' c-unique';
+    else if(idx<s.k-1)       cls+=' c-unique';
+    else if(idx>=s.k && s.action!=='init') cls+=' c-tail';
+    else                     cls+=' c-normal';
+    cell.className=cls; cell.textContent=v;
+    col.appendChild(cell);
+    const il=document.createElement('div'); il.className='idx-lbl'; il.textContent=idx;
+    col.appendChild(il);
+    outRow.appendChild(col);
+  });
+
+  // divider
+  const div=document.getElementById('arrDivider');
+  if(s.action!=='init' && n>1){
+    div.style.display='flex';
+    document.getElementById('kDivVal').textContent=s.k;
+  } else { div.style.display='none'; }
+}
+
+// ── build trace table ─────────────────────────────────────────────────────────
+function buildTrace(){
+  const body=document.getElementById('traceBody'); body.innerHTML='';
+  steps.forEach((s,i)=>{
+    if(s.action==='init') return;
+    const row=document.createElement('div');
+    row.className='trace-row'; row.id='tr-'+i;
+    const arrStr='['+s.arr.join(',')+']';
+    const cmp=s.prevVal!==null
+      ? `${s.prevVal} ${s.action==='dup'?'==':'!='} ${s.prevPrev}`
+      : '—';
+    let actHtml='';
+    if(s.action==='write')  actHtml=`<span style="color:var(--write)">write → nums[${s.wroteAt}]</span>`;
+    else if(s.action==='dup')  actHtml=`<span style="color:var(--dup)">skip dup</span>`;
+    else if(s.action==='done') actHtml=`<span style="color:var(--done)">✓ return ${s.k}</span>`;
+    row.innerHTML=`<div class="tc-step">${i}</div><div class="tc-i">${s.i>=0&&s.i<original.length?s.i:'—'}</div><div class="tc-k">${s.k}</div><div class="tc-prev">${cmp}</div><div class="tc-arr">${arrStr}</div><div>${actHtml}</div>`;
+    body.appendChild(row);
+  });
+  document.getElementById('totalK').textContent=steps[steps.length-1].k;
+}
+
+// ── apply step ────────────────────────────────────────────────────────────────
+function applyStep(idx){
+  const s=steps[idx];
+  renderRows(s);
+
+  document.getElementById('sv-i').textContent    = s.i>=0&&s.i<original.length ? s.i : '—';
+  document.getElementById('sv-k').textContent    = s.k;
+  document.getElementById('sv-val').textContent  = s.i>=0&&s.i<original.length ? original[s.i] : '—';
+  document.getElementById('sv-prev').textContent = s.i>0 ? original[s.i-1] : '—';
+  document.getElementById('sv-writes').textContent = s.writes;
+  document.getElementById('kLabel').textContent  = s.k;
+  document.getElementById('progFill').style.width = Math.round(idx/(steps.length-1)*100)+'%';
+
+  // write flash
+  const wa=document.getElementById('writeArea');
+  if(s.action==='write')
+    wa.innerHTML=`<div class="write-msg">✎ nums[${s.wroteAt}] = ${s.prevVal} (new unique)</div>`;
+  else wa.innerHTML='';
+
+  // status
+  const sb=document.getElementById('statusBox');
+  if(s.action==='init')
+    sb.innerHTML='Array loaded. k starts at 1 (first element is always unique). Press <strong>Next →</strong>.';
+  else if(s.action==='write')
+    sb.innerHTML=`<code>nums[${s.i}]=${s.prevVal}</code> ≠ <code>nums[${s.i-1}]=${s.prevPrev}</code> → new unique! → <span class="tag tag-write">write nums[${s.wroteAt}]=${s.prevVal}, k++</span>`;
+  else if(s.action==='dup')
+    sb.innerHTML=`<code>nums[${s.i}]=${s.prevVal}</code> == <code>nums[${s.i-1}]=${s.prevPrev}</code> → duplicate → <span class="tag tag-dup">skip, i++</span>`;
+  else if(s.action==='done')
+    sb.innerHTML=`<span class="tag tag-done">Complete!</span> Return <strong style="color:var(--k)">k = ${s.k}</strong> — first ${s.k} element${s.k!==1?'s are':' is'} unique.`;
+
+  // code hl
+  clearHL();
+  if(s.action==='init')       setHL(['cl-k']);
+  else if(s.action==='done')  setHL(['cl-ret']);
+  else {
+    setHL(['cl-for','cl-if']);
+    if(s.action==='write') setHL(['cl-write','cl-inc']);
+  }
+
+  // trace hl
+  document.querySelectorAll('.trace-row.active').forEach(r=>r.classList.remove('active'));
+  const tr=document.getElementById('tr-'+idx);
+  if(tr){ tr.classList.add('active'); tr.scrollIntoView({block:'nearest',behavior:'smooth'}); }
+
+  document.getElementById('prevBtn').disabled = idx<=0;
+  document.getElementById('nextBtn').disabled = idx>=steps.length-1;
+}
+
+function setHL(ids){ ids.forEach(id=>{const e=document.getElementById(id);if(e)e.classList.add('hl');}); }
+function clearHL(){ document.querySelectorAll('.hl').forEach(e=>e.classList.remove('hl')); }
+
+// ── controls ──────────────────────────────────────────────────────────────────
+function stepBy(dir){
+  const next=stepIdx+dir;
+  if(next<0||next>=steps.length) return;
+  stepIdx=next; applyStep(stepIdx);
+}
+
+function autoPlay(){
+  if(playing){clearInterval(playTimer);playing=false;document.getElementById('playBtn').textContent='▶ Play';return;}
+  if(stepIdx>=steps.length-1){stepIdx=0;applyStep(0);}
+  playing=true; document.getElementById('playBtn').textContent='⏸ Pause';
+  playTimer=setInterval(()=>{
+    if(stepIdx>=steps.length-1){clearInterval(playTimer);playing=false;document.getElementById('playBtn').textContent='▶ Play';return;}
+    stepBy(1);
+  },720);
+}
+
+// ── init ──────────────────────────────────────────────────────────────────────
+function init(){
+  clearInterval(playTimer); playing=false;
+  document.getElementById('playBtn').textContent='▶ Play';
+  const raw=document.getElementById('arrInput').value;
+  original=raw.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  if(!original.length) return;
+  steps=buildSteps(original);
+  stepIdx=0; buildTrace(); applyStep(0);
+  document.getElementById('progFill').style.width='0%';
+}
+
+function loadPreset(arr,btn){
+  document.getElementById('arrInput').value=arr.join(',');
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  init();
+}
+
+loadPreset([1,1,2],document.querySelector('.preset-btn'));
+</script>
+</body>
+</html>
