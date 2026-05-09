@@ -204,6 +204,71 @@ func main() {
 }`,
       },
       {
+        id: "four-sum",
+        title: "4Sum",
+        difficulty: "Medium",
+        leetcode: 18,
+        description:
+          "Given an integer array nums and an integer target, return all unique quadruplets [nums[a], nums[b], nums[c], nums[d]] such that a, b, c, d are distinct indices and their sum equals target.",
+        examples: [
+          { input: "nums = [1,0,-1,0,-2,2], target = 0", output: "[[-2 -1 1 2] [-2 0 0 2] [-1 0 0 1]]", explanation: "Three unique quadruplets summing to 0" },
+          { input: "nums = [2,2,2,2,2], target = 8",      output: "[[2 2 2 2]]",                         explanation: "Only one unique quadruplet" },
+        ],
+        approach:
+          "Sort the array. Use two nested loops to fix the first two elements (i and j), then run two pointers on the remaining subarray to find pairs that complete the target sum. Skip duplicates at all four levels to avoid repeating quadruplets. Use int64 for the sum to avoid integer overflow.",
+        complexity: { time: "O(n³)", space: "O(1)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func fourSum(nums []int, target int) [][]int {
+	sort.Ints(nums)
+	result := [][]int{}
+	n := len(nums)
+	for i := 0; i < n-3; i++ {
+		if i > 0 && nums[i] == nums[i-1] {
+			continue
+		}
+		for j := i + 1; j < n-2; j++ {
+			if j > i+1 && nums[j] == nums[j-1] {
+				continue
+			}
+			left, right := j+1, n-1
+			for left < right {
+				sum := nums[i] + nums[j] + nums[left] + nums[right]
+				if sum == target {
+					result = append(result, []int{nums[i], nums[j], nums[left], nums[right]})
+					for left < right && nums[left] == nums[left+1] {
+						left++
+					}
+					for left < right && nums[right] == nums[right-1] {
+						right--
+					}
+					left++
+					right--
+				} else if sum < target {
+					left++
+				} else {
+					right--
+				}
+			}
+		}
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(fourSum([]int{1, 0, -1, 0, -2, 2}, 0))
+	// Output: [[-2 -1 1 2] [-2 0 0 2] [-1 0 0 1]]
+
+	fmt.Println(fourSum([]int{2, 2, 2, 2, 2}, 8))
+	// Output: [[2 2 2 2]]
+}`,
+      },
+      {
         id: "move-zeroes",
         title: "Move Zeroes",
         difficulty: "Easy",
