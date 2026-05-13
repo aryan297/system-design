@@ -10,6 +10,7 @@ import { STRIPE_HLD, STRIPE_LLD, STRIPE_QNA } from "./stripe";
 import { GROWW_HLD, GROWW_LLD, GROWW_QNA } from "./groww";
 import { TIKTOK_HLD, TIKTOK_LLD, TIKTOK_QNA } from "./tiktok";
 import { ZOMATO_HLD, ZOMATO_LLD, ZOMATO_QNA } from "./zomato";
+import { IRCTC_HLD, IRCTC_LLD, IRCTC_QNA } from "./irctc";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -84,6 +85,12 @@ const REGISTRY = {
     hld: ZOMATO_HLD,
     lld: ZOMATO_LLD,
     qna: ZOMATO_QNA,
+  },
+  irctc: {
+    meta: { icon: "🚂", color: "#1A56DB" },
+    hld: IRCTC_HLD,
+    lld: IRCTC_LLD,
+    qna: IRCTC_QNA,
   },
 };
 

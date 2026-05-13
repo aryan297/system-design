@@ -83,4 +83,11 @@ export const SYSTEMS = [
     description: "Food delivery — 100M+ users, 350K restaurants, real-time dispatch, ETA engine, 3M orders/day",
     color: "#E23744",
   },
+  {
+    id: "irctc",
+    name: "IRCTC",
+    icon: "🚂",
+    description: "Railway ticketing — 23M passengers/day, 14K+ trains, Tatkal surge: 1.5M concurrent users at 10 AM",
+    color: "#1A56DB",
+  },
 ];
