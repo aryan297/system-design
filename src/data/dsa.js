@@ -659,6 +659,47 @@ func main() {
     title: "Sliding Window",
     problems: [
       {
+        id: "max-sum-subarray-size-k",
+        title: "Maximum Sum Subarray of Size K",
+        difficulty: "Easy",
+        leetcode: 643,
+        description:
+          "Given an integer array nums and an integer k, find the maximum sum of any contiguous subarray of size exactly k.",
+        examples: [
+          { input: "nums = [2,1,5,1,3,2], k = 3", output: "9",  explanation: "Subarray [5,1,3] has sum 9" },
+          { input: "nums = [2,3,4,1,5],    k = 2", output: "7",  explanation: "Subarray [3,4] has sum 7" },
+        ],
+        approach:
+          "Fixed-size sliding window. Compute the sum of the first k elements. Then slide right: add nums[right] and subtract nums[right-k] to move the window forward in O(1). Track the running maximum. This is the foundational fixed-window pattern.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func maxSumSubarrayK(nums []int, k int) int {
+	windowSum := 0
+	for i := 0; i < k; i++ {
+		windowSum += nums[i]
+	}
+	best := windowSum
+	for i := k; i < len(nums); i++ {
+		windowSum += nums[i] - nums[i-k] // slide: add right, drop left
+		if windowSum > best {
+			best = windowSum
+		}
+	}
+	return best
+}
+
+func main() {
+	fmt.Println(maxSumSubarrayK([]int{2, 1, 5, 1, 3, 2}, 3))
+	// Output: 9
+
+	fmt.Println(maxSumSubarrayK([]int{2, 3, 4, 1, 5}, 2))
+	// Output: 7
+}`,
+      },
+      {
         id: "best-time-buy-sell-stock",
         title: "Best Time to Buy and Sell Stock",
         difficulty: "Easy",
@@ -843,6 +884,51 @@ func main() {
 
 	fmt.Println(characterReplacement("AABABBA", 1))
 	// Output: 4
+}`,
+      },
+      {
+        id: "max-consecutive-ones-iii",
+        title: "Max Consecutive Ones III",
+        difficulty: "Medium",
+        leetcode: 1004,
+        description:
+          "Given a binary array nums and an integer k, return the maximum number of consecutive 1s if you can flip at most k 0s.",
+        examples: [
+          { input: "nums = [1,1,1,0,0,0,1,1,1,1,0], k = 2", output: "6", explanation: "Flip the two 0s at indices 3 and 4 → [1,1,1,1,1,1,1,1,1,1,0], window of 6 from index 0..8 with 2 flips" },
+          { input: "nums = [0,0,1,1,0,0,1,1,1,0,1,1,0,0,0,1,1,1,1], k = 3", output: "10", explanation: "Flip 3 zeros to get max window of 10" },
+        ],
+        approach:
+          "Variable sliding window. Track zeros count inside window. Expand right freely; when zeros > k, shrink left until zeros ≤ k. The answer is the maximum (right - left + 1) seen. Flipping k zeros = allowing k zeros inside the window.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func longestOnes(nums []int, k int) int {
+	left, zeros, best := 0, 0, 0
+	for right := 0; right < len(nums); right++ {
+		if nums[right] == 0 {
+			zeros++
+		}
+		for zeros > k {
+			if nums[left] == 0 {
+				zeros--
+			}
+			left++
+		}
+		if right-left+1 > best {
+			best = right - left + 1
+		}
+	}
+	return best
+}
+
+func main() {
+	fmt.Println(longestOnes([]int{1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0}, 2))
+	// Output: 6
+
+	fmt.Println(longestOnes([]int{0, 0, 1, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1}, 3))
+	// Output: 10
 }`,
       },
       {
@@ -1155,6 +1241,54 @@ func main() {
 
 	fmt.Println(totalFruit([]int{1, 2, 3, 2, 2}))
 	// Output: 4
+}`,
+      },
+      {
+        id: "subarrays-k-different-integers",
+        title: "Subarrays with K Different Integers",
+        difficulty: "Hard",
+        leetcode: 992,
+        description:
+          "Given an integer array nums and an integer k, return the number of good subarrays — subarrays with exactly k distinct integers.",
+        examples: [
+          { input: "nums = [1,2,1,2,3], k = 2", output: "7",  explanation: "[1,2],[2,1],[1,2],[2,3],[1,2,1],[2,1,2],[1,2,1,2] — 7 subarrays with exactly 2 distinct" },
+          { input: "nums = [1,2,1,3,4], k = 3", output: "3",  explanation: "[1,2,1,3],[2,1,3],[1,3,4]" },
+        ],
+        approach:
+          "Exactly K distinct = atMost(K) − atMost(K−1). The atMost helper counts subarrays with at most k distinct values using a standard variable window. This 'difference of atMost' trick converts an exact-count problem into two easier inequality problems.",
+        complexity: { time: "O(n)", space: "O(k)" },
+        code: `package main
+
+import "fmt"
+
+func subarraysWithKDistinct(nums []int, k int) int {
+	return atMost(nums, k) - atMost(nums, k-1)
+}
+
+// count subarrays with AT MOST k distinct integers
+func atMost(nums []int, k int) int {
+	freq := make(map[int]int)
+	left, count := 0, 0
+	for right := 0; right < len(nums); right++ {
+		freq[nums[right]]++
+		for len(freq) > k {
+			freq[nums[left]]--
+			if freq[nums[left]] == 0 {
+				delete(freq, nums[left])
+			}
+			left++
+		}
+		count += right - left + 1 // all subarrays ending at right
+	}
+	return count
+}
+
+func main() {
+	fmt.Println(subarraysWithKDistinct([]int{1, 2, 1, 2, 3}, 2))
+	// Output: 7
+
+	fmt.Println(subarraysWithKDistinct([]int{1, 2, 1, 3, 4}, 3))
+	// Output: 3
 }`,
       },
     ],
@@ -1594,6 +1728,134 @@ func main() {
 
 	fmt.Println(numberOfSubarrays([]int{2, 2, 2, 1, 2, 2, 1, 2, 2, 2}, 2))
 	// Output: 16
+}`,
+      },
+      {
+        id: "maximum-subarray-kadane",
+        title: "Maximum Subarray (Kadane's Algorithm)",
+        difficulty: "Medium",
+        leetcode: 53,
+        description:
+          "Given an integer array nums, find the subarray with the largest sum and return its sum.",
+        examples: [
+          { input: "nums = [-2,1,-3,4,-1,2,1,-5,4]", output: "6",  explanation: "Subarray [4,-1,2,1] has sum 6" },
+          { input: "nums = [1]",                       output: "1",  explanation: "Single element" },
+          { input: "nums = [5,4,-1,7,8]",              output: "23", explanation: "Entire array" },
+        ],
+        approach:
+          "Kadane's Algorithm: maintain a running currentSum. At each element, decide whether to extend the existing subarray or start fresh: currentSum = max(num, currentSum + num). Track the global maximum. This is equivalent to a prefix-sum greedy — drop the prefix whenever it turns negative.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func maxSubArray(nums []int) int {
+	best := nums[0]
+	cur := nums[0]
+	for _, n := range nums[1:] {
+		if cur+n > n {
+			cur = cur + n
+		} else {
+			cur = n // start fresh subarray here
+		}
+		if cur > best {
+			best = cur
+		}
+	}
+	return best
+}
+
+func main() {
+	fmt.Println(maxSubArray([]int{-2, 1, -3, 4, -1, 2, 1, -5, 4}))
+	// Output: 6
+
+	fmt.Println(maxSubArray([]int{5, 4, -1, 7, 8}))
+	// Output: 23
+}`,
+      },
+      {
+        id: "continuous-subarray-sum",
+        title: "Continuous Subarray Sum",
+        difficulty: "Medium",
+        leetcode: 523,
+        description:
+          "Given an integer array nums and an integer k, return true if nums has a continuous subarray of size at least 2 whose elements sum up to a multiple of k (i.e. sum % k == 0).",
+        examples: [
+          { input: "nums = [23,2,4,6,7], k = 6",  output: "true",  explanation: "[2,4] sums to 6 which is a multiple of 6" },
+          { input: "nums = [23,2,6,4,7], k = 6",  output: "true",  explanation: "[23,2,6,4,7] sums to 42 = 7×6" },
+          { input: "nums = [23,2,6,4,7], k = 13", output: "false", explanation: "No subarray of size ≥ 2 has sum divisible by 13" },
+        ],
+        approach:
+          "Prefix sum mod k. If two prefix sums have the same remainder when divided by k, the subarray between them is divisible by k. Store first-seen index of each remainder in a map. If the same remainder appears again at index i and the gap is ≥ 2 (i - map[rem] >= 2), return true. Seed map with {0: -1} to handle subarrays starting at index 0.",
+        complexity: { time: "O(n)", space: "O(k)" },
+        code: `package main
+
+import "fmt"
+
+func checkSubarraySum(nums []int, k int) bool {
+	// map: prefix_sum%k → first index where this remainder was seen
+	seen := map[int]int{0: -1}
+	sum := 0
+	for i, n := range nums {
+		sum += n
+		rem := sum % k
+		if j, ok := seen[rem]; ok {
+			if i-j >= 2 { // subarray length must be at least 2
+				return true
+			}
+		} else {
+			seen[rem] = i // only store first occurrence
+		}
+	}
+	return false
+}
+
+func main() {
+	fmt.Println(checkSubarraySum([]int{23, 2, 4, 6, 7}, 6))
+	// Output: true
+
+	fmt.Println(checkSubarraySum([]int{23, 2, 6, 4, 7}, 13))
+	// Output: false
+}`,
+      },
+      {
+        id: "corporate-flight-bookings",
+        title: "Corporate Flight Bookings",
+        difficulty: "Medium",
+        leetcode: 1109,
+        description:
+          "There are n flights. You are given bookings[][3] where bookings[i] = [first, last, seats] means seats seats are booked on each flight from first to last (inclusive). Return an array answer of length n where answer[i] is the total seats booked on flight i.",
+        examples: [
+          { input: "bookings = [[1,2,10],[2,3,20],[2,5,25]], n = 5", output: "[10,55,45,25,25]", explanation: "Flight 1:10, Flight 2:10+20+25=55, Flight 3:20+25=45, Flights 4–5:25 each" },
+          { input: "bookings = [[1,2,10],[2,2,15]], n = 2",          output: "[10,25]",           explanation: "Flight 1:10, Flight 2:10+15=25" },
+        ],
+        approach:
+          "Difference array technique. For each booking [first, last, seats], do diff[first-1] += seats and diff[last] -= seats (0-indexed). Then take the prefix sum of diff to get the final answer. Each range update is O(1); one final O(n) pass recovers the result. This is the canonical difference-array pattern.",
+        complexity: { time: "O(n + b)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func corpFlightBookings(bookings [][]int, n int) []int {
+	diff := make([]int, n+1) // difference array, 1-indexed with extra slot
+	for _, b := range bookings {
+		first, last, seats := b[0], b[1], b[2]
+		diff[first-1] += seats  // +seats starting at first (0-indexed)
+		diff[last] -= seats     // -seats after last
+	}
+	// prefix sum of diff gives actual seat counts
+	for i := 1; i < n; i++ {
+		diff[i] += diff[i-1]
+	}
+	return diff[:n]
+}
+
+func main() {
+	fmt.Println(corpFlightBookings([][]int{{1, 2, 10}, {2, 3, 20}, {2, 5, 25}}, 5))
+	// Output: [10 55 45 25 25]
+
+	fmt.Println(corpFlightBookings([][]int{{1, 2, 10}, {2, 2, 15}}, 2))
+	// Output: [10 25]
 }`,
       },
     ],
@@ -2069,6 +2331,90 @@ func main() {
 
 	fmt.Println(canConstruct("bg", "efjbdfbdgfjhhaiigfhbaejahgfbbgbjagbddfgdiaigdadhcfcj"))
 	// Output: true
+}`,
+      },
+      {
+        id: "first-unique-character",
+        title: "First Unique Character in a String",
+        difficulty: "Easy",
+        leetcode: 387,
+        description:
+          "Given a string s, find the first non-repeating character and return its index. Return -1 if none exists.",
+        examples: [
+          { input: 's = "leetcode"', output: "0", explanation: "'l' appears once and is at index 0" },
+          { input: 's = "loveleetcode"', output: "2", explanation: "'v' is the first character that appears only once" },
+          { input: 's = "aabb"', output: "-1", explanation: "Every character repeats" },
+        ],
+        approach:
+          "Two-pass hash map. First pass: count frequency of every character. Second pass: scan left to right and return the index of the first character whose count is 1. O(1) space because the alphabet is fixed at 26 letters.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func firstUniqChar(s string) int {
+	freq := [26]int{}
+	for _, c := range s {
+		freq[c-'a']++
+	}
+	for i, c := range s {
+		if freq[c-'a'] == 1 {
+			return i
+		}
+	}
+	return -1
+}
+
+func main() {
+	fmt.Println(firstUniqChar("leetcode"))
+	// Output: 0
+
+	fmt.Println(firstUniqChar("loveleetcode"))
+	// Output: 2
+
+	fmt.Println(firstUniqChar("aabb"))
+	// Output: -1
+}`,
+      },
+      {
+        id: "contains-duplicate-ii",
+        title: "Contains Duplicate II",
+        difficulty: "Easy",
+        leetcode: 219,
+        description:
+          "Given an integer array nums and an integer k, return true if there are two distinct indices i and j such that nums[i] == nums[j] and abs(i - j) <= k.",
+        examples: [
+          { input: "nums = [1,2,3,1], k = 3",   output: "true",  explanation: "nums[0] == nums[3] and |0-3| = 3 <= k" },
+          { input: "nums = [1,0,1,1], k = 1",   output: "true",  explanation: "nums[2] == nums[3] and |2-3| = 1 <= k" },
+          { input: "nums = [1,2,3,1,2,3], k = 2", output: "false", explanation: "Duplicate pairs exist but distance > 2" },
+        ],
+        approach:
+          "Hash map from value → most recent index. For each element, check if it exists in the map and if the stored index is within k distance. If yes, return true. Otherwise update the map with the current index. This keeps only the closest previous occurrence, which is always the best candidate.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func containsNearbyDuplicate(nums []int, k int) bool {
+	seen := make(map[int]int) // value → last seen index
+	for i, n := range nums {
+		if j, ok := seen[n]; ok && i-j <= k {
+			return true
+		}
+		seen[n] = i
+	}
+	return false
+}
+
+func main() {
+	fmt.Println(containsNearbyDuplicate([]int{1, 2, 3, 1}, 3))
+	// Output: true
+
+	fmt.Println(containsNearbyDuplicate([]int{1, 0, 1, 1}, 1))
+	// Output: true
+
+	fmt.Println(containsNearbyDuplicate([]int{1, 2, 3, 1, 2, 3}, 2))
+	// Output: false
 }`,
       },
     ],
