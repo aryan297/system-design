@@ -306,6 +306,50 @@
   color: var(--text-primary);
 }
 
+/* ── Template link in sidebar ── */
+.dsa-template-item {
+  border: 1px dashed var(--border-subtle);
+  margin-bottom: 4px;
+  border-radius: var(--radius-sm);
+}
+.dsa-template-item:hover {
+  border-color: var(--accent);
+  background: var(--accent-muted) !important;
+}
+.dsa-template-item.dsa-problem-item--active {
+  border-color: var(--accent);
+  border-style: solid;
+}
+.dsa-template-icon {
+  font-size: 0.85rem;
+  min-width: 18px;
+}
+
+/* ── Template view ── */
+.dsa-tpl-variant-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.dsa-tpl-variant-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.dsa-tpl-when {
+  font-size: 0.78rem;
+  color: var(--accent);
+  background: var(--accent-muted);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 20px;
+  padding: 2px 10px;
+  display: inline-block;
+  width: fit-content;
+}
+
 /* ── Visualizer ── */
 .dsa-viz-wrap {
   border-radius: var(--radius);
