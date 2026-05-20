@@ -1187,4 +1187,618 @@ return dp[target]
       },
     ],
   },
+
+  "heap-priority-queue": {
+    title: "Heap / Priority Queue — Templates",
+    description: "A heap gives O(log n) insert/remove and O(1) peek of the min or max. Use a min-heap of size k to maintain the k largest elements; use a max-heap of size k for the k smallest.",
+    variants: [
+      {
+        name: "Min-Heap / Max-Heap (Go container/heap)",
+        when: "Any problem needing the smallest or largest element quickly",
+        code: `// ── MIN-HEAP (Go container/heap) ────────────────────────────────
+import "container/heap"
+
+type MinHeap []int
+func (h MinHeap) Len() int           { return len(h) }
+func (h MinHeap) Less(i, j int) bool { return h[i] < h[j] } // min-heap
+func (h MinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *MinHeap) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *MinHeap) Pop() any {
+    old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x
+}
+
+h := &MinHeap{3, 1, 4, 1, 5}
+heap.Init(h)
+heap.Push(h, 2)
+top := (*h)[0]        // peek min — O(1)
+val := heap.Pop(h)    // remove min — O(log n)
+_ = top; _ = val
+
+// ── MAX-HEAP: flip Less ──────────────────────────────────────────
+// func (h MaxHeap) Less(i, j int) bool { return h[i] > h[j] }`,
+      },
+      {
+        name: "Top K Elements (K Largest / K Smallest)",
+        when: "Kth largest, K closest points, K most frequent, top-K anything",
+        code: `// ── TOP K LARGEST — min-heap of size k ──────────────────────────
+// Keep a min-heap capped at k.
+// Anything smaller than the heap top cannot be in top-k → discard.
+
+h := &MinHeap{}
+heap.Init(h)
+
+for _, n := range nums {
+    heap.Push(h, n)
+    if h.Len() > k {
+        heap.Pop(h) // evict the smallest — it cannot be in top-k
+    }
+}
+
+// h now contains the k largest elements; (*h)[0] is the kth largest.
+return (*h)[0]
+
+// ── TOP K SMALLEST — max-heap of size k ─────────────────────────
+// Mirror: use MaxHeap, evict the largest.
+// Anything larger than the heap top cannot be in bottom-k → discard.`,
+      },
+      {
+        name: "K-Way Merge",
+        when: "Merge K sorted lists/arrays, smallest range covering K lists",
+        code: `// ── K-WAY MERGE (merge K sorted lists) ──────────────────────────
+// Push the head of every list into a min-heap.
+// Each pop gives the globally smallest element; push its successor.
+
+type Item struct{ val, listIdx, elemIdx int }
+type ItemHeap []Item
+func (h ItemHeap) Len() int           { return len(h) }
+func (h ItemHeap) Less(i, j int) bool { return h[i].val < h[j].val }
+func (h ItemHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *ItemHeap) Push(x any)        { *h = append(*h, x.(Item)) }
+func (h *ItemHeap) Pop() any {
+    old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x
+}
+
+h := &ItemHeap{}
+heap.Init(h)
+for i, list := range lists {
+    if len(list) > 0 {
+        heap.Push(h, Item{list[0], i, 0})
+    }
+}
+
+result := []int{}
+for h.Len() > 0 {
+    item := heap.Pop(h).(Item)
+    result = append(result, item.val)
+    next := item.elemIdx + 1
+    if next < len(lists[item.listIdx]) {
+        heap.Push(h, Item{lists[item.listIdx][next], item.listIdx, next})
+    }
+}`,
+      },
+      {
+        name: "Running Median (Two Heaps)",
+        when: "Find median from data stream, sliding window median",
+        code: `// ── RUNNING MEDIAN — two heaps ───────────────────────────────────
+// lo = max-heap  → lower half  (top = max of lower half)
+// hi = min-heap  → upper half  (top = min of upper half)
+// Invariant: lo.Len() == hi.Len()  OR  lo.Len() == hi.Len()+1
+
+func addNum(num int) {
+    // always push to lo first, then rebalance
+    heap.Push(lo, num)              // push to lower half
+    heap.Push(hi, heap.Pop(lo))     // move lo's max to hi
+
+    if hi.Len() > lo.Len() {        // keep lo >= hi in size
+        heap.Push(lo, heap.Pop(hi))
+    }
+}
+
+func findMedian() float64 {
+    if lo.Len() > hi.Len() {
+        return float64((*lo)[0])    // odd total — lo has extra
+    }
+    return float64((*lo)[0]+(*hi)[0]) / 2.0
+}`,
+      },
+    ],
+  },
+
+  "intervals": {
+    title: "Intervals — Templates",
+    description: "Sort intervals by start (or end) to enable greedy sweeps. Most interval problems reduce to: sort → scan left-to-right → decide merge/skip/count.",
+    variants: [
+      {
+        name: "Sort + Merge Overlapping Intervals",
+        when: "Merge intervals, insert interval (after inserting, merge), calendar problems",
+        code: `// ── MERGE OVERLAPPING INTERVALS ─────────────────────────────────
+// Sort by start. If next start <= last end → overlap → extend end.
+
+import "sort"
+
+sort.Slice(intervals, func(i, j int) bool {
+    return intervals[i][0] < intervals[j][0]
+})
+
+result := [][]int{intervals[0]}
+
+for _, iv := range intervals[1:] {
+    last := result[len(result)-1]
+
+    if iv[0] <= last[1] {
+        // overlap — extend the end if needed
+        if iv[1] > last[1] {
+            last[1] = iv[1]
+        }
+    } else {
+        // no overlap — start a new interval
+        result = append(result, iv)
+    }
+}
+
+return result`,
+      },
+      {
+        name: "Greedy — Sort by End (Min Removals / Max Non-Overlapping)",
+        when: "Non-overlapping intervals, minimum arrows to burst balloons, activity selection",
+        code: `// ── GREEDY: SORT BY END ─────────────────────────────────────────
+// Always keep the interval that ends earliest — it leaves
+// the most room for future intervals (activity selection).
+
+sort.Slice(intervals, func(i, j int) bool {
+    return intervals[i][1] < intervals[j][1] // sort by END
+})
+
+count := 0
+lastEnd := intervals[0][1]
+
+for _, iv := range intervals[1:] {
+    if iv[0] < lastEnd {
+        // overlap with last kept interval → remove current
+        count++
+    } else {
+        // no overlap → keep it, update boundary
+        lastEnd = iv[1]
+    }
+}
+
+return count // number of intervals removed`,
+      },
+      {
+        name: "Min Rooms / Resources (Sort + Min-Heap of End Times)",
+        when: "Meeting Rooms II, min servers, min classrooms — concurrent resource counting",
+        code: `// ── MIN ROOMS NEEDED ────────────────────────────────────────────
+// Sort by start. Min-heap tracks when each room becomes free.
+// If the earliest-free room is free by current start → reuse it.
+// Otherwise open a new room.
+
+import "container/heap"
+
+sort.Slice(intervals, func(i, j int) bool {
+    return intervals[i][0] < intervals[j][0]
+})
+
+endHeap := &MinHeap{} // stores end times of active meetings
+heap.Init(endHeap)
+
+for _, iv := range intervals {
+    if endHeap.Len() > 0 && (*endHeap)[0] <= iv[0] {
+        heap.Pop(endHeap) // reuse the room that finished earliest
+    }
+    heap.Push(endHeap, iv[1]) // assign room, record when it ends
+}
+
+return endHeap.Len() // rooms still occupied = rooms needed`,
+      },
+      {
+        name: "Insert Interval (Three-Phase Scan)",
+        when: "Insert and merge a new interval into a sorted non-overlapping list",
+        code: `// ── INSERT INTERVAL ─────────────────────────────────────────────
+// Phase 1: copy all intervals that end BEFORE newInterval starts.
+// Phase 2: merge all intervals that OVERLAP with newInterval.
+// Phase 3: copy all remaining intervals.
+
+result := [][]int{}
+i, n := 0, len(intervals)
+
+// Phase 1 — entirely before new interval
+for i < n && intervals[i][1] < newInterval[0] {
+    result = append(result, intervals[i])
+    i++
+}
+
+// Phase 2 — overlapping: expand newInterval to cover all
+for i < n && intervals[i][0] <= newInterval[1] {
+    if intervals[i][0] < newInterval[0] { newInterval[0] = intervals[i][0] }
+    if intervals[i][1] > newInterval[1] { newInterval[1] = intervals[i][1] }
+    i++
+}
+result = append(result, newInterval)
+
+// Phase 3 — entirely after new interval
+result = append(result, intervals[i:]...)
+return result`,
+      },
+    ],
+  },
+
+  "trie": {
+    title: "Trie — Templates",
+    description: "A Trie (prefix tree) stores strings character by character. It enables O(L) insert/search/prefix-check where L is the word length, and efficient prefix-based queries over large word sets.",
+    variants: [
+      {
+        name: "Trie Node + Core Operations",
+        when: "Implement trie, autocomplete, startsWith, count words with prefix",
+        code: `// ── TRIE NODE ────────────────────────────────────────────────────
+type TrieNode struct {
+    children [26]*TrieNode
+    isEnd    bool
+    // optional extras:
+    // count int    — number of words passing through this node
+    // word  string — store the full word at leaf (Word Search II)
+}
+
+type Trie struct{ root *TrieNode }
+
+func NewTrie() *Trie { return &Trie{root: &TrieNode{}} }
+
+// INSERT — O(L)
+func (t *Trie) Insert(word string) {
+    node := t.root
+    for _, c := range word {
+        i := c - 'a'
+        if node.children[i] == nil {
+            node.children[i] = &TrieNode{}
+        }
+        node = node.children[i]
+    }
+    node.isEnd = true
+}
+
+// SEARCH — exact match, O(L)
+func (t *Trie) Search(word string) bool {
+    node := t.root
+    for _, c := range word {
+        i := c - 'a'
+        if node.children[i] == nil { return false }
+        node = node.children[i]
+    }
+    return node.isEnd
+}
+
+// STARTS WITH — prefix check, O(L)
+func (t *Trie) StartsWith(prefix string) bool {
+    node := t.root
+    for _, c := range prefix {
+        i := c - 'a'
+        if node.children[i] == nil { return false }
+        node = node.children[i]
+    }
+    return true
+}`,
+      },
+      {
+        name: "Trie + DFS (Wildcard Search)",
+        when: "Design Add and Search Words — '.' matches any character",
+        code: `// ── TRIE + DFS FOR WILDCARDS ────────────────────────────────────
+// On '.': try all 26 children recursively.
+// On letter: descend normally.
+
+func search(node *TrieNode, word string, idx int) bool {
+    if idx == len(word) {
+        return node.isEnd
+    }
+
+    c := word[idx]
+
+    if c == '.' {
+        // wildcard: try every non-nil child
+        for _, child := range node.children {
+            if child != nil && search(child, word, idx+1) {
+                return true
+            }
+        }
+        return false
+    }
+
+    child := node.children[c-'a']
+    return child != nil && search(child, word, idx+1)
+}`,
+      },
+      {
+        name: "Trie + DFS on Board (Word Search II)",
+        when: "Find all words from a dictionary that exist in a 2-D character grid",
+        code: `// ── TRIE + BOARD DFS ────────────────────────────────────────────
+// Build a Trie from the word list.
+// DFS from every board cell; prune via Trie to avoid dead paths.
+
+var result []string
+
+var dfs func(node *TrieNode, r, c int)
+dfs = func(node *TrieNode, r, c int) {
+    // bounds / visited check
+    if r < 0 || r >= rows || c < 0 || c >= cols || board[r][c] == '#' {
+        return
+    }
+
+    ch := board[r][c]
+    next := node.children[ch-'a']
+    if next == nil { return } // no word starts this way — prune
+
+    if next.word != "" {
+        result = append(result, next.word)
+        next.word = "" // clear to avoid duplicate results
+    }
+
+    board[r][c] = '#' // mark visited
+    dfs(next, r+1, c); dfs(next, r-1, c)
+    dfs(next, r, c+1); dfs(next, r, c-1)
+    board[r][c] = ch  // restore (backtrack)
+}
+
+for r := range board {
+    for c := range board[0] {
+        dfs(root, r, c)
+    }
+}`,
+      },
+    ],
+  },
+
+  "greedy": {
+    title: "Greedy — Templates",
+    description: "Greedy algorithms make the locally optimal choice at each step. Prove correctness with an exchange argument: swapping any two decisions can only make the result worse.",
+    variants: [
+      {
+        name: "Sort + Greedy Sweep",
+        when: "Activity selection, non-overlapping intervals, task scheduling, assigning jobs",
+        code: `// ── SORT + GREEDY SWEEP ─────────────────────────────────────────
+// Sort by the key that determines greediness (end time, deadline, rate…).
+// Sweep left-to-right, taking or skipping each element.
+
+import "sort"
+
+// Example: maximum non-overlapping intervals (sort by end time)
+sort.Slice(intervals, func(i, j int) bool {
+    return intervals[i][1] < intervals[j][1] // sort by END
+})
+
+count, lastEnd := 0, -1<<62
+
+for _, iv := range intervals {
+    if iv[0] >= lastEnd { // no overlap with last chosen
+        count++
+        lastEnd = iv[1]
+    }
+    // else: skip — choosing this would only block future options
+}
+
+return count`,
+      },
+      {
+        name: "Running Invariant (Jump Game / Gas Station)",
+        when: "Reachability, feasibility with a running budget that resets at failure",
+        code: `// ── RUNNING INVARIANT ───────────────────────────────────────────
+// Track a running value. If it goes invalid (< 0), reset and
+// shift the candidate start point. One global check at the end.
+
+// ── Jump Game: can reach end? ────────────────────────────────────
+maxReach := 0
+for i, v := range nums {
+    if i > maxReach { return false } // gap — can't reach here
+    if i+v > maxReach { maxReach = i + v }
+}
+return true
+
+// ── Gas Station: find valid start ───────────────────────────────
+totalGas, totalCost := 0, 0
+tank, start := 0, 0
+for i := range gas {
+    totalGas += gas[i]
+    totalCost += cost[i]
+    tank += gas[i] - cost[i]
+    if tank < 0 { // can't start here or before — reset
+        start = i + 1
+        tank = 0
+    }
+}
+if totalGas < totalCost { return -1 }
+return start`,
+      },
+      {
+        name: "Greedy with Frequency Count",
+        when: "Task scheduler, hand of straights, rearrange string — group by frequency",
+        code: `// ── GREEDY WITH FREQUENCY MAP ───────────────────────────────────
+// Count frequencies. Process in sorted / frequency order.
+// Consume groups of size k, checking availability as you go.
+
+freq := make(map[int]int)
+for _, v := range nums { freq[v]++ }
+
+keys := make([]int, 0, len(freq))
+for k := range freq { keys = append(keys, k) }
+sort.Ints(keys)
+
+for _, k := range keys {
+    count := freq[k]
+    if count == 0 { continue }
+
+    // try to form a group of groupSize starting at k
+    for i := 0; i < groupSize; i++ {
+        freq[k+i] -= count
+        if freq[k+i] < 0 {
+            return false // not enough cards
+        }
+    }
+}
+return true`,
+      },
+      {
+        name: "Two-Variable Range Greedy",
+        when: "Valid parenthesis string with wildcards — track [lo, hi] of possible open counts",
+        code: `// ── TWO-VARIABLE RANGE GREEDY ───────────────────────────────────
+// Instead of one possible count, maintain [lo, hi] = range of
+// valid open-bracket counts at each step.
+
+lo, hi := 0, 0
+
+for _, c := range s {
+    switch c {
+    case '(':
+        lo++; hi++
+    case ')':
+        lo--; hi--
+    default: // wildcard '*' — could be '(', ')', or empty
+        lo--; hi++
+    }
+    if hi < 0 { return false } // even the most optimistic path fails
+    if lo < 0 { lo = 0 }       // lo can't be negative (clamp)
+}
+
+return lo == 0 // all open brackets can be matched`,
+      },
+    ],
+  },
+
+  "bit-manipulation": {
+    title: "Bit Manipulation — Templates",
+    description: "Bit tricks replace branching with arithmetic. Core operations: AND (&), OR (|), XOR (^), NOT (~), left shift (<<), right shift (>>). Master these five patterns to solve most bit problems.",
+    variants: [
+      {
+        name: "XOR Tricks",
+        when: "Single number, find missing/duplicate, swap without temp variable",
+        code: `// ── XOR TRICKS ──────────────────────────────────────────────────
+// Key properties:
+//   x ^ x  = 0  (same values cancel)
+//   x ^ 0  = x  (identity)
+//   XOR is commutative and associative
+
+// ① Single Number — every element appears twice except one:
+result := 0
+for _, n := range nums { result ^= n }
+// result = the unique element
+
+// ② Missing Number in [0..n]:
+missing := len(nums)
+for i, v := range nums { missing ^= i ^ v }
+// OR: missing = n*(n+1)/2 - sum(nums)
+
+// ③ Swap without temp:
+a, b := 3, 5
+a ^= b
+b ^= a
+a ^= b
+// a=5, b=3
+
+// ④ Find two non-repeating numbers (all others appear twice):
+xor := 0
+for _, n := range nums { xor ^= n }
+// xor = a ^ b; find any differing bit (rightmost set bit)
+bit := xor & (-xor)
+x, y := 0, 0
+for _, n := range nums {
+    if n & bit != 0 { x ^= n } else { y ^= n }
+}`,
+      },
+      {
+        name: "Bit Masking & Single-Bit Operations",
+        when: "Check/set/clear/toggle a specific bit, Brian Kernighan popcount, power of two",
+        code: `// ── BIT MASKING ─────────────────────────────────────────────────
+
+// Check if bit i is set:
+isSet := (n >> i) & 1 == 1
+
+// Set bit i:
+n |= (1 << i)
+
+// Clear bit i:
+n &^= (1 << i) // Go: &^ is bit-clear (AND NOT)
+
+// Toggle bit i:
+n ^= (1 << i)
+
+// ── LOWEST SET BIT ───────────────────────────────────────────────
+lowest := n & (-n)  // isolates the rightmost 1-bit
+
+// Clear lowest set bit (Brian Kernighan):
+n &= n - 1
+
+// Count 1-bits (popcount) — O(k) where k = number of set bits:
+count := 0
+for n != 0 {
+    n &= n - 1 // clear lowest set bit each iteration
+    count++
+}
+
+// ── POWER OF TWO CHECK ───────────────────────────────────────────
+isPow2 := n > 0 && (n & (n-1)) == 0`,
+      },
+      {
+        name: "Bit DP / Counting Bits",
+        when: "Count set bits for 0..n, number of 1 bits, Hamming distance",
+        code: `// ── COUNTING BITS (DP) ──────────────────────────────────────────
+// dp[i] = number of 1-bits in i
+// dp[i] = dp[i >> 1] + (i & 1)
+//   i >> 1 shifts out the last bit (same as i/2)
+//   (i & 1) adds 1 if that last bit was set
+
+dp := make([]int, n+1)
+for i := 1; i <= n; i++ {
+    dp[i] = dp[i>>1] + (i & 1)
+}
+// dp[i] is now the popcount of i
+
+// ── HAMMING DISTANCE (two numbers) ──────────────────────────────
+dist := 0
+xor := x ^ y
+for xor != 0 {
+    xor &= xor - 1 // clear one differing bit
+    dist++
+}
+
+// ── TOTAL HAMMING DISTANCE (array) ──────────────────────────────
+// For each bit position, count zeros and ones across all numbers.
+// distance contribution = zeros * ones
+total := 0
+for bit := 0; bit < 32; bit++ {
+    ones := 0
+    for _, n := range nums {
+        ones += (n >> bit) & 1
+    }
+    total += ones * (len(nums) - ones)
+}`,
+      },
+      {
+        name: "Bit Simulation (Addition / Subtraction without +/-)",
+        when: "Sum of two integers without + operator, add binary strings",
+        code: `// ── BIT SIMULATION: ADD WITHOUT + ───────────────────────────────
+// XOR  = sum without carry
+// AND << 1 = carry bits (shifted left)
+// Repeat until carry is 0.
+
+func add(a, b int) int {
+    for b != 0 {
+        carry := uint32(a) & uint32(b) // carry bits
+        a = int(uint32(a) ^ uint32(b)) // sum without carry
+        b = int(carry << 1)            // shift carry left
+    }
+    return a
+}
+
+// ── ADD BINARY STRINGS ───────────────────────────────────────────
+func addBinary(a, b string) string {
+    i, j, carry := len(a)-1, len(b)-1, 0
+    result := []byte{}
+    for i >= 0 || j >= 0 || carry > 0 {
+        sum := carry
+        if i >= 0 { sum += int(a[i] - '0'); i-- }
+        if j >= 0 { sum += int(b[j] - '0'); j-- }
+        carry = sum / 2
+        result = append([]byte{byte('0' + sum%2)}, result...)
+    }
+    return string(result)
+}`,
+      },
+    ],
+  },
 };
