@@ -7,7 +7,8 @@
       "Bash(npx vite *)",
       "Bash(kill 54244)",
       "Bash(npm run *)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(node -e ' *)"
     ]
   }
 }

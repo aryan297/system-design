@@ -6438,6 +6438,1526 @@ func main() {
 	// Output: 3
 }`,
       },
+      {
+        id: "house-robber-ii",
+        title: "House Robber II",
+        difficulty: "Medium",
+        leetcode: 213,
+        description:
+          "Houses are arranged in a circle — the first and last are adjacent. Return the maximum amount you can rob without robbing two adjacent houses.",
+        examples: [
+          { input: "nums = [2,3,2]",   output: "3",  explanation: "Cannot rob both house 1 (2) and house 3 (2) since they're adjacent; rob house 2 (3)" },
+          { input: "nums = [1,2,3,1]", output: "4",  explanation: "Rob house 1 (1) and house 3 (3)" },
+        ],
+        approach:
+          "Split the circular problem into two linear subproblems: rob houses [0..n-2] (exclude last) and rob houses [1..n-1] (exclude first). Return the max of both. Each subproblem is the classic House Robber I.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func rob(nums []int) int {
+	if len(nums) == 1 { return nums[0] }
+	return max(robRange(nums, 0, len(nums)-2), robRange(nums, 1, len(nums)-1))
+}
+
+func robRange(nums []int, lo, hi int) int {
+	prev2, prev1 := 0, 0
+	for i := lo; i <= hi; i++ {
+		prev2, prev1 = prev1, max(prev1, prev2+nums[i])
+	}
+	return prev1
+}
+
+func max(a, b int) int {
+	if a > b { return a }
+	return b
+}
+
+func main() {
+	fmt.Println(rob([]int{2, 3, 2}))
+	// Output: 3
+
+	fmt.Println(rob([]int{1, 2, 3, 1}))
+	// Output: 4
+
+	fmt.Println(rob([]int{1, 2, 3}))
+	// Output: 3
+}`,
+      },
+      {
+        id: "decode-ways",
+        title: "Decode Ways",
+        difficulty: "Medium",
+        leetcode: 91,
+        description:
+          "A message encoded as digits maps to letters: '1'→'A', '2'→'B', ..., '26'→'Z'. Given a string of digits, return the number of ways to decode it.",
+        examples: [
+          { input: 's = "12"', output: "2", explanation: '"AB" (1,2) or "L" (12)' },
+          { input: 's = "226"', output: "3", explanation: '"BZ"(2,26), "VF"(22,6), "BBF"(2,2,6)' },
+          { input: 's = "06"', output: "0", explanation: 'Leading zero — invalid' },
+        ],
+        approach:
+          "DP where dp[i] = number of ways to decode s[:i]. dp[0]=1 (empty string), dp[1]=1 if s[0]!='0'. For each position: if s[i-1]!='0' add dp[i-1] (single digit); if two-digit number s[i-2:i] is in [10,26] add dp[i-2].",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func numDecodings(s string) int {
+	if s[0] == '0' { return 0 }
+	prev2, prev1 := 1, 1
+	for i := 1; i < len(s); i++ {
+		curr := 0
+		if s[i] != '0' {
+			curr += prev1
+		}
+		twoDigit := (int(s[i-1]-'0'))*10 + int(s[i]-'0')
+		if twoDigit >= 10 && twoDigit <= 26 {
+			curr += prev2
+		}
+		prev2, prev1 = prev1, curr
+	}
+	return prev1
+}
+
+func main() {
+	fmt.Println(numDecodings("12"))
+	// Output: 2
+
+	fmt.Println(numDecodings("226"))
+	// Output: 3
+
+	fmt.Println(numDecodings("06"))
+	// Output: 0
+}`,
+      },
+      {
+        id: "maximum-product-subarray",
+        title: "Maximum Product Subarray",
+        difficulty: "Medium",
+        leetcode: 152,
+        description:
+          "Given an integer array nums, find the contiguous subarray with the largest product and return that product.",
+        examples: [
+          { input: "nums = [2,3,-2,4]",    output: "6",  explanation: "[2,3] has the largest product" },
+          { input: "nums = [-2,0,-1]",     output: "0",  explanation: "Result is 0, not -2 or -1" },
+        ],
+        approach:
+          "Track both the running maximum and minimum products (negative × negative = positive). At each step: new max = max(num, maxProd×num, minProd×num). New min = min(same three). Update global best. Reset is handled implicitly by taking num alone.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func maxProduct(nums []int) int {
+	maxP, minP, best := nums[0], nums[0], nums[0]
+	for _, n := range nums[1:] {
+		a, b := maxP*n, minP*n
+		maxP = max(n, max(a, b))
+		minP = min(n, min(a, b))
+		if maxP > best { best = maxP }
+	}
+	return best
+}
+
+func max(a, b int) int { if a > b { return a }; return b }
+func min(a, b int) int { if a < b { return a }; return b }
+
+func main() {
+	fmt.Println(maxProduct([]int{2, 3, -2, 4}))
+	// Output: 6
+
+	fmt.Println(maxProduct([]int{-2, 0, -1}))
+	// Output: 0
+
+	fmt.Println(maxProduct([]int{-2, 3, -4}))
+	// Output: 24
+}`,
+      },
+      {
+        id: "longest-palindromic-substring",
+        title: "Longest Palindromic Substring",
+        difficulty: "Medium",
+        leetcode: 5,
+        description:
+          "Given a string s, return the longest palindromic substring.",
+        examples: [
+          { input: 's = "babad"', output: '"bab"', explanation: '"bab" or "aba" are both valid' },
+          { input: 's = "cbbd"',  output: '"bb"',  explanation: '"bb" is the longest palindrome' },
+        ],
+        approach:
+          "Expand around centers: for each index try both odd-length (center at i) and even-length (center between i and i+1) expansions. Expand outward while characters match. Track the longest window found. O(n²) time, O(1) space — better than DP in practice.",
+        complexity: { time: "O(n²)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func longestPalindrome(s string) string {
+	best := ""
+	expand := func(l, r int) {
+		for l >= 0 && r < len(s) && s[l] == s[r] {
+			if r-l+1 > len(best) {
+				best = s[l : r+1]
+			}
+			l--
+			r++
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		expand(i, i)   // odd length
+		expand(i, i+1) // even length
+	}
+	return best
+}
+
+func main() {
+	fmt.Println(longestPalindrome("babad"))
+	// Output: bab
+
+	fmt.Println(longestPalindrome("cbbd"))
+	// Output: bb
+
+	fmt.Println(longestPalindrome("racecar"))
+	// Output: racecar
+}`,
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 12. Heap / Priority Queue
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "heap-priority-queue",
+    icon: "🏔️",
+    title: "Heap / Priority Queue",
+    problems: [
+      {
+        id: "kth-largest-element",
+        title: "Kth Largest Element in an Array",
+        difficulty: "Medium",
+        leetcode: 215,
+        description:
+          "Given an integer array nums and integer k, return the kth largest element in the array (not the kth distinct).",
+        examples: [
+          { input: "nums = [3,2,1,5,6,4], k = 2", output: "5", explanation: "Sorted descending: [6,5,4,3,2,1], 2nd largest = 5" },
+          { input: "nums = [3,2,3,1,2,4,5,5,6], k = 4", output: "4", explanation: "4th largest is 4" },
+        ],
+        approach:
+          "Maintain a min-heap of size k. For each element: push it; if heap size > k, pop the smallest. After all elements the heap top is the kth largest. Uses container/heap in Go. Alternatively use quickselect for O(n) average.",
+        complexity: { time: "O(n log k)", space: "O(k)" },
+        code: `package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+type MinHeap []int
+func (h MinHeap) Len() int           { return len(h) }
+func (h MinHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h MinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *MinHeap) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *MinHeap) Pop() any {
+	old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x
+}
+
+func findKthLargest(nums []int, k int) int {
+	h := &MinHeap{}
+	heap.Init(h)
+	for _, n := range nums {
+		heap.Push(h, n)
+		if h.Len() > k {
+			heap.Pop(h)
+		}
+	}
+	return (*h)[0]
+}
+
+func main() {
+	fmt.Println(findKthLargest([]int{3, 2, 1, 5, 6, 4}, 2))
+	// Output: 5
+
+	fmt.Println(findKthLargest([]int{3, 2, 3, 1, 2, 4, 5, 5, 6}, 4))
+	// Output: 4
+}`,
+      },
+      {
+        id: "k-closest-points",
+        title: "K Closest Points to Origin",
+        difficulty: "Medium",
+        leetcode: 973,
+        description:
+          "Given an array of points on a 2D plane, return the k points closest to the origin (0,0). Distance is Euclidean. Order of output does not matter.",
+        examples: [
+          { input: "points = [[1,3],[-2,2]], k = 1", output: "[[-2,2]]", explanation: "Distance of [1,3]=√10, [-2,2]=√8 — [-2,2] is closer" },
+          { input: "points = [[3,3],[5,-1],[-2,4]], k = 2", output: "[[3,3],[-2,4]]", explanation: "Two closest points" },
+        ],
+        approach:
+          "Max-heap of size k keyed by squared distance (avoid sqrt). For each point push it; if heap size > k pop the farthest. Remaining k elements are the answer. Squared distance avoids floating point: x²+y².",
+        complexity: { time: "O(n log k)", space: "O(k)" },
+        code: `package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+type Point [2]int
+type MaxHeap []Point
+
+func dist(p Point) int { return p[0]*p[0] + p[1]*p[1] }
+func (h MaxHeap) Len() int           { return len(h) }
+func (h MaxHeap) Less(i, j int) bool { return dist(h[i]) > dist(h[j]) } // max-heap
+func (h MaxHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *MaxHeap) Push(x any)        { *h = append(*h, x.(Point)) }
+func (h *MaxHeap) Pop() any {
+	old := *h; n := len(old); x := old[n-1]; *h = old[:n-1]; return x
+}
+
+func kClosest(points [][]int, k int) [][]int {
+	h := &MaxHeap{}
+	heap.Init(h)
+	for _, p := range points {
+		heap.Push(h, Point{p[0], p[1]})
+		if h.Len() > k {
+			heap.Pop(h)
+		}
+	}
+	result := make([][]int, h.Len())
+	for i, p := range *h {
+		result[i] = []int{p[0], p[1]}
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(kClosest([][]int{{1, 3}, {-2, 2}}, 1))
+	// Output: [[-2 2]]
+
+	fmt.Println(kClosest([][]int{{3, 3}, {5, -1}, {-2, 4}}, 2))
+	// Output: [[3 3] [-2 4]]
+}`,
+      },
+      {
+        id: "task-scheduler",
+        title: "Task Scheduler",
+        difficulty: "Medium",
+        leetcode: 621,
+        description:
+          "Given a list of CPU tasks and a cooldown n, return the minimum intervals the CPU needs to finish all tasks. The same task must be separated by at least n intervals.",
+        examples: [
+          { input: 'tasks = ["A","A","A","B","B","B"], n = 2', output: "8", explanation: "A→B→idle→A→B→idle→A→B" },
+          { input: 'tasks = ["A","A","A","B","B","B"], n = 0', output: "6", explanation: "No cooldown needed" },
+        ],
+        approach:
+          "Math formula: count frequencies, find maxFreq. Minimum time = max(len(tasks), (maxFreq-1)*(n+1) + count_of_tasks_with_maxFreq). The formula accounts for idle slots created by the most frequent task.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func leastInterval(tasks []byte, n int) int {
+	freq := [26]int{}
+	for _, t := range tasks {
+		freq[t-'A']++
+	}
+	maxFreq, maxCount := 0, 0
+	for _, f := range freq {
+		if f > maxFreq {
+			maxFreq = f
+			maxCount = 1
+		} else if f == maxFreq {
+			maxCount++
+		}
+	}
+	slots := (maxFreq-1)*(n+1) + maxCount
+	if len(tasks) > slots {
+		return len(tasks)
+	}
+	return slots
+}
+
+func main() {
+	fmt.Println(leastInterval([]byte("AAABBB"), 2))
+	// Output: 8
+
+	fmt.Println(leastInterval([]byte("AAABBB"), 0))
+	// Output: 6
+
+	fmt.Println(leastInterval([]byte("AAABBBCCC"), 2))
+	// Output: 9
+}`,
+      },
+      {
+        id: "find-median-data-stream",
+        title: "Find Median from Data Stream",
+        difficulty: "Hard",
+        leetcode: 295,
+        description:
+          "Design a data structure that supports adding integers and finding the median of all elements added so far.",
+        examples: [
+          { input: "addNum(1), addNum(2), findMedian(), addNum(3), findMedian()", output: "1.5, 2.0", explanation: "Median of [1,2]=1.5; median of [1,2,3]=2" },
+        ],
+        approach:
+          "Two heaps: a max-heap for the lower half and a min-heap for the upper half. Keep them balanced (sizes differ by at most 1). On addNum: push to max-heap, then balance by moving top of max-heap to min-heap, then rebalance sizes. Median: if equal sizes average the tops; else top of the larger heap.",
+        complexity: { time: "O(log n) addNum, O(1) findMedian", space: "O(n)" },
+        code: `package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+type MaxH []int
+func (h MaxH) Len() int           { return len(h) }
+func (h MaxH) Less(i, j int) bool { return h[i] > h[j] }
+func (h MaxH) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *MaxH) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *MaxH) Pop() any          { old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x }
+
+type MinH []int
+func (h MinH) Len() int           { return len(h) }
+func (h MinH) Less(i, j int) bool { return h[i] < h[j] }
+func (h MinH) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *MinH) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *MinH) Pop() any          { old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x }
+
+type MedianFinder struct {
+	lo *MaxH // lower half
+	hi *MinH // upper half
+}
+
+func Constructor() MedianFinder {
+	lo, hi := &MaxH{}, &MinH{}
+	heap.Init(lo); heap.Init(hi)
+	return MedianFinder{lo, hi}
+}
+
+func (mf *MedianFinder) AddNum(num int) {
+	heap.Push(mf.lo, num)
+	heap.Push(mf.hi, heap.Pop(mf.lo))
+	if mf.hi.Len() > mf.lo.Len() {
+		heap.Push(mf.lo, heap.Pop(mf.hi))
+	}
+}
+
+func (mf *MedianFinder) FindMedian() float64 {
+	if mf.lo.Len() > mf.hi.Len() {
+		return float64((*mf.lo)[0])
+	}
+	return float64((*mf.lo)[0]+(*mf.hi)[0]) / 2.0
+}
+
+func main() {
+	mf := Constructor()
+	mf.AddNum(1)
+	mf.AddNum(2)
+	fmt.Println(mf.FindMedian()) // Output: 1.5
+	mf.AddNum(3)
+	fmt.Println(mf.FindMedian()) // Output: 2
+}`,
+      },
+      {
+        id: "top-k-frequent-words",
+        title: "Top K Frequent Words",
+        difficulty: "Medium",
+        leetcode: 692,
+        description:
+          "Given an array of strings words and integer k, return the k most frequent words sorted by frequency descending. Ties are broken alphabetically.",
+        examples: [
+          { input: 'words = ["i","love","leetcode","i","love","coding"], k = 2', output: '["i","love"]', explanation: '"i" (2×), "love" (2×) — both appear twice, alphabetical tiebreak doesn\'t change order' },
+          { input: 'words = ["the","day","is","sunny","the","the","the","sunny","is","is"], k = 4', output: '["the","is","sunny","day"]', explanation: "Sorted by frequency" },
+        ],
+        approach:
+          "Count frequencies with a map. Use a min-heap of size k sorted by (frequency asc, word desc) — so the element to evict is always at top. After processing all words, drain the heap in reverse to get descending frequency order.",
+        complexity: { time: "O(n log k)", space: "O(n)" },
+        code: `package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+type Entry struct{ word string; freq int }
+type WordHeap []Entry
+
+func (h WordHeap) Len() int      { return len(h) }
+func (h WordHeap) Less(i, j int) bool {
+	if h[i].freq != h[j].freq { return h[i].freq < h[j].freq }
+	return h[i].word > h[j].word // higher alpha first so it gets evicted
+}
+func (h WordHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *WordHeap) Push(x any)        { *h = append(*h, x.(Entry)) }
+func (h *WordHeap) Pop() any          { old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x }
+
+func topKFrequent(words []string, k int) []string {
+	freq := map[string]int{}
+	for _, w := range words { freq[w]++ }
+	h := &WordHeap{}
+	heap.Init(h)
+	for w, f := range freq {
+		heap.Push(h, Entry{w, f})
+		if h.Len() > k { heap.Pop(h) }
+	}
+	res := make([]string, k)
+	for i := k - 1; i >= 0; i-- {
+		res[i] = heap.Pop(h).(Entry).word
+	}
+	return res
+}
+
+func main() {
+	fmt.Println(topKFrequent([]string{"i","love","leetcode","i","love","coding"}, 2))
+	// Output: [i love]
+
+	fmt.Println(topKFrequent([]string{"the","day","is","sunny","the","the","the","sunny","is","is"}, 4))
+	// Output: [the is sunny day]
+}`,
+      },
+      {
+        id: "reorganize-string",
+        title: "Reorganize String",
+        difficulty: "Medium",
+        leetcode: 767,
+        description:
+          "Given a string s, rearrange its characters so no two adjacent characters are the same. Return any valid arrangement, or empty string if impossible.",
+        examples: [
+          { input: 's = "aab"', output: '"aba"', explanation: "No two adjacent characters are the same" },
+          { input: 's = "aaab"', output: '""', explanation: "Three a's cannot be separated" },
+        ],
+        approach:
+          "Max-heap by frequency. Greedily pick the most frequent character. After picking, hold it back one step so it cannot be placed consecutively. Push the held character back once we've placed a different one. If at any point we can only place the held character, the arrangement is impossible.",
+        complexity: { time: "O(n log k)", space: "O(k)" },
+        code: `package main
+
+import (
+	"container/heap"
+	"fmt"
+)
+
+type CharHeap [][2]int // [freq, char]
+func (h CharHeap) Len() int           { return len(h) }
+func (h CharHeap) Less(i, j int) bool { return h[i][0] > h[j][0] }
+func (h CharHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *CharHeap) Push(x any)        { *h = append(*h, x.([2]int)) }
+func (h *CharHeap) Pop() any {
+	old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x
+}
+
+func reorganizeString(s string) string {
+	freq := [26]int{}
+	for _, c := range s { freq[c-'a']++ }
+	h := &CharHeap{}
+	for i, f := range freq {
+		if f > 0 { heap.Push(h, [2]int{f, i + int('a')}) }
+	}
+	res := []byte{}
+	for h.Len() > 1 {
+		a := heap.Pop(h).([2]int)
+		b := heap.Pop(h).([2]int)
+		res = append(res, byte(a[1]), byte(b[1]))
+		if a[0]-1 > 0 { heap.Push(h, [2]int{a[0]-1, a[1]}) }
+		if b[0]-1 > 0 { heap.Push(h, [2]int{b[0]-1, b[1]}) }
+	}
+	if h.Len() == 1 {
+		last := (*h)[0]
+		if last[0] > 1 { return "" }
+		res = append(res, byte(last[1]))
+	}
+	return string(res)
+}
+
+func main() {
+	fmt.Println(reorganizeString("aab"))
+	// Output: aba
+
+	fmt.Println(reorganizeString("aaab"))
+	// Output: (empty)
+}`,
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 13. Intervals
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "intervals",
+    icon: "📏",
+    title: "Intervals",
+    problems: [
+      {
+        id: "merge-intervals",
+        title: "Merge Intervals",
+        difficulty: "Medium",
+        leetcode: 56,
+        description:
+          "Given an array of intervals, merge all overlapping intervals and return an array of the non-overlapping intervals.",
+        examples: [
+          { input: "intervals = [[1,3],[2,6],[8,10],[15,18]]", output: "[[1,6],[8,10],[15,18]]", explanation: "[1,3] and [2,6] overlap → [1,6]" },
+          { input: "intervals = [[1,4],[4,5]]",                output: "[[1,5]]",                explanation: "[1,4] and [4,5] touch → [1,5]" },
+        ],
+        approach:
+          "Sort intervals by start. Iterate: if the current interval overlaps the last merged (start ≤ last end), extend the last end. Otherwise append as a new interval. Two intervals overlap when the next start ≤ previous end.",
+        complexity: { time: "O(n log n)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func merge(intervals [][]int) [][]int {
+	sort.Slice(intervals, func(i, j int) bool {
+		return intervals[i][0] < intervals[j][0]
+	})
+	result := [][]int{intervals[0]}
+	for _, iv := range intervals[1:] {
+		last := result[len(result)-1]
+		if iv[0] <= last[1] {
+			if iv[1] > last[1] { last[1] = iv[1] }
+		} else {
+			result = append(result, iv)
+		}
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(merge([][]int{{1,3},{2,6},{8,10},{15,18}}))
+	// Output: [[1 6] [8 10] [15 18]]
+
+	fmt.Println(merge([][]int{{1,4},{4,5}}))
+	// Output: [[1 5]]
+}`,
+      },
+      {
+        id: "insert-interval",
+        title: "Insert Interval",
+        difficulty: "Medium",
+        leetcode: 57,
+        description:
+          "Given a list of non-overlapping intervals sorted by start, insert a new interval (merging if necessary) and return the result.",
+        examples: [
+          { input: "intervals = [[1,3],[6,9]], newInterval = [2,5]", output: "[[1,5],[6,9]]", explanation: "[1,3] and [2,5] merge → [1,5]" },
+          { input: "intervals = [[1,2],[3,5],[6,7],[8,10],[12,16]], newInterval = [4,8]", output: "[[1,2],[3,10],[12,16]]", explanation: "New interval merges [3,5],[6,7],[8,10]" },
+        ],
+        approach:
+          "Three phases: (1) Add all intervals ending before newInterval starts. (2) Merge all overlapping intervals into newInterval by expanding its boundaries. (3) Add all remaining intervals. No sorting needed since input is already sorted.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func insert(intervals [][]int, newInterval []int) [][]int {
+	result := [][]int{}
+	i, n := 0, len(intervals)
+
+	// Phase 1: add intervals that end before new one starts
+	for i < n && intervals[i][1] < newInterval[0] {
+		result = append(result, intervals[i])
+		i++
+	}
+	// Phase 2: merge overlapping intervals
+	for i < n && intervals[i][0] <= newInterval[1] {
+		if intervals[i][0] < newInterval[0] { newInterval[0] = intervals[i][0] }
+		if intervals[i][1] > newInterval[1] { newInterval[1] = intervals[i][1] }
+		i++
+	}
+	result = append(result, newInterval)
+	// Phase 3: add remaining
+	result = append(result, intervals[i:]...)
+	return result
+}
+
+func main() {
+	fmt.Println(insert([][]int{{1,3},{6,9}}, []int{2,5}))
+	// Output: [[1 5] [6 9]]
+
+	fmt.Println(insert([][]int{{1,2},{3,5},{6,7},{8,10},{12,16}}, []int{4,8}))
+	// Output: [[1 2] [3 10] [12 16]]
+}`,
+      },
+      {
+        id: "non-overlapping-intervals",
+        title: "Non-overlapping Intervals",
+        difficulty: "Medium",
+        leetcode: 435,
+        description:
+          "Given an array of intervals, return the minimum number of intervals you need to remove to make the rest non-overlapping.",
+        examples: [
+          { input: "intervals = [[1,2],[2,3],[3,4],[1,3]]", output: "1", explanation: "Remove [1,3] to leave non-overlapping intervals" },
+          { input: "intervals = [[1,2],[1,2],[1,2]]",       output: "2", explanation: "Remove 2 duplicates" },
+        ],
+        approach:
+          "Greedy: sort by end time. Greedily keep intervals that end earliest (they leave the most room). Track the end of the last kept interval. If the next interval's start < lastEnd, it overlaps — remove it (increment count). Otherwise keep it and update lastEnd.",
+        complexity: { time: "O(n log n)", space: "O(1)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func eraseOverlapIntervals(intervals [][]int) int {
+	sort.Slice(intervals, func(i, j int) bool {
+		return intervals[i][1] < intervals[j][1]
+	})
+	removed, lastEnd := 0, intervals[0][1]
+	for _, iv := range intervals[1:] {
+		if iv[0] < lastEnd {
+			removed++ // overlap — remove current
+		} else {
+			lastEnd = iv[1]
+		}
+	}
+	return removed
+}
+
+func main() {
+	fmt.Println(eraseOverlapIntervals([][]int{{1,2},{2,3},{3,4},{1,3}}))
+	// Output: 1
+
+	fmt.Println(eraseOverlapIntervals([][]int{{1,2},{1,2},{1,2}}))
+	// Output: 2
+
+	fmt.Println(eraseOverlapIntervals([][]int{{1,2},{2,3}}))
+	// Output: 0
+}`,
+      },
+      {
+        id: "meeting-rooms-ii",
+        title: "Meeting Rooms II",
+        difficulty: "Medium",
+        leetcode: 253,
+        description:
+          "Given an array of meeting time intervals [start, end], return the minimum number of conference rooms required.",
+        examples: [
+          { input: "intervals = [[0,30],[5,10],[15,20]]", output: "2", explanation: "Meeting [0,30] overlaps with both others — need 2 rooms" },
+          { input: "intervals = [[7,10],[2,4]]",          output: "1", explanation: "Meetings don't overlap" },
+        ],
+        approach:
+          "Sort by start. Use a min-heap of end times. For each meeting: if the earliest-ending room is free (heap top ≤ current start), reuse it (pop and push new end). Otherwise open a new room (just push). Heap size = rooms needed.",
+        complexity: { time: "O(n log n)", space: "O(n)" },
+        code: `package main
+
+import (
+	"container/heap"
+	"fmt"
+	"sort"
+)
+
+type EndHeap []int
+func (h EndHeap) Len() int           { return len(h) }
+func (h EndHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h EndHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *EndHeap) Push(x any)        { *h = append(*h, x.(int)) }
+func (h *EndHeap) Pop() any          { old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x }
+
+func minMeetingRooms(intervals [][]int) int {
+	sort.Slice(intervals, func(i, j int) bool {
+		return intervals[i][0] < intervals[j][0]
+	})
+	h := &EndHeap{}
+	heap.Init(h)
+	for _, iv := range intervals {
+		if h.Len() > 0 && (*h)[0] <= iv[0] {
+			heap.Pop(h) // reuse room
+		}
+		heap.Push(h, iv[1])
+	}
+	return h.Len()
+}
+
+func main() {
+	fmt.Println(minMeetingRooms([][]int{{0,30},{5,10},{15,20}}))
+	// Output: 2
+
+	fmt.Println(minMeetingRooms([][]int{{7,10},{2,4}}))
+	// Output: 1
+}`,
+      },
+      {
+        id: "partition-labels",
+        title: "Partition Labels",
+        difficulty: "Medium",
+        leetcode: 763,
+        description:
+          "Partition string s into as many parts as possible so that each letter appears in at most one part. Return a list of the sizes of each part.",
+        examples: [
+          { input: 's = "ababcbacadefegdehijhklij"', output: "[9,7,8]", explanation: 'Parts: "ababcbaca", "defegde", "hijhklij"' },
+          { input: 's = "eccbbbbdec"',               output: "[10]",    explanation: "All characters must be in one partition" },
+        ],
+        approach:
+          "First pass: record the last index of each character. Second pass: track the furthest last index in the current partition. When the current index reaches that furthest point, the partition ends — record its size and start a new one.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func partitionLabels(s string) []int {
+	last := [26]int{}
+	for i, c := range s {
+		last[c-'a'] = i
+	}
+	result := []int{}
+	start, end := 0, 0
+	for i, c := range s {
+		if last[c-'a'] > end {
+			end = last[c-'a']
+		}
+		if i == end {
+			result = append(result, end-start+1)
+			start = end + 1
+		}
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(partitionLabels("ababcbacadefegdehijhklij"))
+	// Output: [9 7 8]
+
+	fmt.Println(partitionLabels("eccbbbbdec"))
+	// Output: [10]
+}`,
+      },
+      {
+        id: "jump-game-ii",
+        title: "Jump Game II",
+        difficulty: "Medium",
+        leetcode: 45,
+        description:
+          "Given an array nums where nums[i] is the maximum jump length at position i, return the minimum number of jumps to reach the last index. You can always reach the last index.",
+        examples: [
+          { input: "nums = [2,3,1,1,4]", output: "2", explanation: "Jump 1 to index 1 (3), then jump 3 to last index" },
+          { input: "nums = [2,3,0,1,4]", output: "2", explanation: "Jump to index 1, then jump 3 to last" },
+        ],
+        approach:
+          "Greedy interval approach: track the current reachable boundary and the farthest we can reach in the next jump. When we reach the current boundary, increment jumps and extend it to the farthest. Like a BFS level traversal.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func jump(nums []int) int {
+	jumps, curEnd, farthest := 0, 0, 0
+	for i := 0; i < len(nums)-1; i++ {
+		if i+nums[i] > farthest {
+			farthest = i + nums[i]
+		}
+		if i == curEnd {
+			jumps++
+			curEnd = farthest
+		}
+	}
+	return jumps
+}
+
+func main() {
+	fmt.Println(jump([]int{2, 3, 1, 1, 4}))
+	// Output: 2
+
+	fmt.Println(jump([]int{2, 3, 0, 1, 4}))
+	// Output: 2
+
+	fmt.Println(jump([]int{1, 1, 1, 1}))
+	// Output: 3
+}`,
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 14. Trie
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "trie",
+    icon: "🌲",
+    title: "Trie",
+    problems: [
+      {
+        id: "implement-trie",
+        title: "Implement Trie (Prefix Tree)",
+        difficulty: "Medium",
+        leetcode: 208,
+        description:
+          "Implement a trie with insert, search, and startsWith operations. search returns true if the word exists; startsWith returns true if any word has the given prefix.",
+        examples: [
+          { input: 'insert("apple"), search("apple"), search("app"), startsWith("app"), insert("app"), search("app")', output: "true, false, true, true", explanation: "apple exists; app alone doesn't until inserted" },
+        ],
+        approach:
+          "Each node has a 26-element children array and an isEnd flag. insert walks and creates nodes as needed, marking isEnd at the last character. search requires isEnd=true at the last character. startsWith only requires reaching the last character.",
+        complexity: { time: "O(L) per operation where L=word length", space: "O(L)" },
+        code: `package main
+
+import "fmt"
+
+type TrieNode struct {
+	children [26]*TrieNode
+	isEnd    bool
+}
+
+type Trie struct {
+	root *TrieNode
+}
+
+func NewTrie() Trie {
+	return Trie{root: &TrieNode{}}
+}
+
+func (t *Trie) Insert(word string) {
+	node := t.root
+	for _, c := range word {
+		i := c - 'a'
+		if node.children[i] == nil {
+			node.children[i] = &TrieNode{}
+		}
+		node = node.children[i]
+	}
+	node.isEnd = true
+}
+
+func (t *Trie) Search(word string) bool {
+	node := t.root
+	for _, c := range word {
+		i := c - 'a'
+		if node.children[i] == nil { return false }
+		node = node.children[i]
+	}
+	return node.isEnd
+}
+
+func (t *Trie) StartsWith(prefix string) bool {
+	node := t.root
+	for _, c := range prefix {
+		i := c - 'a'
+		if node.children[i] == nil { return false }
+		node = node.children[i]
+	}
+	return true
+}
+
+func main() {
+	trie := NewTrie()
+	trie.Insert("apple")
+	fmt.Println(trie.Search("apple"))    // Output: true
+	fmt.Println(trie.Search("app"))      // Output: false
+	fmt.Println(trie.StartsWith("app"))  // Output: true
+	trie.Insert("app")
+	fmt.Println(trie.Search("app"))      // Output: true
+}`,
+      },
+      {
+        id: "design-add-search-words",
+        title: "Design Add and Search Words Data Structure",
+        difficulty: "Medium",
+        leetcode: 211,
+        description:
+          "Design a data structure that supports addWord(word) and search(word) where search can use '.' as a wildcard matching any letter.",
+        examples: [
+          { input: 'addWord("bad"), addWord("dad"), addWord("mad"), search("pad"), search("bad"), search(".ad"), search("b..")', output: "false, true, true, true", explanation: '".ad" matches "bad","dad","mad"; "b.." matches "bad"' },
+        ],
+        approach:
+          "Trie with DFS for wildcards. addWord is standard trie insertion. search recursively walks the trie: on a normal character go to that child; on '.' recurse into all non-nil children. Return true if any path reaches isEnd.",
+        complexity: { time: "O(L) add, O(26^L) worst-case search with wildcards", space: "O(L)" },
+        code: `package main
+
+import "fmt"
+
+type WordNode struct {
+	children [26]*WordNode
+	isEnd    bool
+}
+
+type WordDictionary struct {
+	root *WordNode
+}
+
+func NewWordDictionary() WordDictionary {
+	return WordDictionary{root: &WordNode{}}
+}
+
+func (wd *WordDictionary) AddWord(word string) {
+	node := wd.root
+	for _, c := range word {
+		i := c - 'a'
+		if node.children[i] == nil {
+			node.children[i] = &WordNode{}
+		}
+		node = node.children[i]
+	}
+	node.isEnd = true
+}
+
+func (wd *WordDictionary) Search(word string) bool {
+	return dfs(wd.root, word, 0)
+}
+
+func dfs(node *WordNode, word string, idx int) bool {
+	if idx == len(word) { return node.isEnd }
+	c := word[idx]
+	if c == '.' {
+		for _, child := range node.children {
+			if child != nil && dfs(child, word, idx+1) { return true }
+		}
+		return false
+	}
+	child := node.children[c-'a']
+	return child != nil && dfs(child, word, idx+1)
+}
+
+func main() {
+	wd := NewWordDictionary()
+	wd.AddWord("bad"); wd.AddWord("dad"); wd.AddWord("mad")
+	fmt.Println(wd.Search("pad"))  // Output: false
+	fmt.Println(wd.Search("bad"))  // Output: true
+	fmt.Println(wd.Search(".ad"))  // Output: true
+	fmt.Println(wd.Search("b.."))  // Output: true
+}`,
+      },
+      {
+        id: "word-search-ii",
+        title: "Word Search II",
+        difficulty: "Hard",
+        leetcode: 212,
+        description:
+          "Given a board of characters and a list of words, return all words that exist in the board. Each letter cell can only be used once per word.",
+        examples: [
+          { input: 'board=[["o","a","a","n"],["e","t","a","e"],["i","h","k","r"],["i","f","l","v"]], words=["oath","pea","eat","rain"]', output: '["eat","oath"]', explanation: "Both words can be traced on the board" },
+        ],
+        approach:
+          "Build a trie from the word list. DFS from every board cell: at each step check if the current path exists in the trie. If a trie node's isEnd is set, record the word. Mark cells visited during DFS; restore on backtrack. Remove found words from the trie to avoid duplicates.",
+        complexity: { time: "O(m×n×4×3^(L-1))", space: "O(total chars)" },
+        code: `package main
+
+import "fmt"
+
+type WNode struct {
+	children [26]*WNode
+	word     string
+}
+
+func wordSearchII(board [][]byte, words []string) []string {
+	root := &WNode{}
+	for _, w := range words {
+		node := root
+		for _, c := range w {
+			i := c - 'a'
+			if node.children[i] == nil { node.children[i] = &WNode{} }
+			node = node.children[i]
+		}
+		node.word = w
+	}
+
+	m, n := len(board), len(board[0])
+	result := []string{}
+
+	var dfs func(node *WNode, r, c int)
+	dfs = func(node *WNode, r, c int) {
+		if r < 0 || r >= m || c < 0 || c >= n || board[r][c] == '#' { return }
+		ch := board[r][c]
+		next := node.children[ch-'a']
+		if next == nil { return }
+		if next.word != "" {
+			result = append(result, next.word)
+			next.word = "" // avoid duplicates
+		}
+		board[r][c] = '#'
+		dfs(next, r+1, c); dfs(next, r-1, c)
+		dfs(next, r, c+1); dfs(next, r, c-1)
+		board[r][c] = ch
+	}
+
+	for r := 0; r < m; r++ {
+		for c := 0; c < n; c++ {
+			dfs(root, r, c)
+		}
+	}
+	return result
+}
+
+func main() {
+	board := [][]byte{
+		{'o','a','a','n'},
+		{'e','t','a','e'},
+		{'i','h','k','r'},
+		{'i','f','l','v'},
+	}
+	fmt.Println(wordSearchII(board, []string{"oath","pea","eat","rain"}))
+	// Output: [eat oath]
+}`,
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 15. Greedy
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "greedy",
+    icon: "💰",
+    title: "Greedy",
+    problems: [
+      {
+        id: "gas-station",
+        title: "Gas Station",
+        difficulty: "Medium",
+        leetcode: 134,
+        description:
+          "There are n gas stations on a circle. Given gas[i] (fuel available) and cost[i] (fuel to travel to next station), return the starting station index from which you can complete the circuit, or -1 if impossible.",
+        examples: [
+          { input: "gas = [1,2,3,4,5], cost = [3,4,5,1,2]", output: "3", explanation: "Start at station 3 — tank never goes negative" },
+          { input: "gas = [2,3,4], cost = [3,4,3]",          output: "-1", explanation: "Cannot complete the circuit" },
+        ],
+        approach:
+          "If total gas < total cost, no solution exists. Otherwise a solution always exists. Greedily find the start: track running tank; whenever tank < 0, reset tank to 0 and move start to next station. The candidate start at the end is the answer.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func canCompleteCircuit(gas []int, cost []int) int {
+	totalGas, totalCost := 0, 0
+	tank, start := 0, 0
+	for i := range gas {
+		totalGas += gas[i]
+		totalCost += cost[i]
+		tank += gas[i] - cost[i]
+		if tank < 0 {
+			start = i + 1
+			tank = 0
+		}
+	}
+	if totalGas < totalCost { return -1 }
+	return start
+}
+
+func main() {
+	fmt.Println(canCompleteCircuit([]int{1,2,3,4,5}, []int{3,4,5,1,2}))
+	// Output: 3
+
+	fmt.Println(canCompleteCircuit([]int{2,3,4}, []int{3,4,3}))
+	// Output: -1
+}`,
+      },
+      {
+        id: "hand-of-straights",
+        title: "Hand of Straights",
+        difficulty: "Medium",
+        leetcode: 846,
+        description:
+          "Given an integer array hand and groupSize, return true if the cards can be rearranged into groups of groupSize consecutive cards.",
+        examples: [
+          { input: "hand = [1,2,3,6,2,3,4,7,8], groupSize = 3", output: "true",  explanation: "Groups: [1,2,3],[2,3,4],[6,7,8]" },
+          { input: "hand = [1,2,3,4,5], groupSize = 4",          output: "false", explanation: "Cannot form groups of 4" },
+        ],
+        approach:
+          "Count frequencies. Sort unique keys. For each key in sorted order, if its count > 0, try to form a group starting there — decrement counts for the next groupSize consecutive keys. If any required key has insufficient count, return false.",
+        complexity: { time: "O(n log n)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func isNStraightHand(hand []int, groupSize int) bool {
+	if len(hand)%groupSize != 0 { return false }
+	freq := map[int]int{}
+	for _, v := range hand { freq[v]++ }
+	keys := make([]int, 0, len(freq))
+	for k := range freq { keys = append(keys, k) }
+	sort.Ints(keys)
+	for _, k := range keys {
+		count := freq[k]
+		if count == 0 { continue }
+		for i := 0; i < groupSize; i++ {
+			freq[k+i] -= count
+			if freq[k+i] < 0 { return false }
+		}
+	}
+	return true
+}
+
+func main() {
+	fmt.Println(isNStraightHand([]int{1,2,3,6,2,3,4,7,8}, 3))
+	// Output: true
+
+	fmt.Println(isNStraightHand([]int{1,2,3,4,5}, 4))
+	// Output: false
+}`,
+      },
+      {
+        id: "minimum-number-of-arrows",
+        title: "Minimum Number of Arrows to Burst Balloons",
+        difficulty: "Medium",
+        leetcode: 452,
+        description:
+          "Balloons are represented by [xstart, xend]. An arrow shot at x bursts all balloons with xstart ≤ x ≤ xend. Return the minimum number of arrows needed to burst all balloons.",
+        examples: [
+          { input: "points = [[10,16],[2,8],[1,6],[7,12]]", output: "2", explanation: "Shoot at x=6 (bursts [2,8],[1,6]) and x=11 (bursts [10,16],[7,12])" },
+          { input: "points = [[1,2],[3,4],[5,6],[7,8]]",    output: "4", explanation: "No two balloons overlap" },
+        ],
+        approach:
+          "Sort by end. Greedily shoot at the end of the first balloon — it bursts all balloons that contain that point. Skip any balloon whose start ≤ current arrow position. Otherwise fire a new arrow at the next balloon's end.",
+        complexity: { time: "O(n log n)", space: "O(1)" },
+        code: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func findMinArrowShots(points [][]int) int {
+	sort.Slice(points, func(i, j int) bool {
+		return points[i][1] < points[j][1]
+	})
+	arrows := 1
+	arrowX := points[0][1]
+	for _, p := range points[1:] {
+		if p[0] > arrowX {
+			arrows++
+			arrowX = p[1]
+		}
+	}
+	return arrows
+}
+
+func main() {
+	fmt.Println(findMinArrowShots([][]int{{10,16},{2,8},{1,6},{7,12}}))
+	// Output: 2
+
+	fmt.Println(findMinArrowShots([][]int{{1,2},{3,4},{5,6},{7,8}}))
+	// Output: 4
+
+	fmt.Println(findMinArrowShots([][]int{{1,2},{2,3},{3,4},{4,5}}))
+	// Output: 2
+}`,
+      },
+      {
+        id: "valid-parenthesis-string",
+        title: "Valid Parenthesis String",
+        difficulty: "Medium",
+        leetcode: 678,
+        description:
+          "Given a string s containing '(', ')', and '*', where '*' can be '(', ')', or empty, return true if s is a valid parenthesis string.",
+        examples: [
+          { input: 's = "()"',  output: "true",  explanation: "Simple valid pair" },
+          { input: 's = "(*)"', output: "true",  explanation: '"*" acts as empty' },
+          { input: 's = "(*))', output: "true",  explanation: '"*" acts as "("' },
+        ],
+        approach:
+          "Track a range [lo, hi] for the possible number of unmatched '(' at each step. '(' → both increase by 1. ')' → both decrease by 1. '*' → lo-1, hi+1. Clamp lo to 0 (can't go negative). If hi < 0 at any point, invalid. Valid if lo == 0 at end.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func checkValidString(s string) bool {
+	lo, hi := 0, 0
+	for _, c := range s {
+		switch c {
+		case '(':
+			lo++; hi++
+		case ')':
+			lo--; hi--
+		case '*':
+			lo--; hi++
+		}
+		if hi < 0 { return false }
+		if lo < 0 { lo = 0 }
+	}
+	return lo == 0
+}
+
+func main() {
+	fmt.Println(checkValidString("()"))
+	// Output: true
+
+	fmt.Println(checkValidString("(*)"))
+	// Output: true
+
+	fmt.Println(checkValidString("(*))"))
+	// Output: true
+
+	fmt.Println(checkValidString("(((((*(()((((*((**(((()*(((((*()*)(*(()))(*((*((*(*((((()"))
+	// Output: true
+}`,
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 16. Bit Manipulation
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "bit-manipulation",
+    icon: "⚡",
+    title: "Bit Manipulation",
+    problems: [
+      {
+        id: "single-number",
+        title: "Single Number",
+        difficulty: "Easy",
+        leetcode: 136,
+        description:
+          "Given a non-empty array where every element appears twice except for one, find that single one. Must run in O(n) time and O(1) space.",
+        examples: [
+          { input: "nums = [2,2,1]",      output: "1", explanation: "1 appears once" },
+          { input: "nums = [4,1,2,1,2]",  output: "4", explanation: "4 appears once" },
+        ],
+        approach:
+          "XOR all elements. x XOR x = 0 (pairs cancel) and x XOR 0 = x (single survives). The result is the unique element. No extra space needed.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func singleNumber(nums []int) int {
+	result := 0
+	for _, n := range nums {
+		result ^= n
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(singleNumber([]int{2, 2, 1}))
+	// Output: 1
+
+	fmt.Println(singleNumber([]int{4, 1, 2, 1, 2}))
+	// Output: 4
+
+	fmt.Println(singleNumber([]int{1}))
+	// Output: 1
+}`,
+      },
+      {
+        id: "number-of-1-bits",
+        title: "Number of 1 Bits",
+        difficulty: "Easy",
+        leetcode: 191,
+        description:
+          "Given an unsigned 32-bit integer n (Hamming weight), return the number of '1' bits it has.",
+        examples: [
+          { input: "n = 00000000000000000000000000001011", output: "3", explanation: "Three 1-bits" },
+          { input: "n = 11111111111111111111111111111101", output: "31", explanation: "Thirty-one 1-bits" },
+        ],
+        approach:
+          "Brian Kernighan's trick: n & (n-1) clears the lowest set bit. Count how many times this can be done before n reaches 0. Each iteration removes exactly one 1-bit, so iterations = popcount.",
+        complexity: { time: "O(k) where k = number of 1-bits", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func hammingWeight(n uint32) int {
+	count := 0
+	for n != 0 {
+		n &= n - 1 // clear lowest set bit
+		count++
+	}
+	return count
+}
+
+func main() {
+	fmt.Println(hammingWeight(11))
+	// Output: 3  (1011 in binary)
+
+	fmt.Println(hammingWeight(128))
+	// Output: 1  (10000000 in binary)
+
+	fmt.Println(hammingWeight(^uint32(0)))
+	// Output: 32  (all ones)
+}`,
+      },
+      {
+        id: "counting-bits",
+        title: "Counting Bits",
+        difficulty: "Easy",
+        leetcode: 338,
+        description:
+          "Given an integer n, return an array ans of length n+1 where ans[i] is the number of 1's in the binary representation of i.",
+        examples: [
+          { input: "n = 2", output: "[0,1,1]", explanation: "0=0b0, 1=0b1, 2=0b10" },
+          { input: "n = 5", output: "[0,1,1,2,1,2]", explanation: "Popcount for 0 through 5" },
+        ],
+        approach:
+          "DP: ans[i] = ans[i>>1] + (i&1). Shifting right divides by 2 (removing last bit), and we add 1 if the last bit was set. This builds the answer in one pass without any bit-counting per number.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func countBits(n int) []int {
+	ans := make([]int, n+1)
+	for i := 1; i <= n; i++ {
+		ans[i] = ans[i>>1] + (i & 1)
+	}
+	return ans
+}
+
+func main() {
+	fmt.Println(countBits(2))
+	// Output: [0 1 1]
+
+	fmt.Println(countBits(5))
+	// Output: [0 1 1 2 1 2]
+
+	fmt.Println(countBits(8))
+	// Output: [0 1 1 2 1 2 2 3 1]
+}`,
+      },
+      {
+        id: "reverse-bits",
+        title: "Reverse Bits",
+        difficulty: "Easy",
+        leetcode: 190,
+        description:
+          "Reverse the bits of a given 32-bit unsigned integer.",
+        examples: [
+          { input: "n = 00000010100101000001111010011100", output: "964176192 (00111001011110000010100101000000)", explanation: "Bits reversed" },
+          { input: "n = 11111111111111111111111111111101", output: "3221225471", explanation: "All ones except bit 1" },
+        ],
+        approach:
+          "Iterate 32 times: shift result left, OR in the lowest bit of n (n&1), then shift n right. This moves bits one at a time from the LSB of n to the MSB of result.",
+        complexity: { time: "O(1) — fixed 32 iterations", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func reverseBits(num uint32) uint32 {
+	var result uint32
+	for i := 0; i < 32; i++ {
+		result = (result << 1) | (num & 1)
+		num >>= 1
+	}
+	return result
+}
+
+func main() {
+	fmt.Println(reverseBits(43261596))
+	// Output: 964176192
+
+	fmt.Println(reverseBits(4294967293))
+	// Output: 3221225471
+}`,
+      },
+      {
+        id: "missing-number",
+        title: "Missing Number",
+        difficulty: "Easy",
+        leetcode: 268,
+        description:
+          "Given an array containing n distinct numbers from [0, n], return the missing number.",
+        examples: [
+          { input: "nums = [3,0,1]",     output: "2", explanation: "2 is missing from [0,1,2,3]" },
+          { input: "nums = [0,1]",       output: "2", explanation: "2 is missing from [0,1,2]" },
+          { input: "nums = [9,6,4,2,3,5,7,0,1]", output: "8", explanation: "8 is missing" },
+        ],
+        approach:
+          "XOR approach: XOR all indices 0..n and all array values. Pairs cancel; the unpaired index is the missing number. Alternatively use Gauss formula: expected sum = n*(n+1)/2, missing = expected - actual sum.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func missingNumber(nums []int) int {
+	n := len(nums)
+	expected := n * (n + 1) / 2
+	actual := 0
+	for _, v := range nums { actual += v }
+	return expected - actual
+}
+
+func main() {
+	fmt.Println(missingNumber([]int{3, 0, 1}))
+	// Output: 2
+
+	fmt.Println(missingNumber([]int{0, 1}))
+	// Output: 2
+
+	fmt.Println(missingNumber([]int{9,6,4,2,3,5,7,0,1}))
+	// Output: 8
+}`,
+      },
+      {
+        id: "sum-of-two-integers",
+        title: "Sum of Two Integers",
+        difficulty: "Medium",
+        leetcode: 371,
+        description:
+          "Calculate the sum of two integers a and b without using the + or - operators.",
+        examples: [
+          { input: "a = 1, b = 2", output: "3",  explanation: "1 + 2 = 3 computed with bit ops" },
+          { input: "a = 2, b = 3", output: "5",  explanation: "2 + 3 = 5" },
+        ],
+        approach:
+          "Simulate binary addition: XOR gives the sum without carry; AND shifted left gives the carry. Repeat until carry is 0. In Go use uint32 to avoid issues with sign extension on negative numbers.",
+        complexity: { time: "O(1) — at most 32 iterations", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func getSum(a int, b int) int {
+	for b != 0 {
+		carry := uint32(a) & uint32(b)
+		a = int(uint32(a) ^ uint32(b))
+		b = int(carry << 1)
+	}
+	return a
+}
+
+func main() {
+	fmt.Println(getSum(1, 2))
+	// Output: 3
+
+	fmt.Println(getSum(2, 3))
+	// Output: 5
+
+	fmt.Println(getSum(-1, 1))
+	// Output: 0
+}`,
+      },
+      {
+        id: "power-of-two",
+        title: "Power of Two",
+        difficulty: "Easy",
+        leetcode: 231,
+        description:
+          "Given an integer n, return true if it is a power of two.",
+        examples: [
+          { input: "n = 1",  output: "true",  explanation: "2⁰ = 1" },
+          { input: "n = 16", output: "true",  explanation: "2⁴ = 16" },
+          { input: "n = 3",  output: "false", explanation: "3 is not a power of 2" },
+        ],
+        approach:
+          "A power of two has exactly one 1-bit set. The trick n & (n-1) clears the lowest set bit — if n > 0 and the result is 0, exactly one bit was set, so n is a power of two.",
+        complexity: { time: "O(1)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func isPowerOfTwo(n int) bool {
+	return n > 0 && (n&(n-1)) == 0
+}
+
+func main() {
+	fmt.Println(isPowerOfTwo(1))
+	// Output: true
+
+	fmt.Println(isPowerOfTwo(16))
+	// Output: true
+
+	fmt.Println(isPowerOfTwo(3))
+	// Output: false
+
+	fmt.Println(isPowerOfTwo(0))
+	// Output: false
+}`,
+      },
     ],
   },
 ];
