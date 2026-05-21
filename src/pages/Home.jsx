@@ -60,6 +60,21 @@ export default function Home() {
           </p>
         </div>
       </div>
+
+      {/* ── Layers of System Design banner ── */}
+      <div className="home-layers-banner">
+        <div className="home-layers-left">
+          <p className="home-layers-eyebrow">Complete Study Notes</p>
+          <h2 className="home-layers-title">Layers of System Design</h2>
+          <p className="home-layers-sub">
+            35 topics · 7 layers · WhatsApp, Kafka, LLMs, CAP Theorem, Vector DBs &amp; more — from surface to core
+          </p>
+        </div>
+        <Link to="/layers" className="home-layers-btn">
+          Open Notes →
+        </Link>
+      </div>
+
     </div>
   );
 }

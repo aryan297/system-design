@@ -4,6 +4,7 @@ import Home from "./pages/Home";
 import SystemHLD from "./pages/SystemHLD";
 import SystemLLD from "./pages/SystemLLD";
 import DSAPage from "./pages/DSAPage";
+import LayersPage from "./pages/LayersPage";
 import { DSA_CATEGORIES } from "./data/dsa";
 import "./styles/globals.css";
 
@@ -16,6 +17,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Home />} />
+          {/* Layers of System Design */}
+          <Route path="layers" element={<LayersPage />} />
           {/* Generic routes — works for any systemId in the registry */}
           <Route path=":systemId/hld" element={<SystemHLD />} />
           <Route path=":systemId/lld" element={<SystemLLD />} />

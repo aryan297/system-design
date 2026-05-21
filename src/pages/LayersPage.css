@@ -1,0 +1,376 @@
+/* ── Page shell ─────────────────────────────────────────────────────────── */
+.lp-page {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.lp-header {
+  padding: 56px 24px 44px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  background: radial-gradient(ellipse 70% 50% at 50% -10%, rgba(245,200,66,0.10) 0%, transparent 70%);
+}
+
+.lp-eyebrow {
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-muted, #6b6969);
+  margin-bottom: 14px;
+}
+
+.lp-title {
+  font-size: clamp(2rem, 6vw, 3.8rem);
+  font-weight: 600;
+  line-height: 1.1;
+  color: #f5c842;
+  letter-spacing: -0.02em;
+  margin-bottom: 12px;
+}
+
+.lp-title em {
+  font-style: italic;
+  color: var(--text);
+}
+
+.lp-subtitle {
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
+  color: var(--text-muted, #6b6969);
+  letter-spacing: 0.06em;
+}
+
+/* ── Nav pills ───────────────────────────────────────────────────────────── */
+.lp-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lp-nav-pill {
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 5px 14px;
+  border-radius: 100px;
+  border: 1px solid;
+  text-decoration: none;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.lp-nav-pill:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ── Controls ────────────────────────────────────────────────────────────── */
+.lp-controls {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 32px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lp-toggle-all {
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted, #6b6969);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.lp-toggle-all:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Main ────────────────────────────────────────────────────────────────── */
+.lp-main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 24px 96px;
+}
+
+/* ── Layer section ───────────────────────────────────────────────────────── */
+.lp-layer {
+  margin-top: 40px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.lp-layer-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 16px 0;
+  text-align: left;
+}
+
+.lp-layer-header:hover .lp-layer-title {
+  opacity: 0.85;
+}
+
+.lp-layer-num {
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  color: var(--text-muted, #6b6969);
+  flex-shrink: 0;
+}
+
+.lp-layer-title {
+  font-size: 1.45rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  flex: 1;
+  transition: opacity 0.15s;
+}
+
+.lp-layer-count {
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  color: var(--text-muted, #6b6969);
+  letter-spacing: 0.08em;
+}
+
+.lp-layer-chevron {
+  font-size: 18px;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+
+.lp-layer-body {
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 12px;
+}
+
+/* ── Topic card ──────────────────────────────────────────────────────────── */
+.lp-topic {
+  background: var(--surface, #141416);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 26px;
+  transition: border-color 0.18s;
+}
+
+.lp-topic:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.lp-topic-tag {
+  font-family: "DM Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 100px;
+  display: inline-block;
+  margin-bottom: 10px;
+}
+
+.lp-topic-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  letter-spacing: -0.01em;
+}
+
+.lp-topic-divider {
+  width: 36px;
+  height: 2px;
+  border-radius: 2px;
+  margin: 8px 0 12px;
+  opacity: 0.5;
+}
+
+.lp-topic-desc {
+  color: #a8a6a3;
+  font-size: 14.5px;
+  line-height: 1.65;
+  margin-bottom: 14px;
+}
+
+/* ── Concept grid ────────────────────────────────────────────────────────── */
+.lp-concept-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 560px) {
+  .lp-concept-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.lp-concept-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+
+.lp-concept-item strong {
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  display: block;
+  margin-bottom: 3px;
+}
+
+.lp-concept-item span {
+  font-size: 13px;
+  color: #8a8886;
+  line-height: 1.5;
+}
+
+/* ── Flow diagram ────────────────────────────────────────────────────────── */
+.lp-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  margin-bottom: 4px;
+}
+
+.lp-flow-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lp-flow-box {
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.lp-flow-arrow {
+  color: var(--text-muted, #6b6969);
+  font-size: 14px;
+}
+
+/* ── Key points ──────────────────────────────────────────────────────────── */
+.lp-points {
+  list-style: none;
+  padding: 0;
+  margin-top: 14px;
+}
+
+.lp-points li {
+  padding: 6px 0 6px 20px;
+  position: relative;
+  font-size: 13.5px;
+  color: #a8a6a3;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  line-height: 1.6;
+}
+
+.lp-points li:last-child {
+  border-bottom: none;
+}
+
+.lp-points li::before {
+  content: "›";
+  position: absolute;
+  left: 5px;
+  color: var(--text-muted, #6b6969);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* ── Deep Dive ───────────────────────────────────────────────────────────── */
+.lp-deepdive {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.lp-deepdive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: 1px solid;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-family: "DM Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.lp-deepdive-toggle:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lp-deepdive-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.lp-deepdive-count {
+  font-size: 9px;
+  opacity: 0.55;
+  margin-left: 2px;
+}
+
+.lp-deepdive-body {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lp-deepdive-section {
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 8px;
+  border-left: 2px solid;
+  border-left-color: inherit;
+}
+
+.lp-deepdive-heading {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: "DM Mono", monospace;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.lp-deepdive-body-text {
+  font-size: 13.5px;
+  color: #9a9896;
+  line-height: 1.72;
+  margin: 0;
+}

@@ -1,15 +1,18 @@
 import { useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, Link } from "react-router-dom";
 import { SYSTEMS } from "../data/systems";
 import { DSA_CATEGORIES } from "../data/dsa";
+import { DESIGN_LAYERS } from "../data/layers";
 import gopherImg from "../assets/gopher.png";
 import "./Sidebar.css";
 
 export default function Sidebar({ open, onClose }) {
   const location = useLocation();
   const inDSA = location.pathname.startsWith("/dsa");
-  const [systemsOpen, setSystemsOpen] = useState(!inDSA);
+  const inLayers = location.pathname === "/layers";
+  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers);
   const [dsaOpen, setDsaOpen] = useState(inDSA);
+  const [layersOpen, setLayersOpen] = useState(inLayers);
 
   return (
     <aside className={`sidebar ${open ? "sidebar--open" : ""}`}>
@@ -111,6 +114,55 @@ export default function Sidebar({ open, onClose }) {
             </div>
           );
         })}
+
+        {/* ── Layers of System Design ── */}
+        <button
+          className="sidebar-section-toggle"
+          style={{ marginTop: "10px" }}
+          onClick={() => setLayersOpen((v) => !v)}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: "0.85rem" }}>🗂️</span>
+            SD Notes
+          </span>
+          <span className="sidebar-section-chevron">{layersOpen ? "▾" : "▸"}</span>
+        </button>
+
+        {layersOpen && (
+          <>
+            <div className="sidebar-system">
+              <NavLink
+                to="/layers"
+                className={({ isActive: a }) => `sidebar-system-link ${a ? "active" : ""}`}
+              >
+                <span className="sidebar-system-icon">📖</span>
+                <span className="sidebar-system-name">All Layers</span>
+              </NavLink>
+            </div>
+
+            {inLayers && (
+              <div className="sidebar-sub">
+                {DESIGN_LAYERS.map((layer) => (
+                  <a
+                    key={layer.id}
+                    href={`#${layer.id}`}
+                    className="sidebar-sub-link"
+                    style={{ color: layer.color }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      document.getElementById(layer.id)?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  >
+                    <span style={{ fontFamily: "DM Mono, monospace", fontSize: "0.6rem", minWidth: 16, opacity: 0.6 }}>
+                      {layer.num}
+                    </span>
+                    {layer.title}
+                  </a>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </nav>
 
 

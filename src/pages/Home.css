@@ -193,3 +193,68 @@
 .lld-link:hover { background: rgba(229,9,20,0.2); text-decoration: none; }
 
 .system-card-link-arrow { font-size: 0.9rem; }
+
+/* ── Layers banner ───────────────────────────────────────────────────────── */
+.home-layers-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 32px;
+  padding: 28px 32px;
+  background: linear-gradient(135deg, rgba(245,200,66,0.07) 0%, rgba(192,132,252,0.07) 100%);
+  border: 1px solid rgba(245,200,66,0.2);
+  border-radius: var(--radius-lg);
+  flex-wrap: wrap;
+}
+
+.home-layers-eyebrow {
+  font-family: "DM Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #f5c842;
+  margin-bottom: 6px;
+}
+
+.home-layers-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  margin-bottom: 6px;
+}
+
+.home-layers-sub {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  max-width: 480px;
+}
+
+.home-layers-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 11px 22px;
+  background: rgba(245,200,66,0.12);
+  border: 1px solid rgba(245,200,66,0.35);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #f5c842;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+
+.home-layers-btn:hover {
+  background: rgba(245,200,66,0.2);
+  border-color: rgba(245,200,66,0.55);
+  text-decoration: none;
+}
+
+@media (max-width: 600px) {
+  .home-layers-banner { flex-direction: column; align-items: flex-start; }
+}

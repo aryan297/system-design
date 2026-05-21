@@ -8,7 +8,12 @@
       "Bash(kill 54244)",
       "Bash(npm run *)",
       "Read(//tmp/**)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(/usr/local/bin/npm run *)",
+      "Bash(node_modules/.bin/vite build *)",
+      "Bash(ls /opt/homebrew/bin/node /usr/bin/node ~/.nvm/versions/node/*/bin/node 2>/dev/null | head -3; ls ~/.nvm/versions/node/ 2>/dev/null)",
+      "Read(//opt/homebrew/Cellar/node/25.2.1/bin/**)",
+      "Bash(~/.nvm/versions/node/v22.21.1/bin/node node_modules/.bin/vite build)"
     ]
   }
 }
