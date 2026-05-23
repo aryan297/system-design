@@ -306,6 +306,65 @@
   line-height: 1.6;
 }
 
+/* ── Interview Brief ─────────────────────────────────────────────────────── */
+.lp-brief {
+  margin-top: 16px;
+  border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lp-brief-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lp-brief-label {
+  font-family: "DM Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.lp-brief-text {
+  font-size: 13px;
+  color: #a8a6a3;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.lp-brief-example {
+  background: rgba(20, 184, 166, 0.05);
+  border: 1px solid rgba(20, 184, 166, 0.15);
+  border-radius: 8px;
+  padding: 10px 13px;
+}
+
+.lp-brief-example .lp-brief-text {
+  font-family: "DM Mono", monospace;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.lp-brief-interview {
+  background: rgba(245, 200, 66, 0.05);
+  border: 1px solid rgba(245, 200, 66, 0.15);
+  border-radius: 8px;
+  padding: 10px 13px;
+}
+
+.lp-brief-interview .lp-brief-label {
+  color: #f5c842;
+}
+
+.lp-brief-interview .lp-brief-text {
+  font-style: italic;
+}
+
 /* ── Deep Dive ───────────────────────────────────────────────────────────── */
 .lp-deepdive {
   margin-top: 16px;

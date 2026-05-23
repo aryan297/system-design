@@ -3,6 +3,7 @@ import { NavLink, useLocation, Link } from "react-router-dom";
 import { SYSTEMS } from "../data/systems";
 import { DSA_CATEGORIES } from "../data/dsa";
 import { DESIGN_LAYERS } from "../data/layers";
+import { SD_CATEGORIES } from "../data/systemDesignEncyclopedia";
 import gopherImg from "../assets/gopher.png";
 import "./Sidebar.css";
 
@@ -10,9 +11,11 @@ export default function Sidebar({ open, onClose }) {
   const location = useLocation();
   const inDSA = location.pathname.startsWith("/dsa");
   const inLayers = location.pathname === "/layers";
-  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers);
+  const inEncyclopedia = location.pathname === "/encyclopedia";
+  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers && !inEncyclopedia);
   const [dsaOpen, setDsaOpen] = useState(inDSA);
   const [layersOpen, setLayersOpen] = useState(inLayers);
+  const [encOpen, setEncOpen] = useState(inEncyclopedia);
 
   return (
     <aside className={`sidebar ${open ? "sidebar--open" : ""}`}>
@@ -123,7 +126,7 @@ export default function Sidebar({ open, onClose }) {
         >
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: "0.85rem" }}>🗂️</span>
-            SD Notes
+            SDE Notes
           </span>
           <span className="sidebar-section-chevron">{layersOpen ? "▾" : "▸"}</span>
         </button>
@@ -157,6 +160,54 @@ export default function Sidebar({ open, onClose }) {
                       {layer.num}
                     </span>
                     {layer.title}
+                  </a>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+        {/* ── SD Encyclopedia ── */}
+        <button
+          className="sidebar-section-toggle"
+          style={{ marginTop: "10px" }}
+          onClick={() => setEncOpen((v) => !v)}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: "0.85rem" }}>📚</span>
+            Design Basics
+          </span>
+          <span className="sidebar-section-chevron">{encOpen ? "▾" : "▸"}</span>
+        </button>
+
+        {encOpen && (
+          <>
+            <div className="sidebar-system">
+              <NavLink
+                to="/encyclopedia"
+                className={({ isActive: a }) => `sidebar-system-link ${a ? "active" : ""}`}
+              >
+                <span className="sidebar-system-icon">🔍</span>
+                <span className="sidebar-system-name">SDE Encyclopedia</span>
+              </NavLink>
+            </div>
+
+            {inEncyclopedia && (
+              <div className="sidebar-sub">
+                {SD_CATEGORIES.map((cat) => (
+                  <a
+                    key={cat.id}
+                    href={`#${cat.id}`}
+                    className="sidebar-sub-link"
+                    style={{ color: cat.color }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      document.getElementById(cat.id)?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  >
+                    <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "0.6rem", minWidth: 16, opacity: 0.6 }}>
+                      {cat.num}
+                    </span>
+                    {cat.title}
                   </a>
                 ))}
               </div>

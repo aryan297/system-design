@@ -27,6 +27,13 @@ export const DESIGN_LAYERS = [
           "Read receipts via ACK messages back to sender",
           "Group messaging: server fans out to N members individually",
         ],
+        brief: {
+          what: "Real-time messaging for 2B+ users built on Ejabberd (Erlang/OTP) using XMPP. Each device holds a persistent TCP connection; messages are durably queued for offline users.",
+          why: "Tests your knowledge of persistent connections vs polling, E2E encryption, offline delivery, and media decoupling — core themes in any chat-at-scale design.",
+          how: "Client opens TCP to Ejabberd → message stored server-side until recipient ACKs → ACK triggers delivery event → read receipt sent back to sender. Media goes to CDN; only the URL is sent via the chat server.",
+          tradeoffs: "Persistent TCP scales well with Erlang green threads but complicates NAT/firewall traversal. E2E encryption prevents server-side moderation. Server-side message queue is bounded — very long offline periods may drop messages.",
+          interview: "Say: 'Ejabberd's actor model spawns one lightweight process per connection, so millions of users share a small server footprint. Media never travels through the chat server — only an encrypted URL does.'",
+        },
       },
       {
         id: "reddit",
@@ -46,6 +53,13 @@ export const DESIGN_LAYERS = [
           "Subreddit fan-out: popular posts pushed to subscriber feeds",
           "PostgreSQL for posts, Cassandra for activity logs",
         ],
+        brief: {
+          what: "Link aggregation + threaded discussion platform. Key systems: hot-score ranking, pre-computed Redis feeds, adjacency-list comment trees, and Elasticsearch full-text search.",
+          why: "Classic feed design question — ranking algorithms, fan-out strategies, nested comment storage, and eventual consistency on vote counters all appear in senior interviews.",
+          how: "Post submitted → hot score computed (log(votes) + time decay) → pushed to subreddit Redis sorted set → fan-out to subscriber feeds. Comments stored as adjacency list; closure table for O(1) subtree fetches.",
+          tradeoffs: "Pre-computed feeds are fast but ~seconds stale. Vote counts are approximate (eventually consistent) — trade accuracy for write throughput. Full fan-out to all subscriber feeds is expensive for mega-subreddits.",
+          interview: "Say: 'Reddit's hot score uses log₁₀ so 10K votes is only slightly better than 1K — prevents old viral posts dominating. Vote counts are eventually consistent by design, not a bug.'",
+        },
       },
       {
         id: "airbnb",
@@ -65,6 +79,13 @@ export const DESIGN_LAYERS = [
           "Review system uses trust score to prevent fraud",
           "Images stored on S3 + CDN; perceptual hashing for duplicates",
         ],
+        brief: {
+          what: "Two-sided marketplace connecting hosts and guests. Core systems: geospatial Elasticsearch search, bitset availability calendar, optimistic-lock bookings, and deferred payment capture.",
+          why: "Marketplace design tests two-sided system thinking: availability conflicts, double-booking prevention, geo search, dynamic pricing, and payment hold/release flows.",
+          how: "Search → Elasticsearch geo_distance filter → availability check (Redis bitset per listing, 1 bit/day) → reserve with optimistic lock (version column) → authorise payment → release to host post-check-in.",
+          tradeoffs: "Optimistic locking avoids global row locks but causes retry UX on conflicts. ES geo index may lag DB by seconds. Bitset calendar is O(1) but requires migration for multi-night queries spanning months.",
+          interview: "Say: 'Double-booking uses optimistic locking — two users read version=7, only the first UPDATE WHERE version=7 succeeds; the second gets 0 rows updated and is shown a conflict.'",
+        },
       },
       {
         id: "pastebin",
@@ -80,6 +101,13 @@ export const DESIGN_LAYERS = [
           "Content stored in S3/object storage, metadata in SQL",
           "TTL index for auto-expiry; CDN cache for popular pastes",
         ],
+        brief: {
+          what: "URL-shortened text blob service. Write-once, read-many. Core design: key generation service (KGS), object storage for blobs, SQL for metadata, CDN + Redis LRU for reads.",
+          why: "Canonical beginner system design question covering unique key generation, collision avoidance, storage tiering, expiry, and the read-heavy caching pattern.",
+          how: "KGS pre-generates base62 keys offline → on paste create, atomically move key from unused→used pool → store blob in S3 → metadata (key, TTL, owner) in MySQL → Redis LRU caches hot pastes → CDN serves top 1%.",
+          tradeoffs: "KGS is a single point of failure (use master+standby). 301 redirect caches destination in browser (no analytics); 302 forces server hit (enables click tracking). S3 costs more than raw disk but is infinitely scalable.",
+          interview: "Say: 'The KGS pattern solves race conditions — keys are pre-generated offline and claimed atomically, so two concurrent writes never get the same key.'",
+        },
       },
       {
         id: "bluesky",
@@ -99,6 +127,13 @@ export const DESIGN_LAYERS = [
           "Content-addressed records using CIDs (like IPFS)",
           "AppViews aggregate + index data from multiple PDSes",
         ],
+        brief: {
+          what: "Federated social network on AT Protocol. Users own their data on a Personal Data Server (PDS); identity is a portable DID; a global Firehose streams all activity to AppView indexers.",
+          why: "Tests federated/decentralized architecture thinking — data portability, content addressing, protocol design, and the trade-offs between centralized vs federated moderation.",
+          how: "User posts to their PDS → PDS emits record to Firehose → AppViews consume Firehose and build indexed feeds/search → client queries AppView, not PDS directly. DID resolves to current PDS location, enabling server migration.",
+          tradeoffs: "Decentralization gives portability but complicates moderation (no central authority). Firehose is a single relay bottleneck. CID-addressed records are tamper-evident but require tombstones for deletes.",
+          interview: "Say: 'AT Protocol's key innovation is the DID — your identity is portable. Moving from one PDS to another is just a DID document update; followers' clients auto-resolve the new address.'",
+        },
       },
     ],
   },
@@ -131,6 +166,13 @@ export const DESIGN_LAYERS = [
           "View counts use approximate counters (HyperLogLog)",
           "Comment system backed by Spanner (globally distributed SQL)",
         ],
+        brief: {
+          what: "Video platform ingesting 500 hrs/min. Key systems: async transcoding pipeline, DASH/HLS adaptive bitrate, Google Open Connect CDN, and a two-tower recommendation neural network.",
+          why: "Video design is a must-know — covers chunked upload, codec ladders, adaptive streaming, CDN edge serving, and approximate view counting. Appears in Netflix, YouTube, and video-at-scale questions.",
+          how: "Upload → GCS raw storage → transcoding jobs produce codec ladder (H.264/VP9/AV1 at each resolution) → segments stored in CDN. ABR player picks quality every 2–10 s based on buffer health. Recommendation: candidate gen (millions→hundreds) → ranking model (hundreds→top 20).",
+          tradeoffs: "AV1 saves 30% bandwidth but is 50× slower to encode — encode lower qualities first for fast availability. Open Connect CDN eliminates transit cost but requires ISP partnerships. Approximate view counts (HyperLogLog) trade exactness for O(1) updates at scale.",
+          interview: "Say: 'YouTube encodes a codec ladder in parallel — lower resolutions first so videos are watchable within minutes. The Open Connect appliances sit inside ISPs; your player never hits the public internet.'",
+        },
       },
       {
         id: "uber-eta",
@@ -147,6 +189,13 @@ export const DESIGN_LAYERS = [
           "H3 hexagonal grid for spatial indexing of supply/demand",
           "Surge pricing triggers when supply < demand in a hexagon",
         ],
+        brief: {
+          what: "ETA = graph routing (Dijkstra/A*) on a real-time weighted road graph + ML correction layer. Driver GPS pings every 4s update edge weights; H3 hexagonal grid powers surge pricing.",
+          why: "Geo + routing system design is common at Uber, Lyft, DoorDash. Tests graph algorithms, real-time data pipelines, spatial indexing, and how ML layers improve algorithmic outputs.",
+          how: "GPS pings → Kafka → streaming job updates road graph edge weights (blended real-time + historical). On ride request: A* routing on graph → ML gradient-boost model corrects for signals/weather/events → ETA returned in <100ms.",
+          tradeoffs: "Pure Dijkstra underestimates by 15–20% (ignores signals, turn delays). ML correction fixes this but adds model serving latency. H3 hexagons have uniform area unlike geohash squares — better for demand heat maps near poles.",
+          interview: "Say: 'Edge weights blend real-time speed (from live GPS pings) with historical median for that road segment at that time-of-day — one slow driver doesn't skew the whole segment.'",
+        },
       },
       {
         id: "url-shortener",
@@ -167,6 +216,13 @@ export const DESIGN_LAYERS = [
           "Custom aliases: check uniqueness before storing",
           "Analytics: Kafka stream → clickstream aggregation",
         ],
+        brief: {
+          what: "Maps long URLs to 6–8 char base62 aliases. Extremely read-heavy (10:1 read/write). Key design decisions: key generation, collision avoidance, redirect type, and read-path caching.",
+          why: "The most frequently asked beginner system design question — covers unique ID generation, caching strategy, storage choice, and the 301 vs 302 business decision.",
+          how: "Auto-increment counter → base62 encode (no collision) → store in Cassandra. Read: CDN → Redis LRU → Cassandra. Respond with 302 redirect. Analytics events written async to Kafka.",
+          tradeoffs: "Counter-based encoding is sequential (enumerable, less private) vs random key (private but needs collision check). 301 reduces server load but kills analytics. Cassandra is write-optimised but eventual consistency means a fresh URL may 404 briefly on non-primary replicas.",
+          interview: "Say: '62⁷ = 3.5 trillion keys — at 100M URLs/day that's 95 years of capacity. I'd use a counter-based base62 encoding — deterministic, no collisions, no uniqueness check needed.'",
+        },
       },
       {
         id: "twitter-timeline",
@@ -186,6 +242,13 @@ export const DESIGN_LAYERS = [
           "Ranking layer re-scores timeline before serving (ML model)",
           "Notifications via separate Kafka topic",
         ],
+        brief: {
+          what: "Hybrid fan-out system: push model (write tweet IDs to all follower Redis sorted sets) for regular users; pull model (K-way merge at read time) for celebrities with >10K followers.",
+          why: "The canonical feed design question. Fan-out on write vs read is the most important trade-off to understand for any social feed — Instagram, Facebook News Feed, Twitter all use variants of this.",
+          how: "Tweet created → stored in tweet DB (tweet content, once) → fan-out worker writes tweet_id to each follower's Redis ZSET (scored by timestamp). Celebrities (>10K followers) are excluded from push — their tweets are merged at read time using K-way sorted merge.",
+          tradeoffs: "Push model: O(followers) writes per tweet — @elonmusk's 150M followers would take minutes to fan out. Pull model: O(following) reads per page load — slower reads but instant writes. Hybrid balances both at the cost of complexity.",
+          interview: "Say: 'Timelines store only tweet IDs (8 bytes each), not content. The tweet content lives once in the tweet store. This means edit/delete touches one row, not 150M timeline entries.'",
+        },
       },
       {
         id: "nginx",
@@ -206,6 +269,13 @@ export const DESIGN_LAYERS = [
           "Gzip compression before sending to client",
           "Config: server blocks, location blocks, upstream blocks",
         ],
+        brief: {
+          what: "Event-driven async web server/reverse proxy. One worker process per CPU core; each worker uses epoll (Linux) to handle thousands of concurrent connections without blocking threads.",
+          why: "Understanding why Nginx outperforms Apache at high concurrency (event loop vs thread-per-connection) is a foundational systems question. Also covers SSL termination, rate limiting, and load balancing patterns.",
+          how: "Master process spawns N workers (one/core). Each worker calls epoll_wait() → kernel returns ready FDs → process I/O synchronously → loop. No context switches. Upstream keepalive pool reuses TCP connections to backends, avoiding handshake overhead.",
+          tradeoffs: "Single-threaded worker means one blocking operation stalls all connections on that worker — avoid slow upstream calls. Upstream keepalive pool saves ~50ms TLS handshake per request but pools idle connections. Rate limiting via shared memory zone works per-server but not across multiple Nginx instances without Redis.",
+          interview: "Say: 'Apache prefork creates one OS thread per connection — at 10K connections that's 20GB of stack RAM. Nginx uses one epoll event loop per CPU core — zero threads, zero context switches, same throughput.'",
+        },
       },
     ],
   },
@@ -239,6 +309,13 @@ export const DESIGN_LAYERS = [
           "Exactly-once semantics via idempotent producer + transactions",
           "Log compaction: keep only latest value per key",
         ],
+        brief: {
+          what: "Distributed append-only event log. Producers write to topic partitions; consumers read by offset in a consumer group. Durable, replayable, and horizontally scalable.",
+          why: "Kafka is the backbone of virtually every large-scale event-driven system — appears in Uber, Netflix, LinkedIn, Stripe designs. Must-know for async processing, event sourcing, and stream processing questions.",
+          how: "Producer hashes message key → partition number → appends to leader's log → ISR replicas acknowledge (acks=all for durability). Consumer group distributes partitions among members; each partition consumed by exactly one member. Offsets committed after processing.",
+          tradeoffs: "More partitions = more parallelism but more ZooKeeper/KRaft metadata overhead. acks=all adds replica write latency. Exactly-once semantics requires idempotent producer + transactional consumer, adding complexity. Partition count is the hard ceiling on consumer group parallelism.",
+          interview: "Say: 'Partition count is the maximum parallelism ceiling — 12 partitions, 4 consumers = 3 partitions each. Adding a 5th consumer leaves one idle. Design partition count based on your peak consumer scaling target.'",
+        },
       },
       {
         id: "google-search",
@@ -256,6 +333,13 @@ export const DESIGN_LAYERS = [
           "BERT/MUM models for semantic understanding of query",
           "Bigtable stores crawled pages; GFS stores index shards",
         ],
+        brief: {
+          what: "Web search engine: crawler → HTML parser → inverted index builder → multi-signal ranker. Index maps word → posting list of (docID, frequency, positions). PageRank scores pages by inbound link quality.",
+          why: "Search engine design tests distributed crawling, inverted index construction, ranking algorithms, and semantic understanding — concepts directly applicable to internal search, e-commerce search, and Elasticsearch-based systems.",
+          how: "Googlebot crawls → HTML parsed → text tokenized → words added to inverted index shards (partitioned by word hash). Query: spell-correct → tokenize → fetch posting lists from index shards in parallel → intersect/rank → BERT re-rank for semantics → snippets generated → results served.",
+          tradeoffs: "Inverted index is O(docs × terms) to build but O(log N) to query. PageRank requires global graph computation (iterative, slow). BERT adds semantic accuracy but costs GPU inference time per query. Freshness vs crawl cost: re-crawling every page frequently is expensive.",
+          interview: "Say: 'Inverted index maps each word to a posting list — sorted array of doc IDs. AND query = intersection; OR query = union. Position lists enable phrase matching. Index is sharded by word hash across thousands of machines.'",
+        },
       },
       {
         id: "airtags",
@@ -275,6 +359,13 @@ export const DESIGN_LAYERS = [
           "Anti-stalking: alerts if unknown AirTag travels with you",
           "Offline finding: works without cellular via BLE mesh",
         ],
+        brief: {
+          what: "Crowdsourced Bluetooth tracker using 1B+ Apple devices as silent relays. AirTag broadcasts BLE; nearby iPhones upload encrypted location reports. Only the owner can decrypt them.",
+          why: "Tests privacy-preserving system design, cryptographic key rotation, IoT at scale, and the challenge of building location sharing without a central authority seeing any data.",
+          how: "AirTag broadcasts BLE advertisement every ~2s. Nearby iPhone detects it → encrypts AirTag's location with AirTag's current public key → uploads ciphertext to Apple anonymously. Owner's devices derive the private key schedule and decrypt. Public key rotates every 15 min to prevent third-party tracking.",
+          tradeoffs: "Key rotation prevents tracking by third parties but requires the owner's devices to track which public key was active at each time. Apple receives millions of encrypted location blobs but cannot read any — privacy is mathematically guaranteed, not policy-based.",
+          interview: "Say: 'The rotating public key scheme is the core privacy innovation. Fixed identifiers would let any Bluetooth scanner track the device — rotating keys every 15 minutes makes consecutive reports unlinkable to third parties.'",
+        },
       },
       {
         id: "amazon-s3",
@@ -295,6 +386,13 @@ export const DESIGN_LAYERS = [
           "S3 Versioning — keeps history of every object version",
           "Event notifications — Lambda / SQS / SNS on object changes",
         ],
+        brief: {
+          what: "Infinitely scalable object store — key/value blob storage with 11 nines durability. Reed-Solomon erasure coding spreads data across ≥3 AZs. Strong read-after-write consistency since 2020.",
+          why: "S3 is the default answer for unstructured data in any system design — images, videos, backups, logs. Tests your understanding of durability vs availability, storage tiering, presigned URLs, and multipart upload.",
+          how: "PUT: object split into chunks → erasure coded (6 data + 3 parity) → distributed across AZs → metadata committed → 200 OK returned. GET: metadata lookup → fetch chunks from AZs → reconstruct → stream. Lifecycle policies auto-tier from Standard → IA → Glacier based on last-access time.",
+          tradeoffs: "Erasure coding (1.5× overhead) vs full replication (3× overhead) — S3 uses erasure coding. Pre-2020 eventual consistency caused 404 on freshly uploaded objects; now strong. Glacier saves 10× cost but has 3–12h retrieval time — useless for live traffic.",
+          interview: "Say: 'Presigned URLs are the clean pattern for user-generated uploads — never proxy files through your app server. Give the browser a time-limited signed URL and let it upload directly to S3.'",
+        },
       },
       {
         id: "slack",
@@ -314,6 +412,13 @@ export const DESIGN_LAYERS = [
           "Flannel: Slack's channel membership service backed by MySQL",
           "File uploads go to S3, URL sent as message attachment",
         ],
+        brief: {
+          what: "Team messaging with real-time WebSocket delivery, sharded MySQL message store (by workspace_id), per-workspace Elasticsearch search, and Redis pub/sub for presence fan-out.",
+          why: "Covers real-time messaging architecture, WebSocket fan-out, sharding strategy, search over conversational data, and the Flannel pattern for membership at scale.",
+          how: "Message sent via HTTPS → persisted to MySQL shard → published to Redis pub/sub channel → all WS servers subscribed to that channel push to their connected clients. Search indexed async to per-workspace Elasticsearch. File uploads bypass the message pipeline: client → S3 → URL sent as message.",
+          tradeoffs: "Redis pub/sub is fast (~1ms) but has no persistence — a WS server restart means missed events (mitigated by client fetch-on-reconnect). Sharding by workspace_id means cross-workspace queries are impossible without scatter-gather. Flannel membership service in RAM is fast but must replicate to survive server restarts.",
+          interview: "Say: 'The WS tier doesn't know which connections are on which server — that's why Redis pub/sub is the fan-out layer. Publish once to a channel; every WS server subscribed to it delivers to its local connections.'",
+        },
       },
     ],
   },
@@ -347,6 +452,13 @@ export const DESIGN_LAYERS = [
           "RAG: augment with retrieved docs to reduce hallucination",
           "Serving: tensor parallelism + pipeline parallelism across GPUs",
         ],
+        brief: {
+          what: "Transformer-based neural networks trained to predict the next token. Self-attention (O(n²)) enables parallel context understanding. Inference is autoregressive — one token at a time, left to right.",
+          why: "LLM internals are increasingly part of system design interviews at AI-forward companies. Understanding tokenization, context limits, KV cache, and serving infrastructure is essential for AI product roles.",
+          how: "Input tokenized → embedded into vectors → N transformer layers apply multi-head self-attention (each token attends all others) + FFN → final layer outputs logits over vocabulary → sample token → append to context → repeat. KV cache stores past key/value matrices to avoid recomputing them every step.",
+          tradeoffs: "Self-attention is O(n²) in sequence length — 128K token context uses massive GPU memory. KV cache trades memory for speed. RLHF gives alignment but can reduce capability breadth. Larger models: better quality but more GPUs, higher latency.",
+          interview: "Say: 'The KV cache is what makes generation practical — without it, each new token would require recomputing attention over all previous tokens from scratch. With it, each step is one forward pass over just the new token.'",
+        },
       },
       {
         id: "stock-exchange",
@@ -364,6 +476,13 @@ export const DESIGN_LAYERS = [
           "Market data (Level 2) published via multicast UDP",
           "FIX protocol standard for order submission between firms",
         ],
+        brief: {
+          what: "Order matching system using a price-time priority order book (max-heap bids + min-heap asks). Matching engine is single-threaded for determinism; LMAX Disruptor ring buffer achieves lock-free high throughput.",
+          why: "Financial system design is common at trading firms, fintech companies, and exchanges. Tests low-latency system design, lock-free concurrency, deterministic state machines, and market data distribution.",
+          how: "Order arrives via FIX protocol → gateway validates → enqueued in Disruptor ring buffer → matching engine dequeues (single thread, lock-free) → checks if highest bid ≥ lowest ask → if yes, trade executes → trade event published via UDP multicast to all Level-2 data subscribers.",
+          tradeoffs: "Single-threaded OME eliminates all race conditions but is a throughput bottleneck — mitigated by the ring buffer pre-queue. Multicast UDP for market data is fast but unreliable (use sequence numbers + recovery service for gap fills). FIX protocol is verbose but universally adopted.",
+          interview: "Say: 'The matching engine is deterministic and single-threaded — same input sequence always produces the same trades. This makes the audit log trivially correct. The Disruptor ring buffer feeds orders to it at millions/second without locks.'",
+        },
       },
       {
         id: "tinder",
@@ -383,6 +502,13 @@ export const DESIGN_LAYERS = [
           "Swipe data written to Kafka → async ELO recomputation",
           "Images on CDN; face detection for best photo ordering",
         ],
+        brief: {
+          what: "Dating app with geo-filtered, ELO-ranked profile recommendation. Pre-computed stacks of ~100 candidate IDs cached in Redis per user. Swipes written async; ELO scores updated in background.",
+          why: "Recommendation system + geo filtering + real-time event handling. Common for any app with personalized feeds, location-based discovery, or mutual-action matching (likes, follows).",
+          how: "On open: fetch pre-computed stack from Redis (geo-filtered + ELO-sorted candidates). On swipe: write to Kafka → consumer updates swipe DB → ELO recomputation job runs → updates candidate scores. On mutual like: match event → push notification to both users.",
+          tradeoffs: "Pre-computed stacks are ~minutes stale (freshness vs write cost). ELO recomputation is async — a brand-new user's score isn't reflected instantly. Geohash cells can have boundary issues (driver just across a cell line missed) — solved by querying center + 8 neighbor cells.",
+          interview: "Say: 'The profile stack is computed and cached in Redis — sub-100ms swipe UX even though the recommendation model is expensive. The stack is refreshed in the background every few minutes or when exhausted.'",
+        },
       },
       {
         id: "serverless",
@@ -403,6 +529,13 @@ export const DESIGN_LAYERS = [
           "Event sources: API Gateway, S3, DynamoDB Streams, SQS",
           "Limit: 15min max, 3GB RAM, 512MB /tmp — design around these",
         ],
+        brief: {
+          what: "Event-driven compute model — no server management. Functions scale from 0 to N instances automatically. AWS Lambda charges per GB-second. Cold start penalty on first invocation (container init + runtime start).",
+          why: "Tests when to use serverless vs containers, cold start mitigation, concurrency limits, and cost modelling. Appears in cloud architecture and backend design questions.",
+          how: "Event triggers Lambda (API Gateway, S3 event, SQS, DynamoDB Stream, schedule) → Lambda control plane provisions/reuses warm container → executes function code → returns response → container kept warm briefly for reuse. Provisioned Concurrency pre-warms N containers permanently.",
+          tradeoffs: "Cold starts: Python/Node.js ~100ms, JVM 2–10s. Cost: cheap for bursty traffic; expensive at sustained high scale (EC2 wins at >10M invocations/day sustained). Hard limits: 15min timeout, 3GB RAM, 512MB /tmp — not suitable for long-running jobs or large state.",
+          interview: "Say: 'Serverless wins for bursty, event-driven, unpredictable traffic — you pay nothing at zero scale. EC2/containers win for sustained high-throughput where you can right-size. The decision is operational simplicity vs cost optimization.'",
+        },
       },
       {
         id: "chatgpt-apps",
@@ -419,6 +552,13 @@ export const DESIGN_LAYERS = [
           "Tool use: model emits JSON function call → execute → return result",
           "Context window limit: truncate/summarize older messages",
         ],
+        brief: {
+          what: "LLM-powered chat application. Conversation is a stateless array of messages (role + content) sent on every request. Tokens stream via SSE. Tools extend the model with external function calls.",
+          why: "Building LLM apps is now a core engineering skill. Tests context management, streaming architecture, tool orchestration, and RAG pipelines — all hot interview topics at AI-forward companies.",
+          how: "User sends message → app appends to message array → sends full array to LLM API → model streams tokens back via SSE → app renders incrementally → if model emits a tool call JSON, app executes the function → result appended as new message → second LLM call for final response.",
+          tradeoffs: "Full conversation replay on every request — context window limits conversation length. Truncation loses early context; summarization preserves facts but costs an extra LLM call. Tool calls add round-trip latency per tool. RAG helps with knowledge cutoffs but adds retrieval latency.",
+          interview: "Say: 'The model has no persistent state — every message including the entire history is sent fresh on each request. Context window management is therefore the core engineering challenge for long-running assistants.'",
+        },
       },
     ],
   },
@@ -451,6 +591,13 @@ export const DESIGN_LAYERS = [
           "Cursor positions broadcast to show collaborator presence",
           "Autosave: debounced writes every few seconds",
         ],
+        brief: {
+          what: "Multi-user collaborative text editor using Operational Transformation (OT) to reconcile concurrent edits. Server is the canonical ordering authority. Operations stored as an append-only log + periodic snapshots.",
+          why: "Collaborative editing is one of the hardest real-time system design problems. Tests OT vs CRDT trade-offs, conflict resolution, WebSocket fan-out, and durable operation log design.",
+          how: "Each edit is an insert/delete operation with position. Two concurrent edits are submitted to server → server applies first (canonical order) → transforms second operation against first (adjusting positions) → applies → broadcasts both to all connected clients. Clients apply in server-ordered sequence.",
+          tradeoffs: "OT requires a central server for canonical ordering — prevents full P2P. CRDTs (Figma, Notion) work P2P but have higher metadata overhead per character and harder garbage collection. Snapshot + log = fast load (replay only since last snapshot) but snapshots add storage cost.",
+          interview: "Say: 'OT's key insight: if user A inserts at position 2 and user B inserts at position 5 concurrently, when B's operation arrives after A's, B's position must shift to 6 because A's insert shifted everything right by 1.'",
+        },
       },
       {
         id: "spotify-streaming",
@@ -470,6 +617,13 @@ export const DESIGN_LAYERS = [
           "Audio fingerprinting (Chromaprint) for duplicate detection",
           "Wrapped: yearly aggregate batch job over listen history",
         ],
+        brief: {
+          what: "Music streaming platform with CDN-based audio delivery, pre-fetch buffering for gapless playback, and collaborative filtering recommendation (track2vec). Cassandra for user data; GCS for audio.",
+          why: "Audio streaming design covers CDN delivery, adaptive quality, pre-fetching, recommendation systems (implicit feedback matrix factorisation), and large-scale batch analytics (Wrapped).",
+          how: "Audio stored as Ogg Vorbis/AAC in GCS → cached at CDN edge nodes. On play: stream first 30s immediately; background job fetches and buffers next track for gapless switch. Recommendations: weekly batch collaborative filtering over 600M users × 100M tracks (ALS matrix factorisation + track2vec).",
+          tradeoffs: "Pre-fetch wastes bandwidth if user skips early (common for algorithmic playlists). Collaborative filtering is a batch job (weekly) — new tracks without listen history suffer the cold-start problem. Audio fingerprinting deduplication adds pipeline complexity but prevents catalog bloat.",
+          interview: "Say: 'Discover Weekly runs as a weekly batch job — real-time collaborative filtering over 600M × 100M would be cost-prohibitive. Track2vec embeds tracks in a playlist-context space: tracks that co-occur in many playlists become semantically nearby.'",
+        },
       },
       {
         id: "chatgpt-infra",
@@ -489,6 +643,13 @@ export const DESIGN_LAYERS = [
           "Speculative decoding: draft model + verifier for 2–3x speedup",
           "RLHF pipeline offline: collect feedback → fine-tune weekly",
         ],
+        brief: {
+          what: "LLM inference infrastructure: model sharded across GPU clusters (tensor + pipeline parallelism), vLLM's PagedAttention for KV cache efficiency, continuous batching for GPU utilisation, and speculative decoding for throughput.",
+          why: "AI infra is a growing interview domain at ML platform teams. Tests GPU parallelism strategies, memory-bound vs compute-bound systems, and serving optimisations that make inference economically viable.",
+          how: "Request arrives → routed to available GPU server cluster → conversation history loaded from DB → packed into context → model generates tokens autoregressively (speculative decoding uses small draft model for k tokens, large model verifies in one pass) → tokens streamed back via SSE → conversation saved.",
+          tradeoffs: "Tensor parallelism adds all-reduce communication overhead between GPUs. Continuous batching raises GPU utilisation from ~30% to ~80% but increases tail latency for individual requests (must wait for others in the batch). Speculative decoding 2–3× faster only if draft model accuracy is high enough (~70%+ acceptance).",
+          interview: "Say: 'Speculative decoding: a cheap draft model generates k tokens; the large verifier model checks all k in one forward pass — same cost as generating 1 token normally. For common phrases, acceptance rate is 70–80%, giving a 2–4× speedup.'",
+        },
       },
       {
         id: "leaderboard",
@@ -509,6 +670,13 @@ export const DESIGN_LAYERS = [
           "Periodic snapshots to DB for persistence",
           "Sliding window: use time-bucketed ZSETs + ZUNIONSTORE",
         ],
+        brief: {
+          what: "Real-time ranked scoreboard using Redis Sorted Sets (ZSETs). Internally a skip list + hash table. ZADD/ZINCRBY for updates (O(log N)), ZREVRANK for rank queries, ZREVRANGE for top-K — all atomic.",
+          why: "Leaderboard is a classic question testing data structure selection, atomic operations under concurrent writes, horizontal sharding, and sliding window aggregation patterns.",
+          how: "Score event arrives → ZINCRBY lb:game user_id delta (atomic increment in skip list) → ZREVRANK for user's current rank (O(log N)). Top-K: ZREVRANGE 0 K-1 WITHSCORES. Sliding window: one ZSET per time bucket + ZUNIONSTORE to merge windows. Async snapshot to DB for durability.",
+          tradeoffs: "Single Redis instance handles ~100K ops/sec — fine for most games. At 100M+ concurrent players: shard by league/region. Global exact rank requires querying all shards and summing partial ranks — expensive for frequent lookups. Use approximate rank (cached every 30s) for non-competitive queries.",
+          interview: "Say: 'Redis ZSET is the canonical answer — O(log N) for add and rank, O(K) for top-K. ZINCRBY is atomic so no race conditions on concurrent score updates. For sliding windows, maintain one ZSET per time bucket and ZUNIONSTORE to compute the rolling window.'",
+        },
       },
       {
         id: "live-comments",
@@ -525,6 +693,13 @@ export const DESIGN_LAYERS = [
           "Moderation layer: ML classifier before publish",
           "At 100K viewers: horizontal WS server scaling + Redis cluster",
         ],
+        brief: {
+          what: "Sub-second comment delivery to thousands of concurrent viewers. Pattern: comment → Kafka → Redis Pub/Sub → WS servers → client WebSockets. Rate limiting and ML moderation applied before publish.",
+          why: "Live fan-out is a core real-time design challenge — tests pub/sub architecture, WS server scaling, back-pressure handling, and the trade-off between Redis Pub/Sub (fast/no-history) and Kafka (slower/durable).",
+          how: "User posts comment → API validates + rate limits → ML moderation (async) → publish to Kafka topic (stream_id as key) → consumer writes to DB + publishes to Redis Pub/Sub channel → all WS server instances subscribed to that channel push to their connected viewers.",
+          tradeoffs: "Redis Pub/Sub: ~1ms latency, no persistence, max ~50K subscribers before bottleneck. Kafka: ~50ms latency, durable, parallelisable — use for >50K viewers or when comment history matters. WS connection limits: each server hosts ~50K connections; horizontal scale with consistent hashing to keep stream viewers on same server.",
+          interview: "Say: 'At 500K viewers, Redis Pub/Sub becomes a single-broker bottleneck. Switch to Kafka with stream_id as partition key — consumer group of WS servers consumes partitions in parallel, giving linear throughput scaling.'",
+        },
       },
     ],
   },
@@ -557,6 +732,13 @@ export const DESIGN_LAYERS = [
           "Memcached in front of MySQL for hot row caching",
           "Key lesson: optimize existing DB before migrating to NoSQL",
         ],
+        brief: {
+          what: "MySQL at petabyte scale via Vitess — a sharding proxy layer. VTGate is a stateless MySQL-protocol proxy that routes queries to the correct shard, handles scatter-gather, and manages connection pools.",
+          why: "Demonstrates that you don't always need NoSQL to scale — proper sharding, indexing, and read replica routing can take SQL far. A key lesson for pragmatic system design.",
+          how: "App connects to VTGate as if it were a single MySQL server → VTGate inspects SQL → determines target shards from keyspace config (e.g., hash(video_id) % N) → routes to VTTablet on each MySQL shard → merges results. Online schema changes via shadow table + row-based replication + atomic rename (no downtime).",
+          tradeoffs: "Cross-shard queries (no shard key in WHERE) scatter to all shards — expensive. Vitess connection pooling stays within MySQL's max_connections limit. MySQL still has ACID guarantees that Cassandra/DynamoDB sacrifice. Trade-off vs NoSQL: relational power at the cost of sharding complexity.",
+          interview: "Say: 'Vitess made YouTube stay on MySQL at massive scale. The key insight: VTGate speaks MySQL wire protocol — zero application changes. Vitess also handles online schema migrations via shadow tables, which vanilla MySQL can't do without hours of table locking.'",
+        },
       },
       {
         id: "live-presence",
@@ -576,6 +758,13 @@ export const DESIGN_LAYERS = [
           "Subscription: user A subscribes to presence of their contacts on login",
           "WebSocket preferred over polling for real-time accuracy",
         ],
+        brief: {
+          what: "Online/offline tracking via Redis TTL heartbeats. Client pings every 30s → SET presence:{uid} 1 EX 60. Key expiry = implicit offline detection. Status changes fan out via Redis Pub/Sub to subscribed contacts.",
+          why: "Presence is a deceptively complex sub-system — tests heartbeat design, TTL-based state management, pub/sub fan-out, and how to avoid N² subscription costs at scale.",
+          how: "Client sends heartbeat every 30s via existing WebSocket → server runs SET presence:{uid} 1 EX 60 → if network drops, no heartbeats → key expires after 60s → keyspace notification triggers 'offline' event → presence service publishes to Pub/Sub → subscribed contacts receive status update.",
+          tradeoffs: "30s heartbeat interval = up to 60s delay before offline detection. More frequent heartbeats (10s) give faster detection but 3× more Redis writes at scale. Lazy subscription (only subscribe when conversation opened) avoids N² fan-out but means contacts don't see real-time status unless actively chatting.",
+          interview: "Say: 'Lazy subscription is the key scaling insight — user A with 5000 contacts would trigger 5000 deliveries on every login if we eagerly fan out. Instead, only contacts who have a conversation open subscribe. Disconnected contacts see presence on-demand when they open the chat.'",
+        },
       },
       {
         id: "uber-nearby",
@@ -596,6 +785,13 @@ export const DESIGN_LAYERS = [
           "Supply-demand matching runs per hexagon (surge pricing triggers)",
           "ETA pre-computed for top-N candidates before final selection",
         ],
+        brief: {
+          what: "Geospatial driver lookup using geohash prefix search on Redis. Drivers push GPS every 4s → Kafka → location service → GEOADD in Redis. Rider query: decode geohash → search center + 8 neighbor cells for available drivers.",
+          why: "Geo-spatial system design is a common question at ride-share, delivery, and location-based apps. Tests geohash encoding, neighbor cell lookup, spatial indexing, and how to handle boundary edge cases.",
+          how: "Driver GPS ping → Kafka → location service consumes → GEOADD drivers lat lng driver_id → rider requests ride → GEORADIUS or geohash prefix query for center + 8 neighbors → candidates filtered (availability, car type) → ETA pre-computed for top N → best match dispatched.",
+          tradeoffs: "Geohash cells distort at high latitudes; H3 hexagons have uniform area (Uber's preference for analytics). Querying only center cell misses drivers just across a boundary — 9-cell query fixes this but is 9× the work. Redis Geo under the hood is just a ZSET with geohash as score — all standard ZSET complexity applies.",
+          interview: "Say: 'The 9-cell neighbor query is the critical detail. If a driver is 1 meter across a geohash boundary from the rider, querying only the center cell misses them. Always query center + all 8 neighbors to handle boundary cases.'",
+        },
       },
       {
         id: "vector-db",
@@ -616,6 +812,13 @@ export const DESIGN_LAYERS = [
           "Metadata filtering: pre-filter by category before vector search",
           "RAG pipeline: query → embed → ANN search → top-K docs → LLM context",
         ],
+        brief: {
+          what: "Database optimised for Approximate Nearest Neighbor search over high-dimensional float vectors (embeddings). HNSW index gives O(log N) search with tunable recall. Used in RAG, semantic search, and recommendation.",
+          why: "Vector databases are the foundational infrastructure for LLM-powered features. Understanding HNSW, recall vs speed tuning, RAG chunking strategy, and metadata filtering is essential for AI/ML system design.",
+          how: "Index time: embed documents → upsert (id, vector, metadata) → HNSW builds hierarchical layer graph. Query time: embed query → HNSW greedy search from top layer down → returns top-K candidates → optional cross-encoder re-rank → inject into LLM context.",
+          tradeoffs: "ANN (approximate) trades perfect recall for speed — at ef_search=200 you get 99% recall in ~1ms; ef_search=10 gives 90% recall in ~0.1ms. Exact search (brute force) is O(N) — unusable at >1M vectors. Metadata pre-filtering reduces search space but can hurt recall if filter is too aggressive.",
+          interview: "Say: 'HNSW builds a highway graph — upper layers skip large distances, lower layers refine locally. O(log N) average search. For RAG, chunk at ~500 tokens with 50-token overlap so semantic context doesn't get cut at chunk boundaries.'",
+        },
       },
       {
         id: "lyft",
@@ -632,6 +835,13 @@ export const DESIGN_LAYERS = [
           "GPS data stream: Kafka → location store with 4s update frequency",
           "Payments: deferred capture — authorize on request, capture on completion",
         ],
+        brief: {
+          what: "Ride-sharing platform with real-time driver matching, dynamic pricing, GPS tracking, event-driven ride state machine, and deferred payment capture. Geo indexing and ETA calculation are core systems.",
+          why: "Comprehensive system design question covering geo search, real-time matching, event-driven state machines, dynamic pricing, and payment flows. Common at Uber/Lyft/DoorDash interviews.",
+          how: "Ride request → nearby driver query (geohash/H3) → score candidates (ETA + acceptance rate) → send offer to best driver → on accept: ACCEPTED event → Kafka → billing service authorises card. GPS pings stream every 4s: driver → Kafka → location service → Redis. Ride completes → COMPLETED event → billing captures final fare.",
+          tradeoffs: "Deferred capture (authorise on request, capture on completion) enables tip prompts and exact fare calculation but requires handling auth expiry (7-day limit) for very long trips. Event-driven state machine (Kafka) decouples services but makes saga rollback complex on failures mid-ride.",
+          interview: "Say: 'The ride state machine is event-driven — each transition publishes to Kafka. Billing, notifications, and analytics are independent consumers. Adding a loyalty points service means adding one new consumer, zero changes to the ride service.'",
+        },
       },
     ],
   },
@@ -664,6 +874,13 @@ export const DESIGN_LAYERS = [
           "Return 429 Too Many Requests with Retry-After header",
           "Shard by user_id for distributed scale; local counters + sync",
         ],
+        brief: {
+          what: "Traffic control layer that caps request rates per user/IP/API key. Token Bucket allows bursts; Sliding Window is most accurate. Redis enforces limits atomically across multiple app servers using Lua scripts.",
+          why: "Rate limiting appears in virtually every API design question. Tests algorithm trade-offs, distributed atomicity (Lua scripts), response design (429 + headers), and back-pressure patterns.",
+          how: "On each request: Redis Lua script atomically reads counter, increments if under limit, sets TTL on first increment. Returns new count. App checks: if > limit → 429 with Retry-After header. Token Bucket: HINCRBY on token field + timestamp field, compute available tokens from elapsed time + refill rate.",
+          tradeoffs: "Fixed Window: simple (INCR + EXPIRE) but allows 2× burst at window boundaries. Sliding Window Log: precise but O(requests_in_window) memory. Sliding Window Counter: O(1) with ~1% error at boundaries — best practical trade-off. Local counters: fast but miss distributed burst; Redis: consistent but adds ~1ms latency per request.",
+          interview: "Say: 'Fixed window has a boundary attack — 100 requests at 11:59pm + 100 at 12:00am = 200 requests in 2 seconds against a 100/min limit. Sliding window counter interpolates between two windows to fix this with O(1) space and only ~1% inaccuracy.'",
+        },
       },
       {
         id: "consistent-hashing",
@@ -684,6 +901,13 @@ export const DESIGN_LAYERS = [
           "Used in: Cassandra, DynamoDB, Memcached (ketama), Riak",
           "Vnodes solve hotspot problem of non-uniform physical placement",
         ],
+        brief: {
+          what: "Hashing scheme for distributed systems where adding/removing nodes remaps only 1/N keys (vs modular hashing which remaps nearly all). Keys walk clockwise on a hash ring to find their node. Virtual nodes ensure even key distribution.",
+          why: "Consistent hashing is the foundation of Cassandra, DynamoDB, and Memcached. Any question involving distributed caches or sharded databases will benefit from explaining this — it shows deep distributed systems knowledge.",
+          how: "Hash each node name to a position on a 0..2³² ring. Hash each key to a position → walk clockwise to first node. With K=150 virtual nodes per physical node, keys distribute evenly. Adding a node: insert K new virtual positions → only keys between new positions and their predecessors remapped.",
+          tradeoffs: "Without virtual nodes, Poisson distribution of random positions causes hotspots (some nodes get 3× more keys). Virtual nodes fix distribution but add routing table size (K×N entries). Replication: Cassandra replicates to next RF-1 clockwise nodes — failing nodes are still served by replicas.",
+          interview: "Say: 'Modular hashing (key % N): adding one node remaps ~N-1/N of all keys — cache miss avalanche. Consistent hashing: adding one node remaps only ~1/N keys. That's the difference between a restart-proof cache and a cache that becomes useless on every scaling event.'",
+        },
       },
       {
         id: "cap-theorem",
@@ -703,6 +927,13 @@ export const DESIGN_LAYERS = [
           "Eventual consistency: all nodes converge given no new writes",
           "Quorum reads/writes: R + W > N for strong consistency",
         ],
+        brief: {
+          what: "CAP Theorem: distributed systems must choose between Consistency and Availability during a network Partition (P is unavoidable). PACELC extends this: even without partitions, there's a Latency vs Consistency trade-off.",
+          why: "Understanding CAP is the baseline for all distributed systems interviews — it frames every database choice. Correctly classifying systems as CP vs AP and explaining quorum math signals distributed systems maturity.",
+          how: "During a partition: CP systems stop accepting writes to avoid stale reads (return errors). AP systems continue accepting writes and reconcile diverged state later (eventual consistency). Quorum formula: R + W > N guarantees at least one node overlaps between the last write and the read set.",
+          tradeoffs: "CP: strong consistency but reduced availability during partitions — bad for user-facing services. AP: always available but stale reads possible — bad for financial systems. Cassandra tunable: ONE (AP) vs QUORUM (CP-ish) per query. Spanner achieves CP with Paxos consensus + TrueTime atomic clocks.",
+          interview: "Say: 'Partition tolerance is non-negotiable in any multi-machine system — networks fail. The real choice is CP vs AP. For a banking system: CP (never serve stale balance). For a social feed: AP (slightly stale feed is fine). For a shopping cart: AP with merge-on-conflict (Dynamo style).'",
+        },
       },
       {
         id: "caching",
@@ -723,6 +954,13 @@ export const DESIGN_LAYERS = [
           "Hot key problem: local cache + replication of hot keys",
           "CDN = cache at the network edge for static content",
         ],
+        brief: {
+          what: "Multiple caching patterns for different read/write trade-offs. Cache-Aside is the most common (lazy population). Write-Through prioritises consistency. Write-Behind prioritises write speed. Each has different failure characteristics.",
+          why: "Caching is asked in almost every system design interview. You must know when to use each pattern, how to handle stampedes and hot keys, and how to reason about cache invalidation.",
+          how: "Cache-Aside: read → check Redis → miss → query DB → write to Redis with TTL → return. Write-Through: write → update DB + Redis atomically. Write-Behind: write → Redis only → background job flushes to DB (async). Cache invalidation: TTL-based (simple, stale risk) or event-driven (pub/sub on DB change, complex but fresh).",
+          tradeoffs: "Cache-Aside: simple but cold-start problem (all misses on deploy). Write-Through: consistent but extra write latency. Write-Behind: fast writes but data loss on cache crash before async flush. Hot keys: one Redis key getting millions of req/s — mitigate with local in-process cache (Caffeine/Guava) or key replication.",
+          interview: "Say: 'Cache stampede is when a hot key expires and thousands of requests all miss simultaneously, overwhelming the DB. Fix with probabilistic early expiry (XFetch) — requests probabilistically rebuild the cache slightly before expiry, preventing the synchronized rush.'",
+        },
       },
       {
         id: "db-indexing",
@@ -743,6 +981,13 @@ export const DESIGN_LAYERS = [
           "Index selectivity: high cardinality = better selectivity = faster lookup",
           "Too many indexes → slow writes (update all indexes on INSERT)",
         ],
+        brief: {
+          what: "B-Tree indexes (MySQL/PostgreSQL) give O(log N) reads with in-place updates — optimised for mixed read/write. LSM-Tree indexes (Cassandra/RocksDB) convert all writes to sequential I/O — optimised for write-heavy workloads. Covering indexes eliminate heap fetches entirely.",
+          why: "Indexing strategy is the highest-leverage database optimisation. Understanding B-Tree vs LSM trade-offs, composite index prefix rule, and covering indexes differentiates senior engineers from juniors in interviews.",
+          how: "B-Tree: write navigates tree to leaf page, updates in place (random I/O). Read: O(log N) traversal. LSM: write to in-memory MemTable → when full, flush to immutable SSTable on disk (sequential I/O) → reads check MemTable + all SSTables (Bloom filter prunes false paths) → compaction merges SSTables periodically.",
+          tradeoffs: "B-Tree: fast reads, slower writes (random I/O, must update all indexes on INSERT). LSM: fast writes, slower reads (multiple SSTable levels, write amplification during compaction). Composite index prefix rule: INDEX(a,b,c) used for WHERE a=?, WHERE a=? AND b=?, but NOT WHERE b=?. Covering index: no heap fetch but larger index size and slower writes.",
+          interview: "Say: 'LSM-Tree has write amplification — data is written once to MemTable then re-written during each compaction level. But each write is sequential I/O which is 10–100× faster than the random I/O B-Trees use. That's why Cassandra can sustain millions of writes/sec per node.'",
+        },
       },
     ],
   },

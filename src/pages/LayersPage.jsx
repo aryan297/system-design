@@ -48,6 +48,49 @@ function DeepDive({ sections, color }) {
   );
 }
 
+function BriefPanel({ brief, color }) {
+  return (
+    <div className="lp-brief">
+      {brief.what && (
+        <div className="lp-brief-row">
+          <span className="lp-brief-label" style={{ color }}>What</span>
+          <p className="lp-brief-text">{brief.what}</p>
+        </div>
+      )}
+      {brief.why && (
+        <div className="lp-brief-row">
+          <span className="lp-brief-label" style={{ color }}>Why it matters</span>
+          <p className="lp-brief-text">{brief.why}</p>
+        </div>
+      )}
+      {brief.how && (
+        <div className="lp-brief-row">
+          <span className="lp-brief-label" style={{ color }}>How it works</span>
+          <p className="lp-brief-text">{brief.how}</p>
+        </div>
+      )}
+      {brief.tradeoffs && (
+        <div className="lp-brief-row">
+          <span className="lp-brief-label" style={{ color }}>Trade-offs</span>
+          <p className="lp-brief-text">{brief.tradeoffs}</p>
+        </div>
+      )}
+      {brief.example && (
+        <div className="lp-brief-row lp-brief-example">
+          <span className="lp-brief-label" style={{ color: "#14b8a6" }}>Real example</span>
+          <p className="lp-brief-text">{brief.example}</p>
+        </div>
+      )}
+      {brief.interview && (
+        <div className="lp-brief-row lp-brief-interview">
+          <span className="lp-brief-label">Interview tip</span>
+          <p className="lp-brief-text">{brief.interview}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TopicCard({ topic, color }) {
   const details = LAYER_DETAILS[topic.id];
   return (
@@ -81,6 +124,8 @@ function TopicCard({ topic, color }) {
           ))}
         </ul>
       )}
+
+      {topic.brief && <BriefPanel brief={topic.brief} color={color} />}
 
       {details && <DeepDive sections={details} color={color} />}
     </div>
