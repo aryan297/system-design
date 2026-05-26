@@ -4,6 +4,7 @@ import { SYSTEMS } from "../data/systems";
 import { DSA_CATEGORIES } from "../data/dsa";
 import { DESIGN_LAYERS } from "../data/layers";
 import { SD_CATEGORIES } from "../data/systemDesignEncyclopedia";
+import { MC_CATEGORIES } from "../data/machineCoding";
 import gopherImg from "../assets/gopher.png";
 import "./Sidebar.css";
 
@@ -12,10 +13,12 @@ export default function Sidebar({ open, onClose }) {
   const inDSA = location.pathname.startsWith("/dsa");
   const inLayers = location.pathname === "/layers";
   const inEncyclopedia = location.pathname === "/encyclopedia";
-  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers && !inEncyclopedia);
+  const inMC = location.pathname.startsWith("/machine-coding");
+  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers && !inEncyclopedia && !inMC);
   const [dsaOpen, setDsaOpen] = useState(inDSA);
   const [layersOpen, setLayersOpen] = useState(inLayers);
   const [encOpen, setEncOpen] = useState(inEncyclopedia);
+  const [mcOpen, setMcOpen] = useState(inMC);
 
   return (
     <aside className={`sidebar ${open ? "sidebar--open" : ""}`}>
@@ -214,6 +217,54 @@ export default function Sidebar({ open, onClose }) {
             )}
           </>
         )}
+        {/* ── Machine Coding ── */}
+        <button
+          className="sidebar-section-toggle"
+          style={{ marginTop: "10px" }}
+          onClick={() => setMcOpen((v) => !v)}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: "0.85rem" }}>⌨️</span>
+            Machine Coding
+          </span>
+          <span className="sidebar-section-chevron">{mcOpen ? "▾" : "▸"}</span>
+        </button>
+
+        {mcOpen && MC_CATEGORIES.map((cat) => {
+          const catPath = `/machine-coding/${cat.id}`;
+          const isCatOpen = location.pathname.startsWith(catPath);
+          return (
+            <div key={cat.id} className="sidebar-system">
+              <NavLink
+                to={`${catPath}/${cat.problems[0].id}`}
+                className={`sidebar-system-link ${isCatOpen ? "active" : ""}`}
+              >
+                <span className="sidebar-system-icon">{cat.icon}</span>
+                <span className="sidebar-system-name">{cat.title}</span>
+                <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
+                  {isCatOpen ? "▾" : "▸"}
+                </span>
+              </NavLink>
+
+              {isCatOpen && (
+                <div className="sidebar-sub">
+                  {cat.problems.map((p, idx) => (
+                    <NavLink
+                      key={p.id}
+                      to={`${catPath}/${p.id}`}
+                      className={({ isActive: a }) => `sidebar-sub-link ${a ? "active" : ""}`}
+                    >
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.65rem", minWidth: 16 }}>
+                        {idx + 1}.
+                      </span>
+                      {p.title}
+                    </NavLink>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </nav>
 
 

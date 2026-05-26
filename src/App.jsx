@@ -6,11 +6,15 @@ import SystemLLD from "./pages/SystemLLD";
 import DSAPage from "./pages/DSAPage";
 import LayersPage from "./pages/LayersPage";
 import EncyclopediaPage from "./pages/EncyclopediaPage";
+import MachineCodingPage from "./pages/MachineCodingPage";
 import { DSA_CATEGORIES } from "./data/dsa";
+import { MC_CATEGORIES } from "./data/machineCoding";
 import "./styles/globals.css";
 
 const firstCat = DSA_CATEGORIES[0];
 const firstProblem = firstCat.problems[0];
+const firstMC = MC_CATEGORIES[0];
+const firstMCProblem = firstMC.problems[0];
 
 export default function App() {
   return (
@@ -31,6 +35,12 @@ export default function App() {
             element={<Navigate to={`/dsa/${firstCat.id}/${firstProblem.id}`} replace />}
           />
           <Route path="dsa/:categoryId/:problemId" element={<DSAPage />} />
+          {/* Machine Coding routes */}
+          <Route
+            path="machine-coding"
+            element={<Navigate to={`/machine-coding/${firstMC.id}/${firstMCProblem.id}`} replace />}
+          />
+          <Route path="machine-coding/:categoryId/:problemId" element={<MachineCodingPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
