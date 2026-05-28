@@ -90,4 +90,11 @@ export const SYSTEMS = [
     description: "Railway ticketing — 23M passengers/day, 14K+ trains, Tatkal surge: 1.5M concurrent users at 10 AM",
     color: "#1A56DB",
   },
+  {
+    id: "dezerv",
+    name: "Dezerv",
+    icon: "💎",
+    description: "Wealth-tech for Indian HNIs — curated portfolio baskets, MF investing, goal-based SIP, ₹5,000Cr+ AUM",
+    color: "#7C3AED",
+  },
 ];

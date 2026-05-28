@@ -11,6 +11,7 @@ import { GROWW_HLD, GROWW_LLD, GROWW_QNA } from "./groww";
 import { TIKTOK_HLD, TIKTOK_LLD, TIKTOK_QNA } from "./tiktok";
 import { ZOMATO_HLD, ZOMATO_LLD, ZOMATO_QNA } from "./zomato";
 import { IRCTC_HLD, IRCTC_LLD, IRCTC_QNA } from "./irctc";
+import { DEZERV_HLD, DEZERV_LLD, DEZERV_QNA } from "./dezerv";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -91,6 +92,12 @@ const REGISTRY = {
     hld: IRCTC_HLD,
     lld: IRCTC_LLD,
     qna: IRCTC_QNA,
+  },
+  dezerv: {
+    meta: { icon: "💎", color: "#7C3AED" },
+    hld: DEZERV_HLD,
+    lld: DEZERV_LLD,
+    qna: DEZERV_QNA,
   },
 };
 
