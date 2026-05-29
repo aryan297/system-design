@@ -319,6 +319,295 @@ func main() {
 }`,
       },
       {
+        id: "lfu-cache",
+        title: "LFU Cache",
+        difficulty: "Hard",
+        description:
+          "Implement a Least Frequently Used cache with O(1) Get and Put. On overflow evict the key with the lowest access count; break ties by least-recently-used order.",
+        requirements: [
+          "NewLFUCache(capacity int) constructor",
+          "Get(key int) int — returns -1 if not found; increments key's frequency",
+          "Put(key, value int) — evicts LFU (LRU tiebreak) on overflow",
+          "All operations O(1)",
+        ],
+        concepts: [
+          "Doubly linked list per frequency",
+          "Two hash maps (key→node, freq→list)",
+          "Min-frequency tracking",
+          "Pointer manipulation",
+        ],
+        approach:
+          "Maintain two maps: keyToNode (key→*Node with Key/Value/Freq) and freqToList (freq→DLL). Each DLL holds nodes at that frequency in LRU order (head=MRU, tail=LRU). On Get/Put promote the node: remove from freqList[f], add to front of freqList[f+1]. Track minFreq — only reset to 1 on new inserts. On eviction, removeLRU() from freqList[minFreq].",
+        code: `package main
+
+import "fmt"
+
+// LFUNode is a cache entry stored in both the key map and a frequency-bucket list
+type LFUNode struct {
+\tKey   int
+\tValue int
+\tFreq  int      // current access frequency of this entry
+\tPrev  *LFUNode
+\tNext  *LFUNode
+}
+
+// FreqList is a DLL of all nodes sharing the same frequency
+// Head side = most recently used (MRU), Tail side = least recently used (eviction end)
+type FreqList struct {
+\tHead *LFUNode // dummy sentinel
+\tTail *LFUNode // dummy sentinel
+\tSize int
+}
+
+// newFreqList creates an empty list with connected dummy sentinels
+func newFreqList() *FreqList {
+\th := &LFUNode{}
+\tt := &LFUNode{}
+\th.Next = t
+\tt.Prev = h
+\treturn &FreqList{Head: h, Tail: t}
+}
+
+// addFront inserts node just after Head (MRU position in this freq bucket)
+func (fl *FreqList) addFront(node *LFUNode) {
+\tnode.Prev = fl.Head
+\tnode.Next = fl.Head.Next
+\tfl.Head.Next.Prev = node
+\tfl.Head.Next = node
+\t/*
+\t\tBefore: Head <-> A <-> Tail
+\t\tAdd B (MRU)
+\t\tAfter:  Head <-> B <-> A <-> Tail
+\t*/
+\tfl.Size++
+}
+
+// remove unlinks node from wherever it sits in the list
+func (fl *FreqList) remove(node *LFUNode) {
+\tnode.Prev.Next = node.Next
+\tnode.Next.Prev = node.Prev
+\tnode.Prev = nil
+\tnode.Next = nil
+\tfl.Size--
+}
+
+// removeLRU removes and returns the node just before Tail (oldest = LRU in this bucket)
+func (fl *FreqList) removeLRU() *LFUNode {
+\tif fl.Size == 0 {
+\t\treturn nil
+\t}
+\tnode := fl.Tail.Prev // closest to Tail = least recently used
+\tfl.remove(node)
+\treturn node
+}
+
+// LFUCache evicts the least-frequently-used key; ties broken by LRU order
+type LFUCache struct {
+\tCapacity   int
+\tMinFreq    int               // lowest frequency currently held by any cached key
+\tKeyToNode  map[int]*LFUNode // key → node pointer for O(1) lookup
+\tFreqToList map[int]*FreqList // freq → DLL of nodes at that frequency
+}
+
+// NewLFUCache creates an LFU cache with the given capacity
+func NewLFUCache(capacity int) *LFUCache {
+\treturn &LFUCache{
+\t\tCapacity:   capacity,
+\t\tKeyToNode:  make(map[int]*LFUNode),
+\t\tFreqToList: make(map[int]*FreqList),
+\t}
+}
+
+// getList lazily initialises and returns the DLL for a given frequency
+func (c *LFUCache) getList(freq int) *FreqList {
+\tif c.FreqToList[freq] == nil {
+\t\tc.FreqToList[freq] = newFreqList()
+\t}
+\treturn c.FreqToList[freq]
+}
+
+// promote moves node from freqList[f] to freqList[f+1]; bumps MinFreq if f was the minimum
+func (c *LFUCache) promote(node *LFUNode) {
+\toldFreq := node.Freq
+\toldList := c.FreqToList[oldFreq]
+\toldList.remove(node)
+\t// If the min-freq bucket just became empty, the new minimum must be one higher
+\tif oldList.Size == 0 && oldFreq == c.MinFreq {
+\t\tc.MinFreq++
+\t}
+\tnode.Freq++
+\tc.getList(node.Freq).addFront(node) // newest access → MRU position in next bucket
+}
+
+// Get returns the value for key (increments its frequency), or -1 if absent
+func (c *LFUCache) Get(key int) int {
+\tnode, ok := c.KeyToNode[key]
+\tif !ok {
+\t\treturn -1
+\t}
+\tc.promote(node) // every access counts as a use — move up one frequency bucket
+\treturn node.Value
+}
+
+// Put inserts or updates key; evicts LFU (LRU tiebreak) when at capacity
+func (c *LFUCache) Put(key, value int) {
+\tif c.Capacity == 0 {
+\t\treturn
+\t}
+\tif node, ok := c.KeyToNode[key]; ok {
+\t\t// Key exists — update value and promote (same as Get)
+\t\tnode.Value = value
+\t\tc.promote(node)
+\t\treturn
+\t}
+\t// Cache full — evict the LRU node from the minimum-frequency bucket
+\tif len(c.KeyToNode) == c.Capacity {
+\t\tevicted := c.getList(c.MinFreq).removeLRU()
+\t\tdelete(c.KeyToNode, evicted.Key)
+\t}
+\t// New node always starts at frequency 1
+\tnode := &LFUNode{Key: key, Value: value, Freq: 1}
+\tc.KeyToNode[key] = node
+\tc.getList(1).addFront(node)
+\tc.MinFreq = 1 // a new entry always has the lowest possible frequency
+}
+
+func main() {
+\tcache := NewLFUCache(2)
+\tcache.Put(1, 1)
+\tcache.Put(2, 2)
+
+\t// freq[1]: Head <-> [2] <-> [1] <-> Tail   (2=MRU, 1=LRU)  minFreq=1
+
+\tfmt.Println(cache.Get(1))
+\t// key 1 freq: 1->2
+\t// freq[1]: Head <-> [2] <-> Tail
+\t// freq[2]: Head <-> [1] <-> Tail
+\t// Output: 1
+
+\tcache.Put(3, 3)
+\t// evict LFU: minFreq=1, LRU in freq[1] = key 2 -> evicted
+\t// freq[1]: Head <-> [3] <-> Tail   minFreq=1
+\t// freq[2]: Head <-> [1] <-> Tail
+
+\tfmt.Println(cache.Get(2))
+\t// Output: -1 (evicted)
+
+\tfmt.Println(cache.Get(3))
+\t// key 3 freq: 1->2  |  freq[1] now empty -> minFreq bumps to 2
+\t// freq[2]: Head <-> [3] <-> [1] <-> Tail  (3=MRU, 1=LRU)
+\t// Output: 3
+
+\tcache.Put(4, 4)
+\t// evict LFU: minFreq=2, LRU in freq[2] = key 1 (inserted into bucket earlier) -> evicted
+\t// freq[1]: Head <-> [4] <-> Tail   minFreq=1
+\t// freq[2]: Head <-> [3] <-> Tail
+
+\tfmt.Println(cache.Get(1))
+\t// Output: -1 (evicted)
+
+\tfmt.Println(cache.Get(3))
+\t// Output: 3
+
+\tfmt.Println(cache.Get(4))
+\t// Output: 4
+}`,
+      },
+      {
+        id: "fifo-cache",
+        title: "FIFO Cache",
+        difficulty: "Easy",
+        description:
+          "Implement a First-In First-Out cache. On overflow evict the oldest-inserted entry regardless of how recently or frequently it was accessed.",
+        requirements: [
+          "NewFIFOCache(capacity int) constructor",
+          "Get(key int) int — returns -1 if not found; does NOT change eviction order",
+          "Put(key, value int) — evicts first-inserted key on overflow",
+          "Update to existing key refreshes value but keeps original queue position",
+        ],
+        concepts: ["Map", "Slice as queue", "FIFO eviction", "Circular buffer (production variant)"],
+        approach:
+          "Keep a map for O(1) Get and a slice as an insertion-order queue. Put appends to the back; on overflow dequeue the front. Updating an existing key only changes the map value — the original queue position is preserved so eviction order stays insertion-order.",
+        code: `package main
+
+import "fmt"
+
+// FIFOCache evicts the oldest-inserted entry on overflow — access recency is irrelevant
+type FIFOCache struct {
+\tCapacity int
+\tCache    map[int]int // key -> value for O(1) Get
+\tQueue    []int       // insertion-order queue: front = oldest (evict next), back = newest
+}
+
+// NewFIFOCache creates a FIFO cache with the given capacity
+func NewFIFOCache(capacity int) *FIFOCache {
+\treturn &FIFOCache{
+\t\tCapacity: capacity,
+\t\tCache:    make(map[int]int),
+\t\tQueue:    make([]int, 0, capacity),
+\t}
+}
+
+// Get returns the value for key, or -1 if absent
+// Access does NOT promote the entry — FIFO eviction is purely by insertion order
+func (c *FIFOCache) Get(key int) int {
+\tval, ok := c.Cache[key]
+\tif !ok {
+\t\treturn -1
+\t}
+\treturn val
+}
+
+// Put inserts or updates key; on overflow evicts the oldest-inserted key
+func (c *FIFOCache) Put(key, value int) {
+\tif _, exists := c.Cache[key]; exists {
+\t\t// Key exists — update value only; queue position (insertion age) is unchanged
+\t\tc.Cache[key] = value
+\t\treturn
+\t}
+\t// At capacity — dequeue the front (oldest inserted key) and evict it
+\tif len(c.Cache) == c.Capacity {
+\t\toldest := c.Queue[0]  // front of queue = first key ever inserted
+\t\tc.Queue = c.Queue[1:] // remove front — O(n) copy; production: use circular buffer
+\t\tdelete(c.Cache, oldest)
+\t}
+\tc.Cache[key] = value
+\tc.Queue = append(c.Queue, key) // enqueue new key at the back
+}
+
+func main() {
+\tcache := NewFIFOCache(3)
+\tcache.Put(1, 10)
+\tcache.Put(2, 20)
+\tcache.Put(3, 30)
+
+\t// Queue: [1, 2, 3]  — key 1 is oldest (will be evicted next)
+
+\tfmt.Println(cache.Get(1)) // 10 — present but still oldest in queue
+\tfmt.Println(cache.Get(2)) // 20
+
+\tcache.Put(4, 40)
+\t// Queue full — evict key 1 (oldest), even though it was just accessed above
+\t// Queue: [2, 3, 4]
+
+\tfmt.Println(cache.Get(1)) // -1 — evicted (FIFO ignores recency of access)
+\tfmt.Println(cache.Get(2)) // 20
+\tfmt.Println(cache.Get(3)) // 30
+\tfmt.Println(cache.Get(4)) // 40
+
+\tcache.Put(2, 99)
+\t// Update key 2 value — queue position is unchanged
+\t// Queue still: [2, 3, 4]
+
+\tcache.Put(5, 50)
+\t// Evict key 2 (oldest in queue despite recent update)
+\t// Queue: [3, 4, 5]
+
+\tfmt.Println(cache.Get(2)) // -1 — evicted
+\tfmt.Println(cache.Get(5)) // 50
+}`,
+      },
+      {
         id: "rate-limiter",
         title: "Rate Limiter (Token Bucket)",
         difficulty: "Medium",
