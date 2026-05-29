@@ -29,23 +29,29 @@ import (
 \t"fmt"
 )
 
+// Wallet holds a user's balance
 type Wallet struct {
 \tId      int
 \tBalance float64
 }
 
+// WalletService manages all wallets in memory
 type WalletService struct {
 \twallets []Wallet
 }
 
+// AddWallet registers a new wallet
 func (w *WalletService) AddWallet(wallet Wallet) {
 \tw.wallets = append(w.wallets, wallet)
 }
 
+// SendMoney transfers amount from sender (from) to receiver (to)
 func (w *WalletService) SendMoney(to int, from int, amount float64) error {
 \tvar sender *Wallet
 \tvar receiver *Wallet
 
+\t// Use index-range to get addressable pointers
+\t// range over value copies would not let us mutate balances
 \tfor i := range w.wallets {
 \t\tif w.wallets[i].Id == from {
 \t\t\tsender = &w.wallets[i]
@@ -55,13 +61,17 @@ func (w *WalletService) SendMoney(to int, from int, amount float64) error {
 \t\t}
 \t}
 
+\t// Both wallets must exist
 \tif sender == nil || receiver == nil {
 \t\treturn errors.New("user not found")
 \t}
+
+\t// Check sender has enough balance
 \tif sender.Balance < amount {
 \t\treturn errors.New("insufficient balance")
 \t}
 
+\t// Atomic transfer — debit sender, credit receiver
 \tsender.Balance -= amount
 \treceiver.Balance += amount
 \treturn nil
@@ -72,6 +82,7 @@ func main() {
 \tservice.AddWallet(Wallet{1, 2000})
 \tservice.AddWallet(Wallet{2, 500})
 
+\t// Transfer ₹300 from wallet 1 → wallet 2
 \tif err := service.SendMoney(2, 1, 300); err != nil {
 \t\tfmt.Println("error:", err)
 \t\treturn
@@ -79,6 +90,7 @@ func main() {
 \tfmt.Println(service.wallets)
 \t// [{1 1700} {2 800}]
 
+\t// Try sending more than available balance
 \tif err := service.SendMoney(1, 2, 10000); err != nil {
 \t\tfmt.Println("error:", err) // insufficient balance
 \t}
@@ -103,70 +115,207 @@ func main() {
 
 import "fmt"
 
-type node struct {
-\tkey, val   int
-\tprev, next *node
+// Node represents one cache entry
+type Node struct {
+\tKey   int
+\tValue int
+
+\tPrev *Node // Previous node in DLL
+\tNext *Node // Next node in DLL
 }
 
+// LRU Cache Structure
 type LRUCache struct {
-\tcap        int
-\tcache      map[int]*node
-\thead, tail *node // sentinels
+\tCapicity int
+
+\t// HashMap
+\t// Example:
+\t// 1 -> Node(1,1)
+\t// 2 -> Node(2,2)
+\tCache map[int]*Node
+
+\t// Dummy head and tail
+\tHead *Node
+\tTail *Node
 }
 
-func NewLRUCache(cap int) *LRUCache {
-\th, t := &node{}, &node{}
-\th.next = t
-\tt.prev = h
-\treturn &LRUCache{cap: cap, cache: make(map[int]*node), head: h, tail: t}
-}
+// Constructor
+func NewLruCache(capicity int) LRUCache {
 
-func (c *LRUCache) remove(n *node) {
-\tn.prev.next = n.next
-\tn.next.prev = n.prev
-}
+\t// Create dummy nodes
+\thead := &Node{}
+\ttail := &Node{}
 
-func (c *LRUCache) insertFront(n *node) {
-\tn.next = c.head.next
-\tn.prev = c.head
-\tc.head.next.prev = n
-\tc.head.next = n
-}
+\t// Connect head and tail
+\thead.Next = tail
+\ttail.Prev = head
 
-func (c *LRUCache) Get(key int) int {
-\tif n, ok := c.cache[key]; ok {
-\t\tc.remove(n)
-\t\tc.insertFront(n)
-\t\treturn n.val
+\treturn LRUCache{
+\t\tCapicity: capicity,
+\t\tCache:    make(map[int]*Node),
+\t\tHead:     head,
+\t\tTail:     tail,
 \t}
+}
+
+// Get value from cache
+func (l *LRUCache) Get(key int) int {
+
+\t// Check key exists
+\tif node, ok := l.Cache[key]; ok {
+
+\t\t// Move to front
+\t\t// because it became recently used
+\t\tl.addToFront(node)
+
+\t\treturn node.Value
+\t}
+
+\t// Not found
 \treturn -1
 }
 
-func (c *LRUCache) Put(key, val int) {
-\tif n, ok := c.cache[key]; ok {
-\t\tn.val = val
-\t\tc.remove(n)
-\t\tc.insertFront(n)
+// Insert or Update
+func (l *LRUCache) Put(key int, value int) {
+
+\t// Existing key
+\tif node, ok := l.Cache[key]; ok {
+
+\t\t// Update value
+\t\tnode.Value = value
+
+\t\t// Move to front
+\t\tl.addToFront(node)
+
 \t\treturn
 \t}
-\tn := &node{key: key, val: val}
-\tc.cache[key] = n
-\tc.insertFront(n)
-\tif len(c.cache) > c.cap {
-\t\tlru := c.tail.prev
-\t\tc.remove(lru)
-\t\tdelete(c.cache, lru.key)
+
+\t// Cache full
+\tif len(l.Cache) == l.Capicity {
+
+\t\t// Remove least recently used
+\t\tl.removeTail()
 \t}
+
+\t// Create new node
+\tnewNode := &Node{
+\t\tKey:   key,
+\t\tValue: value,
+\t}
+
+\t// Store in hashmap
+\tl.Cache[key] = newNode
+
+\t// Insert at front
+\tl.addToFront(newNode)
+}
+
+// Remove node from DLL
+func (l *LRUCache) removeNode(node *Node) {
+
+\t// Example:
+\t// 1 <-> 2 <-> 3
+\t//
+\t// Remove 2
+
+\tnode.Prev.Next = node.Next
+\tnode.Next.Prev = node.Prev
+
+\t// Result:
+\t// 1 <-> 3
+}
+
+// Move node to front
+func (l *LRUCache) addToFront(node *Node) {
+
+\t// Existing node
+\tif node.Prev != nil || node.Next != nil {
+
+\t\t// Remove from old position
+\t\tl.removeNode(node)
+\t}
+
+\t// Insert after Head
+
+\tnode.Prev = l.Head
+
+\tnode.Next = l.Head.Next
+
+\tl.Head.Next.Prev = node
+
+\tl.Head.Next = node
+
+\t/*
+\t\tBefore:
+
+\t\tHead <-> 1 <-> 2 <-> Tail
+
+\t\tAdd 3
+
+\t\tAfter:
+
+\t\tHead <-> 3 <-> 1 <-> 2 <-> Tail
+\t*/
+}
+
+// Remove least recently used node
+func (l *LRUCache) removeTail() {
+
+\t// Tail.Prev is LRU node
+
+\ttail := l.Tail.Prev
+
+\t/*
+\t\tHead <-> 3 <-> 1 <-> 2 <-> Tail
+
+\t\tLRU = 2
+\t*/
+
+\tl.removeNode(tail)
+
+\tdelete(l.Cache, tail.Key)
 }
 
 func main() {
-\tlru := NewLRUCache(2)
-\tlru.Put(1, 10)
-\tlru.Put(2, 20)
-\tfmt.Println(lru.Get(1)) // 10  — 1 is now most-recent
-\tlru.Put(3, 30)          // evicts key 2 (LRU)
-\tfmt.Println(lru.Get(2)) // -1  — evicted
-\tfmt.Println(lru.Get(3)) // 30
+
+\tcacheData := NewLruCache(2)
+
+\t// Head <-> Tail
+
+\tcacheData.Put(1, 1)
+
+\t// Head <-> 1 <-> Tail
+
+\tcacheData.Put(2, 2)
+
+\t// Head <-> 2 <-> 1 <-> Tail
+
+\tcacheData.Put(3, 3)
+
+\t/*
+\t\tCapacity = 2
+
+\t\tHead <-> 3 <-> 2 <-> 1 <-> Tail
+
+\t\tRemove LRU = 1
+
+\t\tHead <-> 3 <-> 2 <-> Tail
+\t*/
+
+\tfmt.Println(cacheData.Get(3))
+
+\t// Move 3 to front
+\t// Output: 3
+
+\tfmt.Println(cacheData.Get(2))
+
+\t// Move 2 to front
+\t// Output: 2
+
+\tfmt.Println(cacheData.Get(1))
+
+\t// Not found
+\t// Output: -1
 }`,
       },
       {
@@ -192,13 +341,15 @@ import (
 \t"time"
 )
 
+// bucket holds per-user token state
 type bucket struct {
-\ttokens     float64
-\tcapacity   float64
-\trefillRate float64 // tokens per second
-\tlastRefill time.Time
+\ttokens     float64   // current available tokens
+\tcapacity   float64   // maximum tokens allowed
+\trefillRate float64   // tokens added per second
+\tlastRefill time.Time // time of last refill (used for lazy refill)
 }
 
+// RateLimiter manages one bucket per user
 type RateLimiter struct {
 \tmu      sync.Mutex
 \tbuckets map[string]*bucket
@@ -206,6 +357,7 @@ type RateLimiter struct {
 \trate    float64
 }
 
+// NewRateLimiter creates a limiter with given capacity and refill rate
 func NewRateLimiter(capacity, ratePerSec float64) *RateLimiter {
 \treturn &RateLimiter{
 \t\tbuckets: make(map[string]*bucket),
@@ -214,27 +366,35 @@ func NewRateLimiter(capacity, ratePerSec float64) *RateLimiter {
 \t}
 }
 
+// Allow consumes one token for the user, returns false if bucket is empty
 func (rl *RateLimiter) Allow(userID string) bool {
 \trl.mu.Lock()
 \tdefer rl.mu.Unlock()
 
 \tb, ok := rl.buckets[userID]
 \tif !ok {
+\t\t// First request — create bucket at full capacity
 \t\tb = &bucket{tokens: rl.cap, capacity: rl.cap, refillRate: rl.rate, lastRefill: time.Now()}
 \t\trl.buckets[userID] = b
 \t}
 
-\t// lazy refill
+\t// Lazy refill — compute how many tokens to add since last call
+\t// This avoids a background goroutine entirely
 \telapsed := time.Since(b.lastRefill).Seconds()
 \tb.tokens += elapsed * b.refillRate
+
+\t// Cap tokens at bucket capacity
 \tif b.tokens > b.capacity {
 \t\tb.tokens = b.capacity
 \t}
 \tb.lastRefill = time.Now()
 
+\t// Not enough tokens — reject request
 \tif b.tokens < 1 {
 \t\treturn false
 \t}
+
+\t// Consume one token and allow the request
 \tb.tokens--
 \treturn true
 }
@@ -243,11 +403,13 @@ func main() {
 \t// 3 tokens capacity, refills at 1 token/sec
 \trl := NewRateLimiter(3, 1)
 
+\t// Burst: first 3 allowed, 4 and 5 denied
 \tfor i := 0; i < 5; i++ {
 \t\tfmt.Printf("request %d: allowed=%v\\n", i+1, rl.Allow("user-1"))
 \t}
 \t// requests 1-3 allowed, 4-5 denied
 
+\t// Wait 2 seconds → 2 tokens refilled
 \ttime.Sleep(2 * time.Second)
 \tfmt.Println("after 2s:", rl.Allow("user-1")) // allowed (2 tokens refilled)
 }`,
@@ -274,41 +436,53 @@ import (
 \t"sync"
 )
 
+// EventBus routes published messages to all topic subscribers
 type EventBus struct {
 \tmu   sync.RWMutex
-\tsubs map[string][]chan interface{}
+\tsubs map[string][]chan interface{} // topic → subscriber channels
 }
 
+// NewEventBus creates an empty event bus
 func NewEventBus() *EventBus {
 \treturn &EventBus{subs: make(map[string][]chan interface{})}
 }
 
+// Subscribe registers a new subscriber for a topic
+// Returns a buffered read-only channel for receiving messages
 func (eb *EventBus) Subscribe(topic string) <-chan interface{} {
 \teb.mu.Lock()
 \tdefer eb.mu.Unlock()
+
+\t// Buffered channel prevents publisher blocking on slow subscriber
 \tch := make(chan interface{}, 10)
 \teb.subs[topic] = append(eb.subs[topic], ch)
 \treturn ch
 }
 
+// Publish sends a message to all subscribers of the topic
 func (eb *EventBus) Publish(topic string, msg interface{}) {
 \teb.mu.RLock()
 \tdefer eb.mu.RUnlock()
+
 \tfor _, ch := range eb.subs[topic] {
+\t\t// Non-blocking send — skip slow consumers instead of blocking the publisher
 \t\tselect {
 \t\tcase ch <- msg:
-\t\tdefault: // slow consumer — skip
+\t\tdefault: // slow consumer — drop message
 \t\t}
 \t}
 }
 
+// Unsubscribe removes a subscriber channel from the topic and closes it
 func (eb *EventBus) Unsubscribe(topic string, unsub <-chan interface{}) {
 \teb.mu.Lock()
 \tdefer eb.mu.Unlock()
+
 \tlist := eb.subs[topic]
 \tfor i, ch := range list {
 \t\tif ch == unsub {
 \t\t\tclose(ch)
+\t\t\t// Remove by replacing with last element and truncating
 \t\t\teb.subs[topic] = append(list[:i], list[i+1:]...)
 \t\t\treturn
 \t\t}
@@ -318,6 +492,7 @@ func (eb *EventBus) Unsubscribe(topic string, unsub <-chan interface{}) {
 func main() {
 \tbus := NewEventBus()
 
+\t// Two independent subscribers on the same topic
 \tch1 := bus.Subscribe("orders")
 \tch2 := bus.Subscribe("orders")
 
@@ -330,6 +505,7 @@ func main() {
 \t\t}(ch)
 \t}
 
+\t// Publish fans out to both ch1 and ch2
 \tbus.Publish("orders", "order-123 placed")
 \twg.Wait()
 \t// both subscribers print: received: order-123 placed
@@ -358,53 +534,66 @@ import (
 \t"time"
 )
 
+// entry holds a stored value with optional expiry
 type entry struct {
 \tvalue     string
-\texpiresAt time.Time
-\thasTTL    bool
+\texpiresAt time.Time // expiry timestamp (zero value if no TTL)
+\thasTTL    bool      // false means the key lives forever
 }
 
+// KVStore is a thread-safe in-memory key-value store with TTL support
 type KVStore struct {
 \tmu   sync.RWMutex
 \tdata map[string]entry
 }
 
+// NewKVStore creates a store and starts the background eviction goroutine
 func NewKVStore() *KVStore {
 \tk := &KVStore{data: make(map[string]entry)}
 \tgo k.evictLoop()
 \treturn k
 }
 
+// Set stores a key with an optional TTL (ttl=0 means no expiry)
 func (k *KVStore) Set(key, value string, ttl time.Duration) {
 \tk.mu.Lock()
 \tdefer k.mu.Unlock()
+
 \te := entry{value: value}
 \tif ttl > 0 {
+\t\t// Record when this key should expire
 \t\te.expiresAt = time.Now().Add(ttl)
 \t\te.hasTTL = true
 \t}
 \tk.data[key] = e
 }
 
+// Get retrieves a value; returns ("", false) if missing or expired
 func (k *KVStore) Get(key string) (string, bool) {
 \tk.mu.RLock()
 \tdefer k.mu.RUnlock()
+
 \te, ok := k.data[key]
 \tif !ok {
 \t\treturn "", false
 \t}
+
+\t// Inline expiry check — expired keys are invisible even before eviction runs
 \tif e.hasTTL && time.Now().After(e.expiresAt) {
 \t\treturn "", false
 \t}
 \treturn e.value, true
 }
 
+// Delete removes a key immediately
 func (k *KVStore) Delete(key string) {
 \tk.mu.Lock()
 \tdefer k.mu.Unlock()
 \tdelete(k.data, key)
 }
 
+// evictLoop runs every second and removes expired entries
+// Prevents unbounded memory growth from keys that are never read again
 func (k *KVStore) evictLoop() {
 \tticker := time.NewTicker(time.Second)
 \tfor range ticker.C {
@@ -421,12 +610,17 @@ func (k *KVStore) evictLoop() {
 
 func main() {
 \tstore := NewKVStore()
-\tstore.Set("name", "Alice", 0)              // no expiry
-\tstore.Set("session", "tok-xyz", 2*time.Second) // 2s TTL
+
+\t// "name" has no expiry — lives forever
+\tstore.Set("name", "Alice", 0)
+
+\t// "session" expires after 2 seconds
+\tstore.Set("session", "tok-xyz", 2*time.Second)
 
 \tv, ok := store.Get("session")
 \tfmt.Println(v, ok) // tok-xyz true
 
+\t// Wait for TTL to expire
 \ttime.Sleep(3 * time.Second)
 
 \tv, ok = store.Get("session")
@@ -470,12 +664,13 @@ import (
 \t"fmt"
 )
 
+// State represents ATM states in the FSM
 type State int
 
 const (
-\tNoCard     State = iota
-\tHasCard
-\tAuthorized
+\tNoCard     State = iota // waiting for card
+\tHasCard                 // card inserted, PIN not entered
+\tAuthorized              // PIN verified, ready for transactions
 )
 
 type Account struct {
@@ -483,12 +678,15 @@ type Account struct {
 \tBalance float64
 }
 
+// ATM enforces operation order via state machine
+// NoCard → HasCard → Authorized → (transaction) → Authorized / NoCard
 type ATM struct {
 \tstate    State
 \taccounts map[string]*Account
-\tcurrent  *Account
+\tcurrent  *Account // currently active account
 }
 
+// NewATM creates an ATM with pre-loaded test accounts
 func NewATM() *ATM {
 \treturn &ATM{
 \t\tstate: NoCard,
@@ -499,7 +697,9 @@ func NewATM() *ATM {
 \t}
 }
 
+// InsertCard accepts a card — transitions NoCard → HasCard
 func (a *ATM) InsertCard(accountID string) error {
+\t// Guard: cannot insert if card already in machine
 \tif a.state != NoCard {
 \t\treturn errors.New("card already inserted")
 \t}
@@ -513,7 +713,9 @@ func (a *ATM) InsertCard(accountID string) error {
 \treturn nil
 }
 
+// EnterPIN verifies PIN — transitions HasCard → Authorized
 func (a *ATM) EnterPIN(pin string) error {
+\t// Guard: must have card inserted first
 \tif a.state != HasCard {
 \t\treturn errors.New("insert card first")
 \t}
@@ -525,7 +727,9 @@ func (a *ATM) EnterPIN(pin string) error {
 \treturn nil
 }
 
+// Withdraw dispenses cash — requires Authorized state
 func (a *ATM) Withdraw(amount float64) error {
+\t// Guard: must be authorized before withdrawing
 \tif a.state != Authorized {
 \t\treturn errors.New("not authorized")
 \t}
@@ -537,7 +741,9 @@ func (a *ATM) Withdraw(amount float64) error {
 \treturn nil
 }
 
+// Deposit adds funds — requires Authorized state
 func (a *ATM) Deposit(amount float64) error {
+\t// Guard: must be authorized before depositing
 \tif a.state != Authorized {
 \t\treturn errors.New("not authorized")
 \t}
@@ -546,6 +752,7 @@ func (a *ATM) Deposit(amount float64) error {
 \treturn nil
 }
 
+// EjectCard resets ATM to NoCard state — clears current account
 func (a *ATM) EjectCard() {
 \ta.state = NoCard
 \ta.current = nil
@@ -554,13 +761,15 @@ func (a *ATM) EjectCard() {
 
 func main() {
 \tatm := NewATM()
+
+\t// Happy path: insert → PIN → withdraw → deposit → eject
 \tatm.InsertCard("ACC001")
 \tatm.EnterPIN("1234")
 \tatm.Withdraw(200)
 \tatm.Deposit(500)
 \tatm.EjectCard()
 
-\t// guard test
+\t// Guard test: withdrawing after eject returns to NoCard
 \tif err := atm.Withdraw(100); err != nil {
 \t\tfmt.Println("error:", err) // not authorized
 \t}
@@ -588,6 +797,7 @@ import (
 \t"sort"
 )
 
+// Side indicates whether an order is a buy or sell
 type Side bool
 
 const (
@@ -595,56 +805,74 @@ const (
 \tSell Side = false
 )
 
+// Order represents a single buy or sell order
 type Order struct {
 \tID    int
 \tSide  Side
 \tPrice float64
-\tQty   int
+\tQty   int // remaining unfilled quantity
 }
 
+// Trade records an executed match between a buy and sell order
 type Trade struct {
 \tBuyID, SellID int
 \tPrice         float64
 \tQty           int
 }
 
+// OrderBook maintains buy/sell queues and records all trades
 type OrderBook struct {
-\tbuys   []*Order
-\tsells  []*Order
+\tbuys   []*Order // sorted: highest price first (best bid)
+\tsells  []*Order // sorted: lowest price first (best ask)
 \tnextID int
 \tTrades []Trade
 }
 
+// AddOrder adds an order to the book and immediately attempts to match
 func (ob *OrderBook) AddOrder(side Side, price float64, qty int) {
 \tob.nextID++
 \torder := &Order{ID: ob.nextID, Side: side, Price: price, Qty: qty}
+
 \tif side == Buy {
 \t\tob.buys = append(ob.buys, order)
 \t} else {
 \t\tob.sells = append(ob.sells, order)
 \t}
+
+\t// Try to match after every new order
 \tob.match()
 }
 
+// match executes trades using price-time priority
 func (ob *OrderBook) match() {
-\t// best bid: highest price first
+\t// Best bid = highest buy price (first after sort descending)
 \tsort.Slice(ob.buys, func(i, j int) bool { return ob.buys[i].Price > ob.buys[j].Price })
-\t// best ask: lowest price first
+
+\t// Best ask = lowest sell price (first after sort ascending)
 \tsort.Slice(ob.sells, func(i, j int) bool { return ob.sells[i].Price < ob.sells[j].Price })
 
+\t// Keep matching while best bid >= best ask
 \tfor len(ob.buys) > 0 && len(ob.sells) > 0 {
 \t\tbid := ob.buys[0]
 \t\task := ob.sells[0]
+
+\t\t// No match possible — bid is lower than lowest ask
 \t\tif bid.Price < ask.Price {
-\t\t\tbreak // no match
+\t\t\tbreak
 \t\t}
+
+\t\t// Trade executes at sell price, for min(bid.qty, ask.qty)
 \t\tqty := bid.Qty
 \t\tif ask.Qty < qty {
 \t\t\tqty = ask.Qty
 \t\t}
 \t\tob.Trades = append(ob.Trades, Trade{bid.ID, ask.ID, ask.Price, qty})
+
+\t\t// Reduce remaining quantities
 \t\tbid.Qty -= qty
 \t\task.Qty -= qty
+
+\t\t// Remove fully filled orders from the book
 \t\tif bid.Qty == 0 {
 \t\t\tob.buys = ob.buys[1:]
 \t\t}
@@ -656,9 +884,14 @@ func (ob *OrderBook) match() {
 
 func main() {
 \tob := &OrderBook{}
+
+\t// Sell orders: 10 @ 100, 5 @ 99
 \tob.AddOrder(Sell, 100, 10)
 \tob.AddOrder(Sell, 99, 5)
-\tob.AddOrder(Buy, 101, 8) // matches sell@99 (5) + sell@100 (3)
+
+\t// Buy order: 8 @ 101 — willing to buy up to 101
+\t// Matches: 5 @ 99 (cheapest sell first), then 3 @ 100
+\tob.AddOrder(Buy, 101, 8)
 
 \tfor _, t := range ob.Trades {
 \t\tfmt.Printf("trade: buy#%d × sell#%d @ %.0f qty=%d\\n", t.BuyID, t.SellID, t.Price, t.Qty)
@@ -690,34 +923,45 @@ import (
 \t"sort"
 )
 
+// Expense records a payment made by one person split among others
 type Expense struct {
 \tPaidBy string
 \tAmount float64
-\tSplit  []string
+\tSplit  []string // members sharing this expense equally
 }
 
+// Group manages members and their shared expenses
 type Group struct {
 \tmembers  map[string]bool
 \texpenses []Expense
 }
 
+// NewGroup creates an empty group
 func NewGroup() *Group {
 \treturn &Group{members: make(map[string]bool)}
 }
 
+// AddMember registers a member in the group
 func (g *Group) AddMember(name string) {
 \tg.members[name] = true
 }
 
+// AddExpense records a payment made by one person split equally among the list
 func (g *Group) AddExpense(paidBy string, amount float64, splitAmong []string) {
 \tg.expenses = append(g.expenses, Expense{paidBy, amount, splitAmong})
 }
 
+// Balances computes net balance per person
+// Positive = owed money (creditor), Negative = owes money (debtor)
 func (g *Group) Balances() map[string]float64 {
 \tbal := make(map[string]float64)
 \tfor _, e := range g.expenses {
 \t\tshare := e.Amount / float64(len(e.SplitAmong))
+
+\t\t// Payer gets credited the full amount
 \t\tbal[e.PaidBy] += e.Amount
+
+\t\t// Each person in the split is debited their share
 \t\tfor _, m := range e.SplitAmong {
 \t\t\tbal[m] -= share
 \t\t}
@@ -725,6 +969,8 @@ func (g *Group) Balances() map[string]float64 {
 \treturn bal
 }
 
+// Settle returns the minimum transactions needed to zero all balances
+// Uses greedy two-pointer: pair largest creditor with largest debtor
 func (g *Group) Settle() []string {
 \tbal := g.Balances()
 
@@ -732,24 +978,33 @@ func (g *Group) Settle() []string {
 \t\tname string
 \t\tamt  float64
 \t}
+
 \tvar creditors, debtors []person
 \tfor name, amt := range bal {
 \t\tif amt > 0.001 {
 \t\t\tcreditors = append(creditors, person{name, amt})
 \t\t} else if amt < -0.001 {
-\t\t\tdebtors = append(debtors, person{name, -amt})
+\t\t\tdebtors = append(debtors, person{name, -amt}) // store as positive
 \t\t}
 \t}
+
+\t// Sort both descending so largest amounts get matched first
 \tsort.Slice(creditors, func(i, j int) bool { return creditors[i].amt > creditors[j].amt })
 \tsort.Slice(debtors, func(i, j int) bool { return debtors[i].amt > debtors[j].amt })
 
 \tvar txns []string
 \ti, j := 0, 0
+
+\t// Greedily settle: move min(creditor, debtor) amount per transaction
 \tfor i < len(creditors) && j < len(debtors) {
 \t\tamount := math.Min(creditors[i].amt, debtors[j].amt)
 \t\ttxns = append(txns, fmt.Sprintf("%s pays %s ₹%.2f", debtors[j].name, creditors[i].name, amount))
+
+\t\t// Reduce both sides by the settled amount
 \t\tcreditors[i].amt -= amount
 \t\tdebtors[j].amt -= amount
+
+\t\t// Advance pointer when fully settled
 \t\tif creditors[i].amt < 0.001 {
 \t\t\ti++
 \t\t}
@@ -766,8 +1021,11 @@ func main() {
 \tg.AddMember("Bob")
 \tg.AddMember("Carol")
 
-\tg.AddExpense("Alice", 300, []string{"Alice", "Bob", "Carol"}) // Alice paid ₹300
-\tg.AddExpense("Bob", 150, []string{"Bob", "Carol"})            // Bob paid ₹150
+\t// Alice paid ₹300 split 3 ways → each owes ₹100
+\tg.AddExpense("Alice", 300, []string{"Alice", "Bob", "Carol"})
+
+\t// Bob paid ₹150 split 2 ways → Carol owes Bob ₹75
+\tg.AddExpense("Bob", 150, []string{"Bob", "Carol"})
 
 \tfor name, bal := range g.Balances() {
 \t\tfmt.Printf("%s: %.2f\\n", name, bal)
@@ -813,6 +1071,7 @@ import (
 \t"time"
 )
 
+// SpotType categorises parking spots by vehicle size
 type SpotType string
 
 const (
@@ -821,27 +1080,33 @@ const (
 \tLarge  SpotType = "large"
 )
 
+// Spot represents one physical parking space
 type Spot struct {
 \tID       int
 \tType     SpotType
 \tOccupied bool
 }
 
+// Ticket is issued on entry and used for fee calculation on exit
 type Ticket struct {
 \tSpotID    int
 \tPlate     string
 \tEntryTime time.Time
 }
 
+// ParkingLot manages spots and active tickets
 type ParkingLot struct {
 \tspots   []*Spot
-\ttickets map[string]*Ticket // plate → ticket
-\trate    float64            // per hour
+\ttickets map[string]*Ticket // plate → ticket for O(1) leave lookup
+\trate    float64            // fee per hour
 }
 
+// NewParkingLot creates a lot with the given counts of each spot type
 func NewParkingLot(small, medium, large int, rate float64) *ParkingLot {
 \tpl := &ParkingLot{tickets: make(map[string]*Ticket), rate: rate}
 \tid := 1
+
+\t// Create small spots first, then medium, then large
 \tfor i := 0; i < small; i++ {
 \t\tpl.spots = append(pl.spots, &Spot{ID: id, Type: Small})
 \t\tid++
@@ -857,10 +1122,14 @@ func NewParkingLot(small, medium, large int, rate float64) *ParkingLot {
 \treturn pl
 }
 
+// Park assigns the first available spot of the requested type
 func (pl *ParkingLot) Park(plate string, t SpotType) (*Ticket, error) {
+\t// Prevent duplicate parking of same vehicle
 \tif _, ok := pl.tickets[plate]; ok {
 \t\treturn nil, errors.New("vehicle already parked")
 \t}
+
+\t// Linear scan for first free spot of matching type
 \tfor _, s := range pl.spots {
 \t\tif s.Type == t && !s.Occupied {
 \t\t\ts.Occupied = true
@@ -872,17 +1141,21 @@ func (pl *ParkingLot) Park(plate string, t SpotType) (*Ticket, error) {
 \treturn nil, fmt.Errorf("no %s spot available", t)
 }
 
+// Leave calculates the fee and frees the spot
 func (pl *ParkingLot) Leave(plate string) (float64, error) {
 \ttkt, ok := pl.tickets[plate]
 \tif !ok {
 \t\treturn 0, errors.New("vehicle not found")
 \t}
+
+\t// Minimum 1 hour; ceil to nearest hour for partial hours
 \thours := math.Ceil(time.Since(tkt.EntryTime).Hours())
 \tif hours < 1 {
 \t\thours = 1
 \t}
 \tfee := hours * pl.rate
-\t// free spot
+
+\t// Free up the spot
 \tfor _, s := range pl.spots {
 \t\tif s.ID == tkt.SpotID {
 \t\t\ts.Occupied = false
@@ -893,6 +1166,7 @@ func (pl *ParkingLot) Leave(plate string) (float64, error) {
 \treturn fee, nil
 }
 
+// Available returns count of free spots of the given type
 func (pl *ParkingLot) Available(t SpotType) int {
 \tcount := 0
 \tfor _, s := range pl.spots {
@@ -914,6 +1188,7 @@ func main() {
 \tfmt.Printf("parked at spot %d\\n", tkt.SpotID)
 \tfmt.Println("small available:", lot.Available(Small)) // 1
 
+\t// Leave immediately — charged minimum 1 hour
 \tfee, _ := lot.Leave("KA01AB1234")
 \tfmt.Printf("fee: ₹%.2f\\n", fee) // ₹10.00 (min 1 hour)
 }`,
@@ -941,6 +1216,7 @@ import (
 \t"time"
 )
 
+// Booking holds one reservation for a room
 type Booking struct {
 \tID       int
 \tGuest    string
@@ -948,17 +1224,20 @@ type Booking struct {
 \tCheckOut time.Time
 }
 
+// Room holds all bookings for one room number
 type Room struct {
 \tNumber   int
 \tType     string
 \tBookings []Booking
 }
 
+// Hotel manages rooms and auto-incrementing booking IDs
 type Hotel struct {
 \trooms  map[int]*Room
 \tnextID int
 }
 
+// NewHotel creates a hotel with preset rooms
 func NewHotel() *Hotel {
 \th := &Hotel{rooms: make(map[int]*Room)}
 \th.rooms[101] = &Room{Number: 101, Type: "Standard"}
@@ -967,15 +1246,20 @@ func NewHotel() *Hotel {
 \treturn h
 }
 
+// overlaps returns true if date ranges [a,b) and [c,d) intersect
+// Two ranges overlap when: start1 < end2 AND start2 < end1
 func overlaps(a, b, c, d time.Time) bool {
 \treturn a.Before(d) && c.Before(b)
 }
 
+// IsAvailable checks if a room is free for the given date range
 func (h *Hotel) IsAvailable(roomNum int, checkIn, checkOut time.Time) bool {
 \troom, ok := h.rooms[roomNum]
 \tif !ok {
 \t\treturn false
 \t}
+
+\t// Room is unavailable if any existing booking overlaps
 \tfor _, b := range room.Bookings {
 \t\tif overlaps(checkIn, checkOut, b.CheckIn, b.CheckOut) {
 \t\t\treturn false
@@ -984,6 +1268,7 @@ func (h *Hotel) IsAvailable(roomNum int, checkIn, checkOut time.Time) bool {
 \treturn true
 }
 
+// Book creates a reservation if the room is available for the dates
 func (h *Hotel) Book(roomNum int, guest string, checkIn, checkOut time.Time) (int, error) {
 \troom, ok := h.rooms[roomNum]
 \tif !ok {
@@ -997,11 +1282,14 @@ func (h *Hotel) Book(roomNum int, guest string, checkIn, checkOut time.Time) (in
 \treturn h.nextID, nil
 }
 
+// Cancel removes a booking by ID from a room
 func (h *Hotel) Cancel(roomNum, bookingID int) error {
 \troom, ok := h.rooms[roomNum]
 \tif !ok {
 \t\treturn errors.New("room not found")
 \t}
+
+\t// Find and remove booking (slice deletion pattern)
 \tfor i, b := range room.Bookings {
 \t\tif b.ID == bookingID {
 \t\t\troom.Bookings = append(room.Bookings[:i], room.Bookings[i+1:]...)
@@ -1011,6 +1299,7 @@ func (h *Hotel) Cancel(roomNum, bookingID int) error {
 \treturn errors.New("booking not found")
 }
 
+// ListBookings prints all reservations for a room
 func (h *Hotel) ListBookings(roomNum int) {
 \troom := h.rooms[roomNum]
 \tfor _, b := range room.Bookings {
@@ -1023,14 +1312,19 @@ func main() {
 \th := NewHotel()
 \td := func(s string) time.Time { t, _ := time.Parse("2006-01-02", s); return t }
 
+\t// Alice books Dec 1–5
 \tid1, _ := h.Book(101, "Alice", d("2024-12-01"), d("2024-12-05"))
+
+\t// Bob tries Dec 3–7 — overlaps with Alice's booking
 \t_, err := h.Book(101, "Bob", d("2024-12-03"), d("2024-12-07"))
 \tfmt.Println("conflict:", err) // not available
 
+\t// Bob books Dec 6–10 — no overlap with Alice
 \tid2, _ := h.Book(101, "Bob", d("2024-12-06"), d("2024-12-10"))
 \tfmt.Println("booking IDs:", id1, id2)
 \th.ListBookings(101)
 
+\t// Alice cancels her booking
 \th.Cancel(101, id1)
 \tfmt.Println("after cancel:")
 \th.ListBookings(101)
@@ -1058,28 +1352,35 @@ import (
 \t"fmt"
 )
 
+// Seat represents one seat in the theater grid
 type Seat struct {
 \tBooked bool
-\tUser   string
+\tUser   string // username who booked this seat
 }
 
+// Show holds the movie name and its 2D seat grid
 type Show struct {
 \tID    int
 \tMovie string
 \tSeats [][]Seat // [row][col]
 }
 
+// Theater manages multiple shows
 type Theater struct {
 \tshows  map[int]*Show
 \tnextID int
 }
 
+// NewTheater creates an empty theater
 func NewTheater() *Theater {
 \treturn &Theater{shows: make(map[int]*Show)}
 }
 
+// AddShow creates a new show with a rows×cols seat grid
 func (t *Theater) AddShow(movie string, rows, cols int) int {
 \tt.nextID++
+
+\t// Build 2D grid: outer slice = rows, inner = columns
 \tseats := make([][]Seat, rows)
 \tfor i := range seats {
 \t\tseats[i] = make([]Seat, cols)
@@ -1088,22 +1389,28 @@ func (t *Theater) AddShow(movie string, rows, cols int) int {
 \treturn t.nextID
 }
 
+// seat returns a pointer to the seat at [row][col] with bounds checking
 func (t *Theater) seat(showID, row, col int) (*Seat, error) {
 \ts, ok := t.shows[showID]
 \tif !ok {
 \t\treturn nil, errors.New("show not found")
 \t}
+
+\t// Validate row and column are within grid bounds
 \tif row < 0 || row >= len(s.Seats) || col < 0 || col >= len(s.Seats[0]) {
 \t\treturn nil, errors.New("invalid seat position")
 \t}
 \treturn &s.Seats[row][col], nil
 }
 
+// Book reserves a seat for a user
 func (t *Theater) Book(showID, row, col int, user string) error {
 \tseat, err := t.seat(showID, row, col)
 \tif err != nil {
 \t\treturn err
 \t}
+
+\t// Check seat is not already taken
 \tif seat.Booked {
 \t\treturn fmt.Errorf("seat [%d,%d] already booked by %s", row, col, seat.User)
 \t}
@@ -1112,11 +1419,14 @@ func (t *Theater) Book(showID, row, col int, user string) error {
 \treturn nil
 }
 
+// Cancel releases a seat — only the booking user can cancel their own seat
 func (t *Theater) Cancel(showID, row, col int, user string) error {
 \tseat, err := t.seat(showID, row, col)
 \tif err != nil {
 \t\treturn err
 \t}
+
+\t// Ownership check: only the original booker can cancel
 \tif !seat.Booked || seat.User != user {
 \t\treturn errors.New("cannot cancel: not your booking")
 \t}
@@ -1125,6 +1435,7 @@ func (t *Theater) Cancel(showID, row, col int, user string) error {
 \treturn nil
 }
 
+// AvailableSeats returns all unbooked [row, col] positions
 func (t *Theater) AvailableSeats(showID int) [][2]int {
 \ts := t.shows[showID]
 \tvar available [][2]int
@@ -1140,11 +1451,12 @@ func (t *Theater) AvailableSeats(showID int) [][2]int {
 
 func main() {
 \tth := NewTheater()
-\tshow := th.AddShow("Inception", 3, 4) // 3 rows, 4 cols = 12 seats
+\tshow := th.AddShow("Inception", 3, 4) // 3 rows × 4 cols = 12 seats
 
 \tth.Book(show, 0, 0, "Alice")
 \tth.Book(show, 0, 1, "Bob")
 
+\t// Attempt to double-book an already-taken seat
 \tif err := th.Book(show, 0, 0, "Carol"); err != nil {
 \t\tfmt.Println("error:", err)
 \t}
@@ -1187,26 +1499,31 @@ import (
 \t"fmt"
 )
 
+// vmState represents the current state of the vending machine
 type vmState int
 
 const (
-\tIdle       vmState = iota
-\tHasMoney
-\tDispensing
+\tIdle       vmState = iota // no money inserted
+\tHasMoney                  // coins inserted, item not yet selected
+\tDispensing                // item being dispensed
 )
 
+// Item holds the product details stored in a slot
 type Item struct {
 \tName  string
 \tPrice float64
 \tStock int
 }
 
+// VendingMachine is a finite state machine
+// Transitions: Idle → HasMoney → Dispensing → Idle
 type VendingMachine struct {
 \tstate   vmState
-\tbalance float64
-\titems   map[string]*Item
+\tbalance float64          // total coins inserted so far
+\titems   map[string]*Item // slot code → item
 }
 
+// NewVM creates a vending machine starting in Idle state
 func NewVM() *VendingMachine {
 \treturn &VendingMachine{
 \t\tstate: Idle,
@@ -1214,11 +1531,14 @@ func NewVM() *VendingMachine {
 \t}
 }
 
+// Restock adds or replaces an item in a slot
 func (vm *VendingMachine) Restock(code, name string, price float64, qty int) {
 \tvm.items[code] = &Item{Name: name, Price: price, Stock: qty}
 }
 
+// InsertCoin adds money and moves to HasMoney state
 func (vm *VendingMachine) InsertCoin(amount float64) error {
+\t// Guard: cannot insert while item is being dispensed
 \tif vm.state == Dispensing {
 \t\treturn errors.New("please wait, dispensing")
 \t}
@@ -1228,7 +1548,9 @@ func (vm *VendingMachine) InsertCoin(amount float64) error {
 \treturn nil
 }
 
+// SelectItem picks an item to purchase — requires HasMoney state
 func (vm *VendingMachine) SelectItem(code string) error {
+\t// Guard: must have coins inserted first
 \tif vm.state != HasMoney {
 \t\treturn errors.New("insert coins first")
 \t}
@@ -1242,15 +1564,18 @@ func (vm *VendingMachine) SelectItem(code string) error {
 \tif vm.balance < item.Price {
 \t\treturn fmt.Errorf("insufficient balance (need ₹%.2f, have ₹%.2f)", item.Price, vm.balance)
 \t}
+
+\t// Transition: HasMoney → Dispensing → Idle
 \tvm.state = Dispensing
 \tchange := vm.balance - item.Price
 \titem.Stock--
 \tvm.balance = 0
-\tvm.state = Idle
+\tvm.state = Idle // back to Idle after dispensing
 \tfmt.Printf("dispensing %s — change: ₹%.2f\\n", item.Name, change)
 \treturn nil
 }
 
+// Refund returns all inserted money and resets to Idle
 func (vm *VendingMachine) Refund() float64 {
 \tamount := vm.balance
 \tvm.balance = 0
@@ -1264,10 +1589,12 @@ func main() {
 \tvm.Restock("A1", "Chips", 20, 5)
 \tvm.Restock("B2", "Water", 15, 3)
 
+\t// Insert ₹10 + ₹20 = ₹30, select Chips (₹20) → change ₹10
 \tvm.InsertCoin(10)
 \tvm.InsertCoin(20)
 \tvm.SelectItem("A1") // dispensing Chips — change: ₹10.00
 
+\t// Guard test: selecting without inserting money returns to Idle
 \tif err := vm.SelectItem("A1"); err != nil {
 \t\tfmt.Println("error:", err) // insert coins first
 \t}
@@ -1299,6 +1626,7 @@ import (
 \t"sort"
 )
 
+// Direction represents elevator movement direction
 type Direction int
 
 const (
@@ -1307,29 +1635,38 @@ const (
 \tIdle Direction = 0
 )
 
+// Elevator tracks one elevator's floor, direction, and pending targets
 type Elevator struct {
-\tID       int
-\tFloor    int
-\tDir      Direction
-\tTargets  []int // sorted
+\tID      int
+\tFloor   int
+\tDir     Direction
+\tTargets []int // sorted list of floors to visit
 }
 
+// AddTarget queues a floor request — deduplicates and keeps list sorted
 func (e *Elevator) AddTarget(floor int) {
+\t// Skip if already in the target list
 \tfor _, t := range e.Targets {
 \t\tif t == floor {
 \t\t\treturn // already queued
 \t\t}
 \t}
 \te.Targets = append(e.Targets, floor)
+
+\t// Keep targets sorted — elevator visits closest floor first
 \tsort.Ints(e.Targets)
 }
 
+// Step moves the elevator one floor toward the next target
 func (e *Elevator) Step() {
 \tif len(e.Targets) == 0 {
 \t\te.Dir = Idle
 \t\treturn
 \t}
+
 \tnext := e.Targets[0]
+
+\t// Move one floor in the direction of the next target
 \tif e.Floor < next {
 \t\te.Floor++
 \t\te.Dir = Up
@@ -1337,16 +1674,20 @@ func (e *Elevator) Step() {
 \t\te.Floor--
 \t\te.Dir = Down
 \t}
+
+\t// Arrived at target floor — dequeue it
 \tif e.Floor == next {
 \t\tfmt.Printf("  elevator %d arrived at floor %d\\n", e.ID, e.Floor)
 \t\te.Targets = e.Targets[1:]
 \t}
 }
 
+// ElevatorSystem manages multiple elevators
 type ElevatorSystem struct {
 \televators []*Elevator
 }
 
+// NewSystem creates N elevators all starting at floor 0
 func NewSystem(count int) *ElevatorSystem {
 \tes := &ElevatorSystem{}
 \tfor i := 1; i <= count; i++ {
@@ -1355,9 +1696,12 @@ func NewSystem(count int) *ElevatorSystem {
 \treturn es
 }
 
+// RequestFloor assigns the floor request to the nearest elevator
 func (es *ElevatorSystem) RequestFloor(floor int) {
 \tvar best *Elevator
 \tbestDist := math.MaxInt32
+
+\t// Nearest-neighbor: pick elevator with minimum distance to requested floor
 \tfor _, e := range es.elevators {
 \t\td := int(math.Abs(float64(e.Floor - floor)))
 \t\tif d < bestDist {
@@ -1369,12 +1713,14 @@ func (es *ElevatorSystem) RequestFloor(floor int) {
 \tfmt.Printf("floor %d → assigned to elevator %d (currently at %d)\\n", floor, best.ID, best.Floor)
 }
 
+// Step advances all elevators one floor each
 func (es *ElevatorSystem) Step() {
 \tfor _, e := range es.elevators {
 \t\te.Step()
 \t}
 }
 
+// Status prints the current floor and pending targets of each elevator
 func (es *ElevatorSystem) Status() {
 \tfor _, e := range es.elevators {
 \t\tfmt.Printf("elevator %d at floor %d, targets=%v\\n", e.ID, e.Floor, e.Targets)
@@ -1383,10 +1729,13 @@ func (es *ElevatorSystem) Status() {
 
 func main() {
 \tsys := NewSystem(2)
+
+\t// Assign three floor requests — distributed to two elevators
 \tsys.RequestFloor(3)
 \tsys.RequestFloor(5)
 \tsys.RequestFloor(1)
 
+\t// Simulate 6 time steps to watch elevators move
 \tfor i := 0; i < 6; i++ {
 \t\tfmt.Printf("-- step %d --\\n", i+1)
 \t\tsys.Step()
@@ -1415,25 +1764,33 @@ import (
 \t"container/heap"
 \t"fmt"
 \t"sync"
+\t"time"
 )
 
+// Task is a unit of work with a priority level
 type Task struct {
 \tName     string
-\tPriority int
+\tPriority int    // higher number = runs first
 \tFn       func()
-\tindex    int
+\tindex    int    // position in the heap (maintained by heap.Interface)
 }
 
+// TaskHeap implements heap.Interface for a max-priority queue
+// Less returns true when i has HIGHER priority than j (max-heap)
 type TaskHeap []*Task
 
 func (h TaskHeap) Len() int           { return len(h) }
-func (h TaskHeap) Less(i, j int) bool { return h[i].Priority > h[j].Priority } // max-heap
+func (h TaskHeap) Less(i, j int) bool { return h[i].Priority > h[j].Priority }
 func (h TaskHeap) Swap(i, j int) {
 \th[i], h[j] = h[j], h[i]
 \th[i].index = i
 \th[j].index = j
 }
+
+// Push adds a task to the end of the slice (heap package calls this)
 func (h *TaskHeap) Push(x interface{}) { *h = append(*h, x.(*Task)) }
+
+// Pop removes the last element — heap package swaps max to end before calling
 func (h *TaskHeap) Pop() interface{} {
 \told := *h
 \tn := old[len(old)-1]
@@ -1441,25 +1798,30 @@ func (h *TaskHeap) Pop() interface{} {
 \treturn n
 }
 
+// Scheduler dispatches tasks in priority order to a worker pool
 type Scheduler struct {
 \tmu   sync.Mutex
 \tpq   TaskHeap
-\tjobs chan func()
+\tjobs chan func()    // buffered channel consumed by workers
 \twg   sync.WaitGroup
-\tdone chan struct{}
+\tdone chan struct{}  // closed when Stop() is called
 }
 
+// NewScheduler creates a scheduler with a 50-slot job buffer
 func NewScheduler() *Scheduler {
 \treturn &Scheduler{jobs: make(chan func(), 50), done: make(chan struct{})}
 }
 
+// Submit adds a task to the priority queue under a mutex
 func (s *Scheduler) Submit(name string, priority int, fn func()) {
 \ts.mu.Lock()
 \theap.Push(&s.pq, &Task{Name: name, Priority: priority, Fn: fn})
 \ts.mu.Unlock()
 }
 
+// Start launches N worker goroutines and the dispatcher
 func (s *Scheduler) Start(workers int) {
+\t// Workers pull from the jobs channel until it is closed
 \tfor i := 0; i < workers; i++ {
 \t\ts.wg.Add(1)
 \t\tgo func() {
@@ -1469,18 +1831,23 @@ func (s *Scheduler) Start(workers int) {
 \t\t\t}
 \t\t}()
 \t}
+
+\t// Dispatcher moves tasks from heap → jobs channel in priority order
 \tgo s.dispatch()
 }
 
+// dispatch pops tasks from the heap and feeds them to workers
 func (s *Scheduler) dispatch() {
 \tfor {
 \t\tselect {
 \t\tcase <-s.done:
+\t\t\t// Stop signal — close jobs so workers drain and exit
 \t\t\tclose(s.jobs)
 \t\t\treturn
 \t\tdefault:
 \t\t\ts.mu.Lock()
 \t\t\tif s.pq.Len() > 0 {
+\t\t\t\t// Pop highest-priority task and send to a worker
 \t\t\t\ttask := heap.Pop(&s.pq).(*Task)
 \t\t\t\ts.mu.Unlock()
 \t\t\t\ts.jobs <- task.Fn
@@ -1491,6 +1858,7 @@ func (s *Scheduler) dispatch() {
 \t}
 }
 
+// Stop signals shutdown and waits for all workers to finish
 func (s *Scheduler) Stop() {
 \tclose(s.done)
 \ts.wg.Wait()
@@ -1498,6 +1866,8 @@ func (s *Scheduler) Stop() {
 
 func main() {
 \tsched := NewScheduler()
+
+\t// Submit tasks with different priorities — higher number runs first
 \tsched.Submit("low-priority", 1, func() { fmt.Println("task: low") })
 \tsched.Submit("high-priority", 10, func() { fmt.Println("task: HIGH") })
 \tsched.Submit("medium-priority", 5, func() { fmt.Println("task: medium") })
@@ -1533,13 +1903,15 @@ import (
 \t"strings"
 )
 
+// Game tracks the board state and whose turn it is
 type Game struct {
-\tboard   [][]byte
+\tboard   [][]byte // NxN grid; 0 = empty, 'X' or 'O'
 \tsize    int
-\tcurrent byte
-\tmoves   int
+\tcurrent byte // 'X' or 'O'
+\tmoves   int  // total moves made (for draw detection)
 }
 
+// NewGame creates an NxN board with X going first
 func NewGame(size int) *Game {
 \tboard := make([][]byte, size)
 \tfor i := range board {
@@ -1548,22 +1920,32 @@ func NewGame(size int) *Game {
 \treturn &Game{board: board, size: size, current: 'X'}
 }
 
+// Move places the current player's mark and returns the result
 func (g *Game) Move(row, col int) (string, error) {
+\t// Bounds check
 \tif row < 0 || row >= g.size || col < 0 || col >= g.size {
 \t\treturn "", errors.New("out of bounds")
 \t}
+
+\t// 0 is the zero byte — means empty cell
 \tif g.board[row][col] != 0 {
 \t\treturn "", errors.New("cell already taken")
 \t}
+
 \tg.board[row][col] = g.current
 \tg.moves++
 
+\t// Only check win for the row/col just played — O(N) not O(N²)
 \tif g.checkWin(row, col) {
 \t\treturn fmt.Sprintf("%c wins", g.current), nil
 \t}
+
+\t// All cells filled with no winner → draw
 \tif g.moves == g.size*g.size {
 \t\treturn "draw", nil
 \t}
+
+\t// Toggle turn: X → O → X
 \tif g.current == 'X' {
 \t\tg.current = 'O'
 \t} else {
@@ -1572,10 +1954,12 @@ func (g *Game) Move(row, col int) (string, error) {
 \treturn "continue", nil
 }
 
+// checkWin checks if the last move at [r,c] completed a winning line
 func (g *Game) checkWin(r, c int) bool {
 \tp := g.current
 \tn := g.size
-\t// row
+
+\t// Check row r
 \twin := true
 \tfor j := 0; j < n; j++ {
 \t\tif g.board[r][j] != p {
@@ -1586,7 +1970,8 @@ func (g *Game) checkWin(r, c int) bool {
 \tif win {
 \t\treturn true
 \t}
-\t// col
+
+\t// Check column c
 \twin = true
 \tfor i := 0; i < n; i++ {
 \t\tif g.board[i][c] != p {
@@ -1597,7 +1982,8 @@ func (g *Game) checkWin(r, c int) bool {
 \tif win {
 \t\treturn true
 \t}
-\t// main diagonal
+
+\t// Main diagonal (top-left → bottom-right): only relevant if r == c
 \tif r == c {
 \t\twin = true
 \t\tfor i := 0; i < n; i++ {
@@ -1610,7 +1996,8 @@ func (g *Game) checkWin(r, c int) bool {
 \t\t\treturn true
 \t\t}
 \t}
-\t// anti-diagonal
+
+\t// Anti-diagonal (top-right → bottom-left): only relevant if r+c == n-1
 \tif r+c == n-1 {
 \t\twin = true
 \t\tfor i := 0; i < n; i++ {
@@ -1626,6 +2013,7 @@ func (g *Game) checkWin(r, c int) bool {
 \treturn false
 }
 
+// Print displays the board — '.' for empty cells
 func (g *Game) Print() {
 \tfor _, row := range g.board {
 \t\tcells := make([]string, len(row))
@@ -1642,6 +2030,8 @@ func (g *Game) Print() {
 
 func main() {
 \tg := NewGame(3)
+
+\t// X wins top row: (0,0) (0,1) (0,2); O plays (1,0) (1,1)
 \tmoves := [][2]int{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}}
 \tfor _, m := range moves {
 \t\tresult, err := g.Move(m[0], m[1])
@@ -1688,28 +2078,34 @@ import (
 \t"sync"
 )
 
+// base62Chars is the character set used for short code generation
 const base62Chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
+// toBase62 converts an integer counter to a short alphanumeric code
+// e.g. 1 → "1", 62 → "A0", 3844 → "A00"
 func toBase62(n int) string {
 \tif n == 0 {
 \t\treturn "0"
 \t}
 \tres := []byte{}
 \tfor n > 0 {
+\t\t// Build code right-to-left via prepend, then result is already in order
 \t\tres = append([]byte{base62Chars[n%62]}, res...)
 \t\tn /= 62
 \t}
 \treturn string(res)
 }
 
+// URLShortener maps short codes ↔ long URLs with click tracking
 type URLShortener struct {
 \tmu      sync.RWMutex
 \tstore   map[string]string // short → long
-\treverse map[string]string // long → short
+\treverse map[string]string // long → short (prevents duplicate codes for same URL)
 \tclicks  map[string]int
-\tcounter int
+\tcounter int // auto-incrementing seed for short code generation
 }
 
+// NewShortener creates a new in-memory URL shortener
 func NewShortener() *URLShortener {
 \treturn &URLShortener{
 \t\tstore:   make(map[string]string),
@@ -1718,12 +2114,17 @@ func NewShortener() *URLShortener {
 \t}
 }
 
+// Shorten returns the short code for a URL — idempotent for the same URL
 func (us *URLShortener) Shorten(long string) string {
 \tus.mu.Lock()
 \tdefer us.mu.Unlock()
+
+\t// Return existing code if URL was already shortened
 \tif short, ok := us.reverse[long]; ok {
 \t\treturn short // idempotent
 \t}
+
+\t// Generate a new unique short code from the auto-incrementing counter
 \tus.counter++
 \tshort := toBase62(us.counter)
 \tus.store[short] = long
@@ -1731,6 +2132,7 @@ func (us *URLShortener) Shorten(long string) string {
 \treturn short
 }
 
+// Resolve looks up the long URL for a short code
 func (us *URLShortener) Resolve(short string) (string, error) {
 \tus.mu.RLock()
 \tdefer us.mu.RUnlock()
@@ -1741,12 +2143,14 @@ func (us *URLShortener) Resolve(short string) (string, error) {
 \treturn long, nil
 }
 
+// Click increments the hit counter for a short code
 func (us *URLShortener) Click(short string) {
 \tus.mu.Lock()
 \tdefer us.mu.Unlock()
 \tus.clicks[short]++
 }
 
+// Stats returns the total click count for a short code
 func (us *URLShortener) Stats(short string) int {
 \tus.mu.RLock()
 \tdefer us.mu.RUnlock()
@@ -1758,7 +2162,7 @@ func main() {
 \tcode := s.Shorten("https://www.example.com/very/long/url")
 \tfmt.Println("short:", code) // 1
 
-\t// idempotent
+\t// Same URL returns the same code — idempotent
 \tsame := s.Shorten("https://www.example.com/very/long/url")
 \tfmt.Println("same code:", same == code) // true
 
@@ -1793,24 +2197,28 @@ import (
 \t"fmt"
 )
 
+// Book represents a library book with availability status
 type Book struct {
 \tISBN      string
 \tTitle     string
 \tAuthor    string
-\tAvailable bool
+\tAvailable bool // false when currently borrowed by a member
 }
 
+// Member tracks a registered library member and their borrowed books
 type Member struct {
 \tID       int
 \tName     string
-\tBorrowed []string // ISBNs
+\tBorrowed []string // slice of ISBNs currently borrowed
 }
 
+// Library manages books and members with borrowing rules
 type Library struct {
-\tbooks   map[string]*Book
-\tmembers map[int]*Member
+\tbooks   map[string]*Book // ISBN → Book for O(1) lookup
+\tmembers map[int]*Member  // memberID → Member
 }
 
+// NewLibrary creates an empty library
 func NewLibrary() *Library {
 \treturn &Library{
 \t\tbooks:   make(map[string]*Book),
@@ -1818,14 +2226,17 @@ func NewLibrary() *Library {
 \t}
 }
 
+// AddBook adds a new book to the collection (available by default)
 func (l *Library) AddBook(isbn, title, author string) {
 \tl.books[isbn] = &Book{ISBN: isbn, Title: title, Author: author, Available: true}
 }
 
+// RegisterMember adds a new member to the library
 func (l *Library) RegisterMember(id int, name string) {
 \tl.members[id] = &Member{ID: id, Name: name}
 }
 
+// Borrow lends a book to a member — fails if book is already borrowed
 func (l *Library) Borrow(memberID int, isbn string) error {
 \tmember, ok := l.members[memberID]
 \tif !ok {
@@ -1835,15 +2246,20 @@ func (l *Library) Borrow(memberID int, isbn string) error {
 \tif !ok {
 \t\treturn errors.New("book not found")
 \t}
+
+\t// Only one borrower at a time
 \tif !book.Available {
 \t\treturn fmt.Errorf("'%s' is currently borrowed", book.Title)
 \t}
+
+\t// Mark book unavailable and track on member's list
 \tbook.Available = false
 \tmember.Borrowed = append(member.Borrowed, isbn)
 \tfmt.Printf("%s borrowed '%s'\\n", member.Name, book.Title)
 \treturn nil
 }
 
+// Return accepts a book back — verifies the member actually borrowed it
 func (l *Library) Return(memberID int, isbn string) error {
 \tmember, ok := l.members[memberID]
 \tif !ok {
@@ -1853,9 +2269,11 @@ func (l *Library) Return(memberID int, isbn string) error {
 \tif !ok {
 \t\treturn errors.New("book not found")
 \t}
-\t// remove from member's list
+
+\t// Find and remove ISBN from member's borrowed list
 \tfor i, b := range member.Borrowed {
 \t\tif b == isbn {
+\t\t\t// Slice deletion: overwrite element with tail, truncate
 \t\t\tmember.Borrowed = append(member.Borrowed[:i], member.Borrowed[i+1:]...)
 \t\t\tbook.Available = true
 \t\t\tfmt.Printf("%s returned '%s'\\n", member.Name, book.Title)
@@ -1865,6 +2283,7 @@ func (l *Library) Return(memberID int, isbn string) error {
 \treturn fmt.Errorf("%s did not borrow this book", member.Name)
 }
 
+// MemberBooks lists all ISBNs currently borrowed by a member
 func (l *Library) MemberBooks(memberID int) []string {
 \treturn l.members[memberID].Borrowed
 }
@@ -1876,10 +2295,15 @@ func main() {
 \tlib.RegisterMember(1, "Alice")
 \tlib.RegisterMember(2, "Bob")
 
+\t// Alice borrows Clean Code
 \tlib.Borrow(1, "978-0")
+
+\t// Bob tries to borrow the same book — already taken
 \tif err := lib.Borrow(2, "978-0"); err != nil {
-\t\tfmt.Println("error:", err) // already borrowed
+\t\tfmt.Println("error:", err)
 \t}
+
+\t// Alice returns it — now Bob can borrow
 \tlib.Return(1, "978-0")
 \tlib.Borrow(2, "978-0")
 \tfmt.Println("Bob has:", lib.MemberBooks(2))
@@ -1903,51 +2327,58 @@ func main() {
           "Store items in map[productID]→CartItem for O(1) add/remove. AddItem increments existing quantity. Discount is stored as a multiplier applied at Total() time. Checkout freezes the cart state into a Receipt.",
         code: `package main
 
-import (
-\t"fmt"
-)
+import "fmt"
 
+// Product is a catalog item with an ID, name, and price
 type Product struct {
 \tID    string
 \tName  string
 \tPrice float64
 }
 
+// CartItem holds a product and how many units are in the cart
 type CartItem struct {
 \tProduct  Product
 \tQuantity int
 }
 
+// LineItem is one row on the checkout receipt
 type LineItem struct {
-\tName     string
-\tQty      int
+\tName      string
+\tQty       int
 \tUnitPrice float64
 \tSubtotal  float64
 }
 
+// Receipt is the final checkout summary
 type Receipt struct {
 \tItems    []LineItem
-\tDiscount float64
+\tDiscount float64 // total discount amount in ₹
 \tTotal    float64
 }
 
+// Cart stores items and an optional discount multiplier
 type Cart struct {
-\titems    map[string]*CartItem
-\tdiscount float64 // e.g. 0.10 = 10%
+\titems    map[string]*CartItem // productID → CartItem for O(1) add/remove
+\tdiscount float64              // 0.10 = 10% off
 }
 
+// NewCart creates an empty cart with no discount
 func NewCart() *Cart {
 \treturn &Cart{items: make(map[string]*CartItem)}
 }
 
+// AddItem adds a product to the cart or increases quantity if already present
 func (c *Cart) AddItem(p Product, qty int) {
 \tif item, ok := c.items[p.ID]; ok {
+\t\t// Product already in cart — just increment quantity
 \t\titem.Quantity += qty
 \t} else {
 \t\tc.items[p.ID] = &CartItem{Product: p, Quantity: qty}
 \t}
 }
 
+// RemoveItem deletes a product from the cart entirely
 func (c *Cart) RemoveItem(productID string) error {
 \tif _, ok := c.items[productID]; !ok {
 \t\treturn fmt.Errorf("item %s not in cart", productID)
@@ -1956,18 +2387,22 @@ func (c *Cart) RemoveItem(productID string) error {
 \treturn nil
 }
 
+// ApplyDiscount sets a percentage discount (e.g. 10 means 10% off)
 func (c *Cart) ApplyDiscount(pct float64) {
-\tc.discount = pct / 100
+\tc.discount = pct / 100 // store as multiplier
 }
 
+// Total returns the discounted cart total
 func (c *Cart) Total() float64 {
 \tvar total float64
 \tfor _, item := range c.items {
 \t\ttotal += item.Product.Price * float64(item.Quantity)
 \t}
+\t// Multiply by (1 - discount): e.g. 10% off → × 0.90
 \treturn total * (1 - c.discount)
 }
 
+// Checkout freezes the cart into a Receipt with line items and final total
 func (c *Cart) Checkout() Receipt {
 \tvar lines []LineItem
 \tvar subtotal float64
@@ -1978,7 +2413,7 @@ func (c *Cart) Checkout() Receipt {
 \t}
 \treturn Receipt{
 \t\tItems:    lines,
-\t\tDiscount: c.discount * subtotal,
+\t\tDiscount: c.discount * subtotal, // discount amount in ₹
 \t\tTotal:    c.Total(),
 \t}
 }
@@ -1987,8 +2422,10 @@ func main() {
 \tcart := NewCart()
 \tcart.AddItem(Product{"P1", "Laptop", 80000}, 1)
 \tcart.AddItem(Product{"P2", "Mouse", 1500}, 2)
-\tcart.AddItem(Product{"P1", "Laptop", 80000}, 1) // quantity becomes 2
-\tcart.ApplyDiscount(10)                           // 10% off
+
+\t// Adding same product again accumulates quantity: Laptop qty → 2
+\tcart.AddItem(Product{"P1", "Laptop", 80000}, 1)
+\tcart.ApplyDiscount(10) // 10% off
 
 \tr := cart.Checkout()
 \tfor _, line := range r.Items {
@@ -2019,6 +2456,7 @@ import (
 \t"strings"
 )
 
+// Channel is the delivery medium — typed string so invalid channels fail at compile time
 type Channel string
 
 const (
@@ -2027,12 +2465,14 @@ const (
 \tPush  Channel = "push"
 )
 
+// NotificationHandler is the Strategy interface — each channel implements Send independently
 type NotificationHandler interface {
 \tSend(to, message string) error
 }
 
 // ─── concrete handlers ───────────────────────────────────────────────────────
 
+// EmailHandler sends full-length messages; no truncation needed for email
 type EmailHandler struct{}
 
 func (e *EmailHandler) Send(to, msg string) error {
@@ -2040,6 +2480,7 @@ func (e *EmailHandler) Send(to, msg string) error {
 \treturn nil
 }
 
+// SMSHandler truncates to 60 chars — SMS has a 160-char hard limit per segment
 type SMSHandler struct{}
 
 func (s *SMSHandler) Send(to, msg string) error {
@@ -2054,6 +2495,7 @@ func (p *PushHandler) Send(to, msg string) error {
 \treturn nil
 }
 
+// min returns the smaller of two ints — used for safe slice truncation
 func min(a, b int) int {
 \tif a < b {
 \t\treturn a
@@ -2063,11 +2505,13 @@ func min(a, b int) int {
 
 // ─── service ─────────────────────────────────────────────────────────────────
 
+// NotificationService wires handlers (how to send) to user preferences (where to send)
 type NotificationService struct {
-\thandlers    map[Channel]NotificationHandler
-\tpreferences map[string][]Channel // userID → channels
+\thandlers    map[Channel]NotificationHandler // channel → concrete strategy
+\tpreferences map[string][]Channel            // userID → preferred channels
 }
 
+// NewNotificationService creates the service with empty registries
 func NewNotificationService() *NotificationService {
 \treturn &NotificationService{
 \t\thandlers:    make(map[Channel]NotificationHandler),
@@ -2075,23 +2519,28 @@ func NewNotificationService() *NotificationService {
 \t}
 }
 
+// Register plugs in a handler for a channel — call before any Notify
 func (ns *NotificationService) Register(ch Channel, h NotificationHandler) {
 \tns.handlers[ch] = h
 }
 
+// SetPreference stores which channels a user wants to receive notifications on
 func (ns *NotificationService) SetPreference(userID string, channels []Channel) {
 \tns.preferences[userID] = channels
 }
 
+// Notify dispatches message to all of the user's preferred channels
 func (ns *NotificationService) Notify(userID, message string) {
 \tchannels, ok := ns.preferences[userID]
 \tif !ok {
-\t\tchannels = []Channel{Email} // default
+\t\t// Unknown user — fall back to email rather than silently dropping
+\t\tchannels = []Channel{Email}
 \t}
 \tvar errs []string
 \tfor _, ch := range channels {
 \t\th, ok := ns.handlers[ch]
 \t\tif !ok {
+\t\t\t// Handler not registered for this channel — log and continue to other channels
 \t\t\terrs = append(errs, fmt.Sprintf("no handler for %s", ch))
 \t\t\tcontinue
 \t\t}
@@ -2106,6 +2555,7 @@ func (ns *NotificationService) Notify(userID, message string) {
 
 func main() {
 \tns := NewNotificationService()
+\t// Register all available transport strategies
 \tns.Register(Email, &EmailHandler{})
 \tns.Register(SMS, &SMSHandler{})
 \tns.Register(Push, &PushHandler{})
@@ -2114,8 +2564,14 @@ func main() {
 \tns.SetPreference("bob", []Channel{SMS})
 
 \tns.Notify("alice", "Your order has been shipped!")
+\t// Output: [EMAIL → alice] Your order has been shipped!
+\t//         [PUSH → alice] Your order has been shipped!
+
 \tns.Notify("bob", "OTP: 482910 — valid for 10 minutes")
-\tns.Notify("carol", "Welcome to the platform") // uses default: email
+\t// Output: [SMS → bob] OTP: 482910 — valid for 10 minute  (truncated at 60)
+
+\tns.Notify("carol", "Welcome to the platform") // carol has no preference → default email
+\t// Output: [EMAIL → carol] Welcome to the platform
 }`,
       },
       {
@@ -2148,9 +2604,10 @@ type Tweet struct {
 \tCreatedAt time.Time
 }
 
+// SocialNetwork stores follows as a nested map — O(1) follow/unfollow and membership check
 type SocialNetwork struct {
 \tfollows map[string]map[string]bool // follower → set of followees
-\ttweets  []*Tweet
+\ttweets  []*Tweet                   // global append-only log (real system: per-user sharded)
 \tnextID  int
 }
 
@@ -2158,17 +2615,21 @@ func NewSocialNetwork() *SocialNetwork {
 \treturn &SocialNetwork{follows: make(map[string]map[string]bool)}
 }
 
+// Follow adds followee to follower's set, lazily creating the inner map on first follow
 func (sn *SocialNetwork) Follow(follower, followee string) {
 \tif sn.follows[follower] == nil {
+\t\t// First time this user follows anyone — initialize the inner set
 \t\tsn.follows[follower] = make(map[string]bool)
 \t}
 \tsn.follows[follower][followee] = true
 }
 
+// Unfollow removes followee from follower's set; safe to call even if not following
 func (sn *SocialNetwork) Unfollow(follower, followee string) {
 \tdelete(sn.follows[follower], followee)
 }
 
+// Post appends a new tweet to the global log and returns a pointer to it
 func (sn *SocialNetwork) Post(userID, content string) *Tweet {
 \tsn.nextID++
 \tt := &Tweet{ID: sn.nextID, AuthorID: userID, Content: content, CreatedAt: time.Now()}
@@ -2176,14 +2637,18 @@ func (sn *SocialNetwork) Post(userID, content string) *Tweet {
 \treturn t
 }
 
+// Timeline returns the latest \`limit\` tweets from users that userID follows (plus own posts)
+// This is fanout-on-read: O(total tweets). A real system uses fanout-on-write (push to inbox).
 func (sn *SocialNetwork) Timeline(userID string, limit int) []*Tweet {
-\tfollowing := sn.follows[userID]
+\tfollowing := sn.follows[userID] // map lookup returns nil map if user has no follows — safe
 \tvar feed []*Tweet
 \tfor _, t := range sn.tweets {
+\t\t// Include tweet if author is followed OR if it's the user's own post
 \t\tif following[t.AuthorID] || t.AuthorID == userID {
 \t\t\tfeed = append(feed, t)
 \t\t}
 \t}
+\t// Sort newest-first so feed[:limit] gives the most recent N tweets
 \tsort.Slice(feed, func(i, j int) bool {
 \t\treturn feed[i].CreatedAt.After(feed[j].CreatedAt)
 \t})
@@ -2200,18 +2665,21 @@ func main() {
 \tsn.Follow("alice", "carol")
 
 \tsn.Post("bob", "Go is awesome!")
-\ttime.Sleep(time.Millisecond)
+\ttime.Sleep(time.Millisecond) // ensure distinct timestamps for deterministic sort
 \tsn.Post("carol", "Building systems in Go")
 \ttime.Sleep(time.Millisecond)
 \tsn.Post("alice", "My own tweet")
 \ttime.Sleep(time.Millisecond)
-\tsn.Post("dave", "You don't follow me")
+\tsn.Post("dave", "You don't follow me") // dave not followed — excluded from alice's feed
 
 \tfeed := sn.Timeline("alice", 5)
 \tfor _, t := range feed {
 \t\tfmt.Printf("[%s] %s\\n", t.AuthorID, t.Content)
 \t}
-\t// carol, alice, bob — dave excluded
+\t// [alice] My own tweet
+\t// [carol] Building systems in Go
+\t// [bob] Go is awesome!
+\t// dave excluded — not in alice's follows
 }`,
       },
       {
@@ -2237,17 +2705,20 @@ import (
 \t"time"
 )
 
+// WorkerPool runs a fixed number of goroutines draining a shared buffered job channel
 type WorkerPool struct {
-\tjobs chan func()
-\twg   sync.WaitGroup
+\tjobs chan func()    // buffered channel acts as the work queue
+\twg   sync.WaitGroup // tracks when all workers have exited
 }
 
+// NewWorkerPool starts \`workers\` goroutines each looping on the jobs channel
 func NewWorkerPool(workers, queueSize int) *WorkerPool {
-\twp := &WorkerPool{jobs: make(chan func(), queueSize)}
+\twp := &WorkerPool{jobs: make(chan func(), queueSize)} // buffered so Submit rarely blocks
 \tfor i := 0; i < workers; i++ {
-\t\twp.wg.Add(1)
+\t\twp.wg.Add(1) // increment before goroutine starts to avoid race with Shutdown
 \t\tgo func(id int) {
-\t\t\tdefer wp.wg.Done()
+\t\t\tdefer wp.wg.Done() // signal exit when channel is drained and closed
+\t\t\t// range over channel: blocks waiting for jobs, exits when channel is closed
 \t\t\tfor job := range wp.jobs {
 \t\t\t\tjob()
 \t\t\t}
@@ -2256,23 +2727,25 @@ func NewWorkerPool(workers, queueSize int) *WorkerPool {
 \treturn wp
 }
 
+// Submit enqueues a job — blocks if the buffered queue is full
 func (wp *WorkerPool) Submit(job func()) {
 \twp.jobs <- job
 }
 
+// Shutdown closes the jobs channel (no new submissions) then waits for all workers to drain
 func (wp *WorkerPool) Shutdown() {
-\tclose(wp.jobs)
-\twp.wg.Wait()
+\tclose(wp.jobs) // signals all workers to exit after draining remaining jobs
+\twp.wg.Wait()   // blocks until every goroutine calls wg.Done()
 }
 
 func main() {
-\tpool := NewWorkerPool(3, 10) // 3 workers, queue of 10
+\tpool := NewWorkerPool(3, 10) // 3 concurrent workers, queue depth 10
 
 \tvar mu sync.Mutex
 \tresults := []int{}
 
 \tfor i := 1; i <= 8; i++ {
-\t\tval := i
+\t\tval := i // capture loop var — closures capture by reference without this
 \t\tpool.Submit(func() {
 \t\t\ttime.Sleep(10 * time.Millisecond) // simulate work
 \t\t\tmu.Lock()
@@ -2281,8 +2754,8 @@ func main() {
 \t\t})
 \t}
 
-\tpool.Shutdown()
-\tfmt.Println("results:", results) // 8 squared numbers, order may vary
+\tpool.Shutdown() // waits for all 8 jobs to finish before proceeding
+\tfmt.Println("results:", results) // 8 squared values, arrival order non-deterministic
 }`,
       },
       {
@@ -2313,36 +2786,40 @@ import (
 type nodeType int
 
 const (
-\tfileNode nodeType = iota
-\tdirNode
+\tfileNode nodeType = iota // 0 — leaf node with text content
+\tdirNode                  // 1 — internal node with children map
 )
 
+// fsNode is a single tree node — either a file (content set) or directory (children set)
 type fsNode struct {
 \tname     string
 \tkind     nodeType
-\tcontent  string
-\tchildren map[string]*fsNode
+\tcontent  string             // non-empty only for fileNode
+\tchildren map[string]*fsNode // non-nil only for dirNode
 }
 
 type FileSystem struct {
-\troot *fsNode
+\troot *fsNode // always a dirNode representing "/"
 }
 
+// NewFS creates the filesystem with an empty root directory
 func NewFS() *FileSystem {
 \treturn &FileSystem{root: &fsNode{name: "/", kind: dirNode, children: make(map[string]*fsNode)}}
 }
 
+// navigate walks path segments from root; if create=true, missing dirs are created (mkdir -p)
 func (fs *FileSystem) navigate(parts []string, create bool) (*fsNode, error) {
 \tcur := fs.root
 \tfor _, part := range parts {
 \t\tif part == "" {
-\t\t\tcontinue
+\t\t\tcontinue // skip empty segments from leading/trailing slashes
 \t\t}
 \t\tchild, ok := cur.children[part]
 \t\tif !ok {
 \t\t\tif !create {
 \t\t\t\treturn nil, fmt.Errorf("'%s' not found", part)
 \t\t\t}
+\t\t\t// Auto-create intermediate directory — equivalent to mkdir -p behaviour
 \t\t\tchild = &fsNode{name: part, kind: dirNode, children: make(map[string]*fsNode)}
 \t\t\tcur.children[part] = child
 \t\t}
@@ -2351,30 +2828,36 @@ func (fs *FileSystem) navigate(parts []string, create bool) (*fsNode, error) {
 \treturn cur, nil
 }
 
+// split separates a path into parent segments and the final component name
+// e.g. "/home/alice/readme.txt" → (["home","alice"], "readme.txt")
 func split(path string) ([]string, string) {
 \tparts := strings.Split(strings.Trim(path, "/"), "/")
 \tif len(parts) == 1 {
-\t\treturn nil, parts[0]
+\t\treturn nil, parts[0] // top-level entry — parent is root
 \t}
 \treturn parts[:len(parts)-1], parts[len(parts)-1]
 }
 
+// Mkdir creates the directory at path and all missing parents (mkdir -p)
 func (fs *FileSystem) Mkdir(path string) error {
 \tparts := strings.Split(strings.Trim(path, "/"), "/")
-\t_, err := fs.navigate(parts, true)
+\t_, err := fs.navigate(parts, true) // create=true makes all intermediate dirs
 \treturn err
 }
 
+// Touch creates a file at path with content, overwriting if it already exists
 func (fs *FileSystem) Touch(path, content string) error {
 \tdir, name := split(path)
-\tparent, err := fs.navigate(dir, true)
+\tparent, err := fs.navigate(dir, true) // ensure parent dirs exist
 \tif err != nil {
 \t\treturn err
 \t}
+\t// Overwrite any existing entry — no children map needed for a file node
 \tparent.children[name] = &fsNode{name: name, kind: fileNode, content: content}
 \treturn nil
 }
 
+// Read returns the content of a file; returns error if path is a directory
 func (fs *FileSystem) Read(path string) (string, error) {
 \tparts := strings.Split(strings.Trim(path, "/"), "/")
 \tnode, err := fs.navigate(parts, false)
@@ -2387,6 +2870,7 @@ func (fs *FileSystem) Read(path string) (string, error) {
 \treturn node.content, nil
 }
 
+// Ls returns sorted child names of a directory
 func (fs *FileSystem) Ls(path string) ([]string, error) {
 \tparts := strings.Split(strings.Trim(path, "/"), "/")
 \tnode, err := fs.navigate(parts, false)
@@ -2400,13 +2884,14 @@ func (fs *FileSystem) Ls(path string) ([]string, error) {
 \tfor name := range node.children {
 \t\tnames = append(names, name)
 \t}
-\tsort.Strings(names)
+\tsort.Strings(names) // deterministic order like real ls
 \treturn names, nil
 }
 
+// Rm deletes a file or an empty directory; refuses to remove non-empty dirs
 func (fs *FileSystem) Rm(path string) error {
 \tdir, name := split(path)
-\tparent, err := fs.navigate(dir, false)
+\tparent, err := fs.navigate(dir, false) // parent must already exist
 \tif err != nil {
 \t\treturn err
 \t}
@@ -2415,15 +2900,16 @@ func (fs *FileSystem) Rm(path string) error {
 \t\treturn errors.New("not found")
 \t}
 \tif node.kind == dirNode && len(node.children) > 0 {
+\t\t// Safety guard — prevent accidental recursive delete (use Rmdir -r for that)
 \t\treturn errors.New("directory not empty")
 \t}
-\tdelete(parent.children, name)
+\tdelete(parent.children, name) // unlink node from parent's map
 \treturn nil
 }
 
 func main() {
 \tfs := NewFS()
-\tfs.Mkdir("/home/alice/docs")
+\tfs.Mkdir("/home/alice/docs") // creates /home, /home/alice, /home/alice/docs in one call
 \tfs.Touch("/home/alice/docs/readme.txt", "Hello, world!")
 \tfs.Touch("/home/alice/notes.txt", "Go is fun")
 
