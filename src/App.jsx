@@ -7,14 +7,18 @@ import DSAPage from "./pages/DSAPage";
 import LayersPage from "./pages/LayersPage";
 import EncyclopediaPage from "./pages/EncyclopediaPage";
 import MachineCodingPage from "./pages/MachineCodingPage";
+import GoBasicsPage from "./pages/GoBasicsPage";
 import { DSA_CATEGORIES } from "./data/dsa";
 import { MC_CATEGORIES } from "./data/machineCoding";
+import { GO_BASICS_CATEGORIES } from "./data/goBasics";
 import "./styles/globals.css";
 
 const firstCat = DSA_CATEGORIES[0];
 const firstProblem = firstCat.problems[0];
 const firstMC = MC_CATEGORIES[0];
 const firstMCProblem = firstMC.problems[0];
+const firstGB = GO_BASICS_CATEGORIES[0];
+const firstGBTopic = firstGB.topics[0];
 
 export default function App() {
   return (
@@ -41,6 +45,12 @@ export default function App() {
             element={<Navigate to={`/machine-coding/${firstMC.id}/${firstMCProblem.id}`} replace />}
           />
           <Route path="machine-coding/:categoryId/:problemId" element={<MachineCodingPage />} />
+          {/* Go Basics routes */}
+          <Route
+            path="go-basics"
+            element={<Navigate to={`/go-basics/${firstGB.id}/${firstGBTopic.id}`} replace />}
+          />
+          <Route path="go-basics/:categoryId/:topicId" element={<GoBasicsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
