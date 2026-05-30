@@ -1933,6 +1933,130 @@ func main() {
 }`,
       },
       {
+        id: "type-conversions",
+        title: "Type Conversions (strconv)",
+        summary: "Converting between strings, numbers, and booleans with the strconv package",
+        explanation:
+          "Go never implicitly converts between types — every conversion is explicit. For numeric type casting (`int` → `float64`, `int64` → `int32`), use the Go syntax `T(value)`. For string ↔ numeric conversions you need the `strconv` package: `strconv.Atoi` / `strconv.Itoa` for int↔string; `strconv.ParseFloat` / `strconv.FormatFloat` for float↔string; `strconv.ParseBool` / `strconv.FormatBool` for bool↔string; `strconv.ParseInt` for any base (binary, octal, hex). All Parse functions return `(value, error)` — always check the error because bad input returns the zero value silently. `fmt.Sprintf(\"%v\", x)` is a quick-but-slow alternative to `strconv.Format*` for simple cases.",
+        keyPoints: [
+          "`strconv.Atoi(s)` → `(int, error)` — \"ASCII to int\"; `strconv.Itoa(n)` → `string`",
+          "`strconv.ParseFloat(s, bitSize)` — bitSize is 32 or 64; always use 64 unless you need float32",
+          "`strconv.ParseInt(s, base, bitSize)` — base 0 auto-detects (0x → hex, 0 → octal, else decimal)",
+          "`strconv.ParseBool` accepts: \"1\", \"t\", \"T\", \"true\", \"TRUE\", \"0\", \"f\", \"false\", \"FALSE\"",
+          "`strconv.FormatFloat(f, fmt, prec, bitSize)` — fmt 'f' fixed, 'e' scientific, 'g' shortest",
+          "Numeric type casting: `int(myFloat64)` truncates (does not round); `float64(myInt)` is exact",
+          "`strconv.Quote(s)` / `strconv.Unquote(s)` — escape/unescape a Go string literal",
+        ],
+        gotchas: [
+          "`int(3.9)` is 3, not 4 — truncation, not rounding. Use `math.Round` then cast if rounding is needed",
+          "`string(65)` gives `\"A\"` (rune to string), NOT `\"65\"` — always use `strconv.Itoa` for int → string",
+          "Parsing an empty string returns zero value + error, not a panic",
+          "`strconv.ParseFloat(\"1e308\", 64)` overflows to `+Inf` without error — check with `math.IsInf`",
+        ],
+        code: `package main
+
+import (
+\t"fmt"
+\t"math"
+\t"strconv"
+)
+
+func main() {
+\t// ── String → Int ──────────────────────────────────────────
+\tn, err := strconv.Atoi("42")
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Println("Atoi:", n, "(type: int)")
+\t}
+
+\t// Bad input — error, zero value returned
+\t_, err = strconv.Atoi("abc")
+\tfmt.Println("bad Atoi err:", err) // strconv.Atoi: parsing "abc": invalid syntax
+
+\t// ParseInt — choose base and bit size explicitly
+\ti64, _ := strconv.ParseInt("FF", 16, 64) // hex → int64
+\tfmt.Println("ParseInt hex FF:", i64)      // 255
+
+\ti64b, _ := strconv.ParseInt("1010", 2, 64) // binary
+\tfmt.Println("ParseInt binary 1010:", i64b)  // 10
+
+\ti64c, _ := strconv.ParseInt("-99", 10, 64) // signed
+\tfmt.Println("ParseInt signed:", i64c)       // -99
+
+\tunsigned, _ := strconv.ParseUint("4294967295", 10, 32)
+\tfmt.Println("ParseUint:", unsigned) // 4294967295
+
+\t// ── Int → String ──────────────────────────────────────────
+\ts := strconv.Itoa(123)
+\tfmt.Println("Itoa:", s, "(type: string)") // "123"
+
+\t// GOTCHA: string(65) gives "A", not "65"
+\tfmt.Println("string(65):", string(65))    // A  ← rune, not number!
+\tfmt.Println("Itoa(65):", strconv.Itoa(65)) // 65 ← correct
+
+\t// FormatInt — custom base
+\tfmt.Println("FormatInt 255 hex:", strconv.FormatInt(255, 16)) // ff
+\tfmt.Println("FormatInt 10 bin:", strconv.FormatInt(10, 2))    // 1010
+
+\t// ── String → Float ────────────────────────────────────────
+\tf, err := strconv.ParseFloat("3.14159", 64)
+\tif err != nil {
+\t\tfmt.Println("error:", err)
+\t} else {
+\t\tfmt.Printf("ParseFloat: %.5f\\n", f) // 3.14159
+\t}
+
+\tf32, _ := strconv.ParseFloat("2.718", 32) // parsed as float32 precision
+\tfmt.Printf("ParseFloat32: %.4f\\n", f32)   // 2.7180
+
+\t_, err = strconv.ParseFloat("not-a-number", 64)
+\tfmt.Println("bad ParseFloat err:", err)
+
+\t// ── Float → String ────────────────────────────────────────
+\tpi := math.Pi
+\t// 'f' = fixed, -1 prec = shortest representation, 64 = float64
+\tfmt.Println("FormatFloat f:", strconv.FormatFloat(pi, 'f', 5, 64))  // 3.14159
+\tfmt.Println("FormatFloat e:", strconv.FormatFloat(pi, 'e', 4, 64))  // 3.1416e+00
+\tfmt.Println("FormatFloat g:", strconv.FormatFloat(pi, 'g', -1, 64)) // 3.141592653589793
+
+\t// ── String → Bool ─────────────────────────────────────────
+\tb1, _ := strconv.ParseBool("true")
+\tb2, _ := strconv.ParseBool("1")
+\tb3, _ := strconv.ParseBool("FALSE")
+\tb4, _ := strconv.ParseBool("T")
+\tfmt.Println("ParseBool:", b1, b2, b3, b4) // true true false true
+
+\t_, err = strconv.ParseBool("yes") // "yes" is NOT valid
+\tfmt.Println("ParseBool 'yes' err:", err)
+
+\t// ── Bool → String ─────────────────────────────────────────
+\tfmt.Println("FormatBool true:", strconv.FormatBool(true))   // true
+\tfmt.Println("FormatBool false:", strconv.FormatBool(false)) // false
+
+\t// ── Numeric type casting ──────────────────────────────────
+\tvar bigFloat float64 = 9.99
+\ttruncated := int(bigFloat)        // 9 — truncates, does NOT round
+\trounded := int(math.Round(bigFloat)) // 10 — round first, then cast
+\tfmt.Println("truncated:", truncated, "rounded:", rounded)
+
+\tvar x int = 1000
+\tvar x8 int8 = int8(x)   // overflow! int8 max is 127
+\tfmt.Println("int → int8 overflow:", x8) // -24 (wraps around)
+
+\tvar f64 float64 = 1.5
+\tvar f32b float32 = float32(f64) // precision loss possible for large values
+\tfmt.Println("float64 → float32:", f32b)
+
+\t// ── String escaping ───────────────────────────────────────
+\tquoted := strconv.Quote("Hello\\tWorld\\n\"Go\"")
+\tfmt.Println("Quote:", quoted)
+
+\tunquoted, _ := strconv.Unquote(\`"Hello\\tWorld"\`)
+\tfmt.Println("Unquote:", unquoted)
+}`,
+      },
+      {
         id: "sorting",
         title: "Sorting",
         summary: "sort package — built-in and custom comparison",
