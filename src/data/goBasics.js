@@ -1947,6 +1947,35 @@ func main() {
           "Numeric type casting: `int(myFloat64)` truncates (does not round); `float64(myInt)` is exact",
           "`strconv.Quote(s)` / `strconv.Unquote(s)` — escape/unescape a Go string literal",
         ],
+        examples: [
+          // String ↔ Int
+          { expr: `strconv.Atoi("42")`,        result: `42, nil`,    note: "string → int — happy path" },
+          { expr: `strconv.Atoi("abc")`,        result: `0, error`,   note: "invalid string → zero + error" },
+          { expr: `strconv.Itoa(99)`,           result: `"99"`,       note: "int → string" },
+          { expr: `string(65)`,                 result: `"A"`,        note: "⚠ rune → string, NOT the digit 65" },
+          { expr: `strconv.FormatInt(255, 16)`, result: `"ff"`,       note: "int → hex string" },
+          { expr: `strconv.FormatInt(10, 2)`,   result: `"1010"`,     note: "int → binary string" },
+          { expr: `strconv.ParseInt("FF", 16, 64)`, result: `255, nil`, note: "hex string → int64" },
+          { expr: `strconv.ParseInt("1010", 2, 64)`, result: `10, nil`, note: "binary string → int64" },
+          // String ↔ Float
+          { expr: `strconv.ParseFloat("3.14", 64)`,           result: `3.14, nil`,   note: "string → float64" },
+          { expr: `strconv.ParseFloat("bad", 64)`,            result: `0, error`,    note: "invalid → zero + error" },
+          { expr: `strconv.FormatFloat(3.14159, 'f', 2, 64)`, result: `"3.14"`,      note: "float → fixed 2 decimal places" },
+          { expr: `strconv.FormatFloat(3.14159, 'e', 3, 64)`, result: `"3.142e+00"`, note: "float → scientific notation" },
+          { expr: `strconv.FormatFloat(3.14159, 'g', -1, 64)`,result: `"3.14159"`,   note: "float → shortest representation" },
+          // String ↔ Bool
+          { expr: `strconv.ParseBool("true")`,  result: `true, nil`,  note: "\"true\" / \"1\" / \"T\" / \"TRUE\" all valid" },
+          { expr: `strconv.ParseBool("1")`,      result: `true, nil`,  note: "\"1\" → true" },
+          { expr: `strconv.ParseBool("yes")`,    result: `false, error`, note: "⚠ \"yes\" is NOT a valid bool string" },
+          { expr: `strconv.FormatBool(true)`,    result: `"true"`,     note: "bool → string" },
+          // Numeric type casting
+          { expr: `int(3.9)`,                   result: `3`,          note: "⚠ truncates, does NOT round" },
+          { expr: `int(math.Round(3.9))`,        result: `4`,          note: "round first, then cast" },
+          { expr: `float64(7)`,                  result: `7.0`,        note: "int → float64, always exact" },
+          { expr: `int8(1000)`,                  result: `-24`,        note: "⚠ overflow wraps silently" },
+          // String escaping
+          { expr: `strconv.Quote("hi\tthere")`,  result: `"\"hi\\tthere\""`, note: "escape special chars" },
+        ],
         gotchas: [
           "`int(3.9)` is 3, not 4 — truncation, not rounding. Use `math.Round` then cast if rounding is needed",
           "`string(65)` gives `\"A\"` (rune to string), NOT `\"65\"` — always use `strconv.Itoa` for int → string",

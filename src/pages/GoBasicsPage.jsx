@@ -111,6 +111,27 @@ export default function GoBasicsPage() {
           </ul>
         </section>
 
+        {/* Conversion Examples — optional */}
+        {topic.examples && topic.examples.length > 0 && (
+          <section className="gb-section">
+            <h2 className="gb-section-title">Conversion Examples</h2>
+            <div className="gb-examples-table">
+              <div className="gb-examples-head">
+                <span>Expression</span>
+                <span>Result</span>
+                <span>Notes</span>
+              </div>
+              {topic.examples.map((ex, i) => (
+                <div key={i} className="gb-examples-row">
+                  <code className="gb-ex-expr">{ex.expr}</code>
+                  <code className="gb-ex-result">{ex.result}</code>
+                  <span className="gb-ex-note">{ex.note}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Gotchas — optional */}
         {topic.gotchas && topic.gotchas.length > 0 && (
           <section className="gb-section">
