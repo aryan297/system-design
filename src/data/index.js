@@ -12,6 +12,8 @@ import { TIKTOK_HLD, TIKTOK_LLD, TIKTOK_QNA } from "./tiktok";
 import { ZOMATO_HLD, ZOMATO_LLD, ZOMATO_QNA } from "./zomato";
 import { IRCTC_HLD, IRCTC_LLD, IRCTC_QNA } from "./irctc";
 import { DEZERV_HLD, DEZERV_LLD, DEZERV_QNA } from "./dezerv";
+import { GOOGLE_DRIVE_HLD, GOOGLE_DRIVE_LLD, GOOGLE_DRIVE_QNA } from "./googledrive";
+import { HOTSTAR_HLD, HOTSTAR_LLD, HOTSTAR_QNA } from "./hotstar";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -98,6 +100,18 @@ const REGISTRY = {
     hld: DEZERV_HLD,
     lld: DEZERV_LLD,
     qna: DEZERV_QNA,
+  },
+  "google-drive": {
+    meta: { icon: "📁", color: "#4285F4" },
+    hld: GOOGLE_DRIVE_HLD,
+    lld: GOOGLE_DRIVE_LLD,
+    qna: GOOGLE_DRIVE_QNA,
+  },
+  hotstar: {
+    meta: { icon: "🏏", color: "#1F3C88" },
+    hld: HOTSTAR_HLD,
+    lld: HOTSTAR_LLD,
+    qna: HOTSTAR_QNA,
   },
 };
 

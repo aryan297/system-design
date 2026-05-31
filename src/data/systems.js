@@ -97,4 +97,18 @@ export const SYSTEMS = [
     description: "Wealth-tech for Indian HNIs — curated portfolio baskets, MF investing, goal-based SIP, ₹5,000Cr+ AUM",
     color: "#7C3AED",
   },
+  {
+    id: "google-drive",
+    name: "Google Drive",
+    icon: "📁",
+    description: "Cloud file storage — 1B+ users, chunked dedup uploads, delta sync across devices, real-time collaboration",
+    color: "#4285F4",
+  },
+  {
+    id: "hotstar",
+    name: "Hotstar",
+    icon: "🏏",
+    description: "Live streaming at IPL scale — 32.5M concurrent viewers world record, thundering herd, multi-CDN India",
+    color: "#1F3C88",
+  },
 ];
