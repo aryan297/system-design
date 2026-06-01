@@ -111,4 +111,11 @@ export const SYSTEMS = [
     description: "Live streaming at IPL scale — 32.5M concurrent viewers world record, thundering herd, multi-CDN India",
     color: "#1F3C88",
   },
+  {
+    id: "dynamo-db",
+    name: "DynamoDB",
+    icon: "🗄️",
+    description: "Amazon's distributed key-value store — consistent hashing, LSM tree, quorum replication, single-digit ms latency",
+    color: "#FF9900",
+  },
 ];

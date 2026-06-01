@@ -7960,4 +7960,517 @@ func main() {
       },
     ],
   },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 17. Sorting Algorithms
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "sorting-algorithms",
+    icon: "🔀",
+    title: "Sorting Algorithms",
+    problems: [
+      // ── 1. Bubble Sort ───────────────────────────────────────────────────
+      {
+        id: "bubble-sort",
+        title: "Bubble Sort",
+        difficulty: "Easy",
+        leetcode: 912,
+        description:
+          "Implement Bubble Sort. Repeatedly compare adjacent elements and swap them if out of order. After each full pass the largest unseen element has bubbled to its final position. Optimize with an early-exit flag: if no swap occurs in a pass the array is already sorted and we break out in O(n).",
+        examples: [
+          { input: "arr = [64, 34, 25, 12, 22, 11, 90]", output: "[11 12 22 25 34 64 90]", explanation: "Each pass bubbles the largest unseen element to its final position at the end" },
+          { input: "arr = [1, 2, 3, 4, 5]", output: "[1 2 3 4 5]", explanation: "Already sorted — early-exit fires after a single pass (best case O(n))" },
+        ],
+        approach:
+          "Outer loop i runs n-1 times; inner loop j covers [0, n-i-2] because the last i elements are already in their final spots. On every adjacent-pair inversion swap arr[j] ↔ arr[j+1] and mark swapped=true. If the inner loop completes without any swap the array is sorted and we break early. Stable sort (equal elements never cross). Worst case is a reverse-sorted array: n*(n-1)/2 comparisons.",
+        complexity: { time: "O(n²) avg/worst · O(n) best", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func bubbleSort(arr []int) {
+	n := len(arr)
+	for i := 0; i < n-1; i++ {
+		swapped := false
+		// After pass i, the last i+1 elements are settled — shrink inner window
+		for j := 0; j < n-i-1; j++ {
+			if arr[j] > arr[j+1] {
+				arr[j], arr[j+1] = arr[j+1], arr[j]
+				swapped = true
+			}
+		}
+		if !swapped {
+			break // no inversions found — already sorted
+		}
+	}
+}
+
+func main() {
+	arr := []int{64, 34, 25, 12, 22, 11, 90}
+	fmt.Println("Before:", arr)
+	bubbleSort(arr)
+	fmt.Println("After: ", arr)
+	// Output: [11 12 22 25 34 64 90]
+
+	// Pass trace on [5, 1, 4, 2, 8]:
+	// Pass 1: compare (5,1)swap (5,4)swap (5,2)swap (5,8)ok  → [1,4,2,5,8]
+	// Pass 2: compare (1,4)ok  (4,2)swap (4,5)ok  → [1,2,4,5,8]
+	// Pass 3: no swaps → break early
+	arr2 := []int{5, 1, 4, 2, 8}
+	bubbleSort(arr2)
+	fmt.Println(arr2) // [1 2 4 5 8]
+
+	// Best case — already sorted, breaks after one pass
+	arr3 := []int{1, 2, 3, 4, 5}
+	bubbleSort(arr3)
+	fmt.Println(arr3) // [1 2 3 4 5]
+}`,
+      },
+
+      // ── 2. Selection Sort ────────────────────────────────────────────────
+      {
+        id: "selection-sort",
+        title: "Selection Sort",
+        difficulty: "Easy",
+        leetcode: 912,
+        description:
+          "Implement Selection Sort. Maintain a sorted prefix; on each pass scan the entire unsorted suffix for its minimum, then swap that minimum to the front of the suffix. Makes at most n-1 swaps total — useful when writes are expensive. Always O(n²) because there is no early exit.",
+        examples: [
+          { input: "arr = [64, 25, 12, 22, 11]", output: "[11 12 22 25 64]", explanation: "Pass 1: min=11 at idx 4, swap with idx 0 → [11,25,12,22,64]" },
+          { input: "arr = [29, 10, 14, 37, 13]", output: "[10 13 14 29 37]", explanation: "Exactly 4 swaps (n-1) regardless of input order" },
+        ],
+        approach:
+          "Outer loop i marks the sorted/unsorted boundary (0..n-2). Inner loop j scans arr[i+1..n-1] tracking minIdx. After the inner loop, swap arr[i] with arr[minIdx]. Unlike Bubble Sort there is no early exit — even on a sorted array it still scans all n*(n-1)/2 pairs. Not stable: a swap can move an equal element past another.",
+        complexity: { time: "O(n²) always", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func selectionSort(arr []int) {
+	n := len(arr)
+	for i := 0; i < n-1; i++ {
+		// Find index of minimum element in unsorted suffix arr[i..n-1]
+		minIdx := i
+		for j := i + 1; j < n; j++ {
+			if arr[j] < arr[minIdx] {
+				minIdx = j
+			}
+		}
+		// Place minimum at the front of the unsorted suffix
+		arr[i], arr[minIdx] = arr[minIdx], arr[i]
+	}
+}
+
+func main() {
+	arr := []int{64, 25, 12, 22, 11}
+	fmt.Println("Before:", arr)
+	selectionSort(arr)
+	fmt.Println("After: ", arr)
+	// Output: [11 12 22 25 64]
+
+	// Pass trace on [64, 25, 12, 22, 11]:
+	// i=0: min=11 at idx 4 → swap(0,4) → [11,25,12,22,64]
+	// i=1: min=12 at idx 2 → swap(1,2) → [11,12,25,22,64]
+	// i=2: min=22 at idx 3 → swap(2,3) → [11,12,22,25,64]
+	// i=3: min=25 at idx 3 → no change  → [11,12,22,25,64]
+
+	arr2 := []int{29, 10, 14, 37, 13}
+	selectionSort(arr2)
+	fmt.Println(arr2) // [10 13 14 29 37]
+}`,
+      },
+
+      // ── 3. Insertion Sort ────────────────────────────────────────────────
+      {
+        id: "insertion-sort",
+        title: "Insertion Sort",
+        difficulty: "Easy",
+        leetcode: 912,
+        description:
+          "Implement Insertion Sort. Grow a sorted prefix one element at a time: save arr[i] as key, then shift all sorted-prefix elements that are larger than key one position right to open a slot, and drop key into that slot. Stable, adaptive (O(n) on nearly-sorted input), and the fastest simple sort in practice for small n.",
+        examples: [
+          { input: "arr = [12, 11, 13, 5, 6]", output: "[5 6 11 12 13]", explanation: "Each element is shifted left until it sits after all elements smaller than it" },
+          { input: "arr = [1, 2, 4, 3, 5]", output: "[1 2 3 4 5]", explanation: "Nearly sorted — only 1 shift needed total (best-case adaptive behaviour)" },
+        ],
+        approach:
+          "Outer loop starts at i=1 (a single-element prefix is trivially sorted). Save key = arr[i]. Walk j from i-1 leftward while arr[j] > key: shift arr[j] → arr[j+1] and decrement j. Place key at arr[j+1]. The shift-based approach avoids the overhead of a three-way swap on every comparison. Stable because we stop shifting when arr[j] == key (strictly greater only).",
+        complexity: { time: "O(n²) worst · O(n) best (nearly sorted)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+func insertionSort(arr []int) {
+	for i := 1; i < len(arr); i++ {
+		key := arr[i]
+		j := i - 1
+		// Shift all sorted-prefix elements greater than key one step right
+		for j >= 0 && arr[j] > key {
+			arr[j+1] = arr[j]
+			j--
+		}
+		arr[j+1] = key // drop key into the opened gap
+	}
+}
+
+func main() {
+	arr := []int{12, 11, 13, 5, 6}
+	fmt.Println("Before:", arr)
+	insertionSort(arr)
+	fmt.Println("After: ", arr)
+	// Output: [5 6 11 12 13]
+
+	// Pass trace on [12, 11, 13, 5, 6]:
+	// i=1: key=11, shift 12 right → [12,12,13,5,6] → place 11 → [11,12,13,5,6]
+	// i=2: key=13, 12<13 stop     → no shift        → [11,12,13,5,6]
+	// i=3: key=5,  shift 13,12,11 → [11,11,12,13,6] → place 5  → [5,11,12,13,6]
+	// i=4: key=6,  shift 13,12,11 → [5,11,11,12,13] → place 6  → [5,6,11,12,13]
+
+	arr2 := []int{1, 2, 4, 3, 5}
+	insertionSort(arr2)
+	fmt.Println(arr2) // [1 2 3 4 5]
+}`,
+      },
+
+      // ── 4. Merge Sort ────────────────────────────────────────────────────
+      {
+        id: "merge-sort",
+        title: "Merge Sort",
+        difficulty: "Medium",
+        leetcode: 912,
+        description:
+          "Implement Merge Sort. Divide the array at the midpoint, recursively sort each half, then merge the two sorted halves into one. The only comparison sort that guarantees O(n log n) in all cases. Stable — equal elements preserve their original relative order. Trade-off: requires O(n) extra space for the merge buffer.",
+        examples: [
+          { input: "arr = [38, 27, 43, 3, 9, 82, 10]", output: "[3 9 10 27 38 43 82]", explanation: "Split 7 elements into halves, sort recursively, merge back" },
+          { input: "arr = [5, 2, 4, 6, 1, 3]", output: "[1 2 3 4 5 6]", explanation: "[5,2,4] and [6,1,3] each sorted then merged" },
+        ],
+        approach:
+          "Base case: a slice of ≤1 element is already sorted. Recursive case: split at mid = len/2, sort left = arr[:mid] and right = arr[mid:], then merge. merge() uses two pointers i, j starting at the front of each half; always append the smaller of left[i] / right[j] to result; drain the remaining half at the end. Using <= (not <) in the comparison keeps the sort stable.",
+        complexity: { time: "O(n log n) always", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func mergeSort(arr []int) []int {
+	if len(arr) <= 1 {
+		return arr
+	}
+	mid := len(arr) / 2
+	left := mergeSort(arr[:mid])
+	right := mergeSort(arr[mid:])
+	return merge(left, right)
+}
+
+func merge(left, right []int) []int {
+	result := make([]int, 0, len(left)+len(right))
+	i, j := 0, 0
+	for i < len(left) && j < len(right) {
+		if left[i] <= right[j] { // <= preserves stability
+			result = append(result, left[i])
+			i++
+		} else {
+			result = append(result, right[j])
+			j++
+		}
+	}
+	result = append(result, left[i:]...)  // drain remaining left half
+	result = append(result, right[j:]...) // drain remaining right half
+	return result
+}
+
+func main() {
+	arr := []int{38, 27, 43, 3, 9, 82, 10}
+	fmt.Println("Before:", arr)
+	sorted := mergeSort(arr)
+	fmt.Println("After: ", sorted)
+	// Output: [3 9 10 27 38 43 82]
+
+	// Recursion tree (depth = log2 7 ≈ 3):
+	// [38,27,43,3,9,82,10]
+	//   [38,27,43,3]      [9,82,10]
+	//   [38,27] [43,3]    [9,82] [10]
+	//  [38][27] [43][3]  [9][82]
+	//   [27,38]  [3,43]   [9,82]
+	//    [3,27,38,43]      [9,10,82]
+	//         [3,9,10,27,38,43,82]
+
+	arr2 := []int{5, 2, 4, 6, 1, 3}
+	fmt.Println(mergeSort(arr2)) // [1 2 3 4 5 6]
+}`,
+      },
+
+      // ── 5. Quick Sort ────────────────────────────────────────────────────
+      {
+        id: "quick-sort",
+        title: "Quick Sort",
+        difficulty: "Medium",
+        leetcode: 912,
+        description:
+          "Implement Quick Sort with the Lomuto partition scheme. Choose the last element as pivot, rearrange so everything ≤ pivot is to its left and everything > pivot is to its right, then recurse on both sides. Fastest in practice for random data due to cache-friendly sequential access and in-place operation, despite the O(n²) worst case.",
+        examples: [
+          { input: "arr = [10, 7, 8, 9, 1, 5]", output: "[1 5 7 8 9 10]", explanation: "pivot=5 at idx 1 after partition; recurse on [1] and [7,8,9,10]" },
+          { input: "arr = [3, 6, 8, 10, 1, 2, 1]", output: "[1 1 2 3 6 8 10]", explanation: "Handles duplicates correctly with ≤ comparison" },
+        ],
+        approach:
+          "partition(low, high): pivot = arr[high]. Keep i = low-1 as the 'last small element' boundary. Walk j from low to high-1: whenever arr[j] ≤ pivot, advance i and swap arr[i] ↔ arr[j]. After the scan, swap arr[i+1] ↔ arr[high] to place pivot at its correct sorted index; return i+1. Recurse on [low, p-1] and [p+1, high]. Worst case O(n²) on already-sorted arrays — avoid by using random pivot or median-of-3 in production.",
+        complexity: { time: "O(n log n) average · O(n²) worst", space: "O(log n) call stack" },
+        code: `package main
+
+import "fmt"
+
+func quickSort(arr []int, low, high int) {
+	if low < high {
+		p := partition(arr, low, high)
+		quickSort(arr, low, p-1)  // sort everything left of pivot
+		quickSort(arr, p+1, high) // sort everything right of pivot
+	}
+}
+
+// partition — Lomuto scheme, pivot = arr[high].
+// Returns the final sorted index of the pivot.
+func partition(arr []int, low, high int) int {
+	pivot := arr[high]
+	i := low - 1 // boundary: arr[low..i] ≤ pivot
+	for j := low; j < high; j++ {
+		if arr[j] <= pivot {
+			i++
+			arr[i], arr[j] = arr[j], arr[i]
+		}
+	}
+	arr[i+1], arr[high] = arr[high], arr[i+1] // pivot to its sorted spot
+	return i + 1
+}
+
+func main() {
+	arr := []int{10, 7, 8, 9, 1, 5}
+	fmt.Println("Before:", arr)
+	quickSort(arr, 0, len(arr)-1)
+	fmt.Println("After: ", arr)
+	// Output: [1 5 7 8 9 10]
+
+	// Partition trace on [10,7,8,9,1,5], pivot=5:
+	// j=0: 10>5 skip
+	// j=1:  7>5 skip
+	// j=2:  8>5 skip
+	// j=3:  9>5 skip
+	// j=4:  1≤5 → i=0, swap(0,4) → [1,7,8,9,10,5]
+	// place pivot: swap(1,5) → [1,5,8,9,10,7], return 1
+	// Left=[1] (base case), Right=[8,9,10,7] recurse
+
+	arr2 := []int{3, 6, 8, 10, 1, 2, 1}
+	quickSort(arr2, 0, len(arr2)-1)
+	fmt.Println(arr2) // [1 1 2 3 6 8 10]
+}`,
+      },
+
+      // ── 6. Heap Sort ─────────────────────────────────────────────────────
+      {
+        id: "heap-sort",
+        title: "Heap Sort",
+        difficulty: "Hard",
+        leetcode: 912,
+        description:
+          "Implement Heap Sort. Phase 1: build a max-heap in-place from the array in O(n) time. Phase 2: repeatedly swap the root (current maximum) with the last unsorted element, shrink the heap by 1, then restore the heap property by sifting the new root down. Combines Merge Sort's guaranteed O(n log n) with Quick Sort's O(1) extra space.",
+        examples: [
+          { input: "arr = [12, 11, 13, 5, 6, 7]", output: "[5 6 7 11 12 13]", explanation: "Max-heap [13,11,12,5,6,7] built, then 13,12,11,7,6,5 extracted one by one" },
+          { input: "arr = [4, 10, 3, 5, 1]", output: "[1 3 4 5 10]", explanation: "Max-heap [10,5,3,4,1]; extract 10→5→4→3→1" },
+        ],
+        approach:
+          "Build phase: start from the last internal node index n/2-1 and call heapify() down to 0. This is O(n) because lower levels have exponentially more nodes but require only O(1) work each. Extract phase: swap arr[0] (max) with arr[i] (last unsorted element), decrement effective heap size to i, then call heapify(arr, i, 0) to sift the new root down. heapify() compares node i with left child 2i+1 and right child 2i+2, swaps with the largest if it beats the parent, and recurses down — O(log n) per call.",
+        complexity: { time: "O(n log n) always", space: "O(1) in-place" },
+        code: `package main
+
+import "fmt"
+
+func heapSort(arr []int) {
+	n := len(arr)
+	// Phase 1: build max-heap bottom-up starting from last internal node
+	for i := n/2 - 1; i >= 0; i-- {
+		heapify(arr, n, i)
+	}
+	// Phase 2: extract max to sorted region at the end, shrink heap
+	for i := n - 1; i > 0; i-- {
+		arr[0], arr[i] = arr[i], arr[0] // largest → sorted end
+		heapify(arr, i, 0)              // restore heap on prefix arr[0..i-1]
+	}
+}
+
+// heapify sifts arr[i] downward so that arr[0..n-1] satisfies max-heap.
+func heapify(arr []int, n, i int) {
+	largest := i
+	left := 2*i + 1
+	right := 2*i + 2
+	if left < n && arr[left] > arr[largest] {
+		largest = left
+	}
+	if right < n && arr[right] > arr[largest] {
+		largest = right
+	}
+	if largest != i {
+		arr[i], arr[largest] = arr[largest], arr[i]
+		heapify(arr, n, largest) // recursively fix the disturbed subtree
+	}
+}
+
+func main() {
+	arr := []int{12, 11, 13, 5, 6, 7}
+	fmt.Println("Before:", arr)
+	heapSort(arr)
+	fmt.Println("After: ", arr)
+	// Output: [5 6 7 11 12 13]
+
+	// Max-heap after build: [13, 11, 12, 5, 6, 7]
+	// Extract 13 → swap with arr[5]=7 → heapify → [12,11,7,5,6 | 13]
+	// Extract 12 → swap with arr[4]=6 → heapify → [11,6,7,5 | 12,13]
+	// Extract 11 → ... → final: [5,6,7,11,12,13]
+
+	arr2 := []int{4, 10, 3, 5, 1}
+	heapSort(arr2)
+	fmt.Println(arr2) // [1 3 4 5 10]
+}`,
+      },
+
+      // ── 7. Counting Sort ─────────────────────────────────────────────────
+      {
+        id: "counting-sort",
+        title: "Counting Sort",
+        difficulty: "Easy",
+        leetcode: 75,
+        description:
+          "Counting Sort (directly applied in LC 75 — Sort Colors). Count occurrences of each distinct value into a frequency array, then reconstruct the output by writing each value count[v] times. Not a comparison sort — bypasses the O(n log n) lower bound for integer inputs with a small bounded range. Time O(n + k), Space O(k) where k = value range.",
+        examples: [
+          { input: "arr = [4, 2, 2, 8, 3, 3, 1]", output: "[1 2 2 3 3 4 8]", explanation: "count[1]=1, count[2]=2, count[3]=2, count[4]=1, count[8]=1 → reconstruct" },
+          { input: "nums = [2, 0, 2, 1, 1, 0]  (LC 75)", output: "[0 0 1 1 2 2]", explanation: "count[0]=2, count[1]=2, count[2]=2 → fill 2 zeros, 2 ones, 2 twos in-place" },
+        ],
+        approach:
+          "Pass 1: allocate count[0..maxVal] zeroed. For every value v in input, count[v]++. Pass 2: iterate v from 0 to maxVal; append v to result count[v] times. This is trivially stable since equal elements are written together. LC 75 is exactly counting sort on the 3-value range {0,1,2} — count each colour, then overwrite the original array in two passes total, achieving O(n) with O(1) extra (only 3 counters needed).",
+        complexity: { time: "O(n + k) where k = value range", space: "O(k)" },
+        code: `package main
+
+import "fmt"
+
+// countingSort sorts a slice of non-negative integers all in [0, maxVal].
+func countingSort(arr []int, maxVal int) []int {
+	count := make([]int, maxVal+1)
+	for _, v := range arr {
+		count[v]++
+	}
+	result := make([]int, 0, len(arr))
+	for v, c := range count {
+		for i := 0; i < c; i++ {
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
+// sortColors — LC 75. Sort [0,1,2] in-place: count each colour, then overwrite.
+func sortColors(nums []int) {
+	var count [3]int
+	for _, v := range nums {
+		count[v]++
+	}
+	idx := 0
+	for color := 0; color < 3; color++ {
+		for i := 0; i < count[color]; i++ {
+			nums[idx] = color
+			idx++
+		}
+	}
+}
+
+func main() {
+	arr := []int{4, 2, 2, 8, 3, 3, 1}
+	fmt.Println("Before:", arr)
+	fmt.Println("After: ", countingSort(arr, 8))
+	// Output: [1 2 2 3 3 4 8]
+
+	// count array for [4,2,2,8,3,3,1] (indices 0–8):
+	// index: 0  1  2  3  4  5  6  7  8
+	// count: 0  1  2  2  1  0  0  0  1
+	// reconstruct: skip 0, write 1×1, 2×2, 3×2, 4×1, skip 5/6/7, write 8×1
+
+	// LC 75 — Sort Colors
+	colors := []int{2, 0, 2, 1, 1, 0}
+	fmt.Println("Before:", colors)
+	sortColors(colors)
+	fmt.Println("After: ", colors)
+	// Output: [0 0 1 1 2 2]
+}`,
+      },
+
+      // ── 8. Cyclic Sort ───────────────────────────────────────────────────
+      {
+        id: "cyclic-sort",
+        title: "Cyclic Sort",
+        difficulty: "Medium",
+        leetcode: 268,
+        description:
+          "Cyclic Sort (applied in LC 268 — Missing Number). When an array holds n numbers drawn from [1, n] (or [0, n] with one gap), every element has a known correct index. Place each number at its correct index in a single O(n) pass — swap arr[i] with arr[arr[i]-1] until arr[i] is already home, then advance i. A second scan finds the displaced element.",
+        examples: [
+          { input: "arr = [3, 1, 5, 4, 2]", output: "[1 2 3 4 5]", explanation: "3 belongs at idx 2, 1 at idx 0, 5 at idx 4 — place each via swaps" },
+          { input: "nums = [3, 0, 1]  (LC 268)", output: "2", explanation: "After cyclic sort → [0, 1, 3]; idx 2 holds 3 ≠ 2, so 2 is the missing number" },
+        ],
+        approach:
+          "Key insight: value v must live at index v-1 (for 1-indexed range). Iterate i=0: compute correct = arr[i]-1. If arr[i] != arr[correct], swap arr[i] ↔ arr[correct] and do NOT advance i — the newly swapped-in element may also be displaced. If arr[i] == arr[correct], advance i. Each element is moved at most once, so total swaps ≤ n → O(n). For LC 268 (range [0, n], one missing): skip elements ≥ n (they have no valid index), then scan for the first i where arr[i] != i — that i is missing. If none found, n itself is missing.",
+        complexity: { time: "O(n)", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+// cyclicSort sorts arr in-place when it holds values in range [1, len(arr)].
+func cyclicSort(arr []int) {
+	i := 0
+	for i < len(arr) {
+		correct := arr[i] - 1       // index where arr[i] belongs
+		if arr[i] != arr[correct] { // element is not home — swap it there
+			arr[i], arr[correct] = arr[correct], arr[i]
+			// do NOT advance i: the swapped-in value may also be displaced
+		} else {
+			i++ // element is home, move on
+		}
+	}
+}
+
+// missingNumber — LC 268. Find the missing number in nums containing [0, n].
+func missingNumber(nums []int) int {
+	n := len(nums)
+	i := 0
+	for i < n {
+		correct := nums[i]
+		if nums[i] < n && nums[i] != nums[correct] {
+			nums[i], nums[correct] = nums[correct], nums[i]
+		} else {
+			i++
+		}
+	}
+	for i, v := range nums {
+		if v != i {
+			return i
+		}
+	}
+	return n // n is the missing number
+}
+
+func main() {
+	arr := []int{3, 1, 5, 4, 2}
+	fmt.Println("Before:", arr)
+	cyclicSort(arr)
+	fmt.Println("After: ", arr)
+	// Output: [1 2 3 4 5]
+
+	// Swap trace on [3,1,5,4,2]:
+	// i=0: arr[0]=3 → correct=2, arr[2]=5≠3 → swap(0,2) → [5,1,3,4,2]
+	// i=0: arr[0]=5 → correct=4, arr[4]=2≠5 → swap(0,4) → [2,1,3,4,5]
+	// i=0: arr[0]=2 → correct=1, arr[1]=1≠2 → swap(0,1) → [1,2,3,4,5]
+	// i=0: arr[0]=1 → correct=0, arr[0]=1  → i=1
+	// i=1,2,3,4: all home → done
+
+	// LC 268 — Missing Number
+	fmt.Println(missingNumber([]int{3, 0, 1}))              // 2
+	fmt.Println(missingNumber([]int{0, 1}))                  // 2
+	fmt.Println(missingNumber([]int{9, 6, 4, 2, 3, 5, 7, 0, 1})) // 8
+}`,
+      },
+    ],
+  },
 ];

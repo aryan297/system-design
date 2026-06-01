@@ -14,6 +14,7 @@ import { IRCTC_HLD, IRCTC_LLD, IRCTC_QNA } from "./irctc";
 import { DEZERV_HLD, DEZERV_LLD, DEZERV_QNA } from "./dezerv";
 import { GOOGLE_DRIVE_HLD, GOOGLE_DRIVE_LLD, GOOGLE_DRIVE_QNA } from "./googledrive";
 import { HOTSTAR_HLD, HOTSTAR_LLD, HOTSTAR_QNA } from "./hotstar";
+import { DYNAMODB_HLD, DYNAMODB_LLD, DYNAMODB_QNA } from "./dynamodb";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -112,6 +113,12 @@ const REGISTRY = {
     hld: HOTSTAR_HLD,
     lld: HOTSTAR_LLD,
     qna: HOTSTAR_QNA,
+  },
+  "dynamo-db": {
+    meta: { icon: "🗄️", color: "#FF9900" },
+    hld: DYNAMODB_HLD,
+    lld: DYNAMODB_LLD,
+    qna: DYNAMODB_QNA,
   },
 };
 
