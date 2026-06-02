@@ -118,4 +118,11 @@ export const SYSTEMS = [
     description: "Amazon's distributed key-value store — consistent hashing, LSM tree, quorum replication, single-digit ms latency",
     color: "#FF9900",
   },
+  {
+    id: "claude-code",
+    name: "Claude Code",
+    icon: "🤖",
+    description: "AI coding agent — agentic loop, tool-use API, prompt caching, context compression, MCP protocol",
+    color: "#D97706",
+  },
 ];

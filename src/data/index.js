@@ -15,6 +15,7 @@ import { DEZERV_HLD, DEZERV_LLD, DEZERV_QNA } from "./dezerv";
 import { GOOGLE_DRIVE_HLD, GOOGLE_DRIVE_LLD, GOOGLE_DRIVE_QNA } from "./googledrive";
 import { HOTSTAR_HLD, HOTSTAR_LLD, HOTSTAR_QNA } from "./hotstar";
 import { DYNAMODB_HLD, DYNAMODB_LLD, DYNAMODB_QNA } from "./dynamodb";
+import { CLAUDECODE_HLD, CLAUDECODE_LLD, CLAUDECODE_QNA } from "./claudecode";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -119,6 +120,12 @@ const REGISTRY = {
     hld: DYNAMODB_HLD,
     lld: DYNAMODB_LLD,
     qna: DYNAMODB_QNA,
+  },
+  "claude-code": {
+    meta: { icon: "🤖", color: "#D97706" },
+    hld: CLAUDECODE_HLD,
+    lld: CLAUDECODE_LLD,
+    qna: CLAUDECODE_QNA,
   },
 };
 

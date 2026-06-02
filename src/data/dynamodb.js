@@ -773,9 +773,13 @@ StreamRecord {
 
 export const DYNAMODB_QNA = [
   {
+    id: "ddb-q1",
+    category: "Architecture",
     difficulty: "Hard",
-    q: "Explain consistent hashing and why DynamoDB uses virtual nodes.",
-    a: `Consistent hashing places both data keys and storage nodes on a conceptual ring of hash values (0 to 2^32). A key is hashed to a position on the ring and stored on the nearest node clockwise.
+    round: "System Design Round",
+    asked_at: ["Amazon", "Meta", "Google"],
+    question: "Explain consistent hashing and why DynamoDB uses virtual nodes.",
+    answer: `Consistent hashing places both data keys and storage nodes on a conceptual ring of hash values (0 to 2^32). A key is hashed to a position on the ring and stored on the nearest node clockwise.
 
 Why it's better than modular hashing:
 With modular hashing (key % N nodes), adding one node rehashes and moves ~50% of all data. With consistent hashing, adding one node only moves 1/N of data — just the keys in its new arc.
@@ -784,11 +788,16 @@ Why virtual nodes (vnodes)?
 Without vnodes, each physical node owns one large arc. A new node takes exactly one arc from one neighbour → unbalanced load. With vnodes (DynamoDB uses ~256 per node), each physical node owns 256 small arcs scattered around the ring. When a node joins, it takes small slices from many neighbours → load distributes evenly. When a node fails, its 256 arcs are redistributed across 256 different neighbours — no single node becomes a hotspot.
 
 Additional benefit: hot partition isolation. If one key range is overwhelmingly popular, its vnode can be migrated to a dedicated, high-capacity storage node without moving other data.`,
+    followups: ["How does consistent hashing behave when a node fails vs when one is added?", "What is the minimum number of vnodes needed to ensure uniform distribution?"],
   },
   {
+    id: "ddb-q2",
+    category: "Database Design",
     difficulty: "Hard",
-    q: "How does DynamoDB's LSM Tree achieve single-digit millisecond write latency?",
-    a: `The key insight: disk random writes are slow (~1ms per operation). LSM Tree avoids them entirely on the write path.
+    round: "Deep Dive",
+    asked_at: ["Amazon", "Google", "Facebook"],
+    question: "How does DynamoDB's LSM Tree achieve single-digit millisecond write latency?",
+    answer: `The key insight: disk random writes are slow (~1ms per operation). LSM Tree avoids them entirely on the write path.
 
 Write path:
 1. WAL append: sequential write to a log file (~0.1ms). Sequential I/O is 10-100× faster than random I/O on HDD; near-instant on NVMe SSD.
@@ -801,11 +810,16 @@ Total write time: dominated by network replication (cross-AZ RTT ~1-2ms) + WAL (
 The tradeoff: reads are more complex. Data may be in MemTable, L0, L1, or deeper SSTables — requires checking multiple locations. Bloom filters (probabilistic, O(1) per SSTable) eliminate most unnecessary SSTable reads. Block caching keeps hot data in RAM. Hot item reads effectively become pure RAM operations matching write speed.
 
 Compaction (background): merges SSTables to reduce read amplification. Happens asynchronously, doesn't affect write or read latency in the foreground.`,
+    followups: ["How does compaction affect read and write latency when it's running?", "Compare LSM Tree vs B-Tree for a read-heavy vs write-heavy workload."],
   },
   {
+    id: "ddb-q3",
+    category: "Fault Tolerance",
     difficulty: "Hard",
-    q: "Design DynamoDB's quorum replication. What happens during a leader failure?",
-    a: `Quorum configuration: N=3 replicas, W=2 (write quorum), R=1 or R=2 (eventually/strongly consistent reads).
+    round: "Deep Dive",
+    asked_at: ["Amazon", "Microsoft", "Google"],
+    question: "Design DynamoDB's quorum replication. What happens during a leader failure?",
+    answer: `Quorum configuration: N=3 replicas, W=2 (write quorum), R=1 or R=2 (eventually/strongly consistent reads).
 
 Normal write flow:
 1. Client → Request Router → Leader node (in primary AZ).
@@ -822,11 +836,16 @@ Leader failure detection and election (Paxos):
 Log reconciliation: new leader may be missing the last few writes (if it was the lagging replica). It catches up from the other follower before accepting new writes. This ensures no committed write is lost — committed means ACKed by quorum, so at least 2 nodes have it, and the new leader is one of the remaining 2.
 
 Client impact: ~150-300ms of write unavailability during failover. DynamoDB SDK retries with backoff, making this transparent to most applications.`,
+    followups: ["What is split-brain and how does the term-based Paxos approach prevent it?", "Can a write be ACKed to the client but then lost? Under what conditions?"],
   },
   {
+    id: "ddb-q4",
+    category: "Database Design",
     difficulty: "Hard",
-    q: "What is the single-table design pattern and when should you use it?",
-    a: `Single-table design stores multiple entity types in one DynamoDB table by overloading the PK and SK with entity-type prefixes. A user, their orders, and their addresses all live in one table.
+    round: "System Design Round",
+    asked_at: ["Amazon", "Netflix", "Lyft"],
+    question: "What is the single-table design pattern and when should you use it?",
+    answer: `Single-table design stores multiple entity types in one DynamoDB table by overloading the PK and SK with entity-type prefixes. A user, their orders, and their addresses all live in one table.
 
 Example:
   PK=USER#123, SK=PROFILE → user record
@@ -846,11 +865,16 @@ When NOT to use:
 • You're doing analytics or ad-hoc queries — DynamoDB is a poor fit regardless of schema style.
 
 The pattern requires discipline: you must know all access patterns upfront and design PK/SK to satisfy them. Retrofitting a poorly designed table is painful (requires a full data migration since you can't change PK/SK on existing items).`,
+    followups: ["How do you handle a new access pattern that wasn't anticipated in the original single-table design?"],
   },
   {
+    id: "ddb-q5",
+    category: "Scale & Performance",
     difficulty: "Medium",
-    q: "What is a hot partition in DynamoDB and how do you fix it?",
-    a: `A hot partition occurs when a disproportionate share of read/write traffic goes to a single partition key, exhausting that partition's throughput (3,000 RCU or 1,000 WCU) while other partitions sit idle.
+    round: "System Design Round",
+    asked_at: ["Amazon", "Netflix", "Uber"],
+    question: "What is a hot partition in DynamoDB and how do you fix it?",
+    answer: `A hot partition occurs when a disproportionate share of read/write traffic goes to a single partition key, exhausting that partition's throughput (3,000 RCU or 1,000 WCU) while other partitions sit idle.
 
 Common causes:
 • Low-cardinality PK: status (PENDING/ACTIVE/CLOSED) — all writes land on 3 partitions.
@@ -869,11 +893,16 @@ Solutions:
 3. Adaptive capacity: DynamoDB automatically borrows unused capacity from cold partitions to hot ones (up to 5 minutes of burst). Not a long-term fix.
 
 4. Redesign the access pattern: if status is always queried, use a GSI with a sharded PK. If a specific item is always hot, cache it.`,
+    followups: ["How would you detect a hot partition before it causes throttling in production?", "With write sharding, how do you efficiently query across all shards?"],
   },
   {
+    id: "ddb-q6",
+    category: "Architecture",
     difficulty: "Medium",
-    q: "Explain DynamoDB Streams and three real-world use cases.",
-    a: `DynamoDB Streams is a time-ordered, 24-hour log of every change (INSERT/MODIFY/REMOVE) to a table. Each table partition has its own stream shard. Stream records are delivered at-least-once — consumers must be idempotent.
+    round: "Deep Dive",
+    asked_at: ["Amazon", "Netflix", "Airbnb"],
+    question: "Explain DynamoDB Streams and three real-world use cases.",
+    answer: `DynamoDB Streams is a time-ordered, 24-hour log of every change (INSERT/MODIFY/REMOVE) to a table. Each table partition has its own stream shard. Stream records are delivered at-least-once — consumers must be idempotent.
 
 Three use cases:
 
@@ -887,11 +916,16 @@ Three use cases:
    Item updated in DynamoDB → stream → Lambda → Redis DEL for that item's cache key. Ensures Redis cache never serves stale data. The stream is the bridge between the source of truth and the cache.
 
 Ordering caveat: events within a single partition are ordered by sequence number. Events across different partitions have no global ordering guarantee. Design consumers to tolerate out-of-order cross-partition events.`,
+    followups: ["How do you handle a Lambda consumer that falls behind and risks losing 24h-old stream records?", "How do you ensure exactly-once processing when Streams guarantees at-least-once?"],
   },
   {
+    id: "ddb-q7",
+    category: "Database Design",
     difficulty: "Medium",
-    q: "What is the difference between GSI and LSI? When do you choose each?",
-    a: `Local Secondary Index (LSI):
+    round: "System Design Round",
+    asked_at: ["Amazon", "Lyft", "Stripe"],
+    question: "What is the difference between GSI and LSI in DynamoDB? When do you choose each?",
+    answer: `Local Secondary Index (LSI):
 • Same partition key as the base table, different sort key.
 • Must be created at table creation time — cannot add later.
 • Shares the 10 GB partition limit with the base table (data co-located).
@@ -909,11 +943,16 @@ Global Secondary Index (GSI):
   Example: PK=status, SK=createdAt — "get all PENDING orders from last 7 days".
 
 Key pitfall with GSI: every write to the base table also writes to all GSIs. Each GSI consumes WCU. A GSI with a low-cardinality PK (like status) will have hot partitions — same problem as a hot base table.`,
+    followups: ["A table has 5 GSIs. What's the write amplification and how does it affect cost?", "Can you add an LSI to a table after it has data in it? Why or why not?"],
   },
   {
+    id: "ddb-q8",
+    category: "Database Design",
     difficulty: "Medium",
-    q: "How does DynamoDB handle eventual vs strong consistency and what's the cost?",
-    a: `DynamoDB defaults to eventually consistent reads. You opt into strongly consistent reads per-request.
+    round: "Screening",
+    asked_at: ["Amazon", "Meta", "Twitter"],
+    question: "How does DynamoDB handle eventual vs strong consistency and what's the cost?",
+    answer: `DynamoDB defaults to eventually consistent reads. You opt into strongly consistent reads per-request.
 
 Eventually consistent (default):
 • Read routed to any of the 3 replicas (usually the nearest for low latency).
@@ -935,11 +974,16 @@ Read-modify-write atomicity:
     UpdateItem with ConditionExpression="count = :expected"
     → fails if count changed since read → retry
   This gives optimistic concurrency control without needing strong reads.`,
+    followups: ["Name three operations in an e-commerce app where you would always use strongly consistent reads."],
   },
   {
+    id: "ddb-q9",
+    category: "Architecture",
     difficulty: "Easy",
-    q: "What happens to a DynamoDB partition when it exceeds 10 GB or hits throughput limits?",
-    a: `DynamoDB automatically splits the partition — no manual intervention, no downtime.
+    round: "Screening",
+    asked_at: ["Amazon", "Google", "Microsoft"],
+    question: "What happens to a DynamoDB partition when it exceeds 10 GB or hits throughput limits?",
+    answer: `DynamoDB automatically splits the partition — no manual intervention, no downtime.
 
 Trigger conditions:
 • Partition exceeds 10 GB of data, OR
@@ -959,11 +1003,16 @@ Throughput after split:
 • Effective throughput doubles for that key range.
 
 Important: DynamoDB never merges partitions back. Once split, always split. This means if you had a temporary spike, you keep the extra partition capacity — which is actually beneficial (more headroom), but also means partition count grows monotonically over time.`,
+    followups: ["If DynamoDB never merges partitions, what's the long-term implication for a table that had one big spike years ago?"],
   },
   {
+    id: "ddb-q10",
+    category: "Database Design",
     difficulty: "Easy",
-    q: "What is a bloom filter and how does DynamoDB use it to speed up reads?",
-    a: `A bloom filter is a probabilistic data structure that answers "is this key in this set?" in O(1) time using a fixed-size bit array.
+    round: "Screening",
+    asked_at: ["Amazon", "Google", "Meta"],
+    question: "What is a bloom filter and how does DynamoDB use it to speed up reads?",
+    answer: `A bloom filter is a probabilistic data structure that answers "is this key in this set?" in O(1) time using a fixed-size bit array.
 
 How it works:
 • On build: for each key, hash it with K different hash functions, set K bits in the array.
@@ -979,5 +1028,6 @@ DynamoDB's use: each SSTable (on-disk sorted file) has a bloom filter built from
 Without bloom filters: a GetItem for a non-existent key would read every SSTable at every level until giving up. With bloom filters: 99% of "key doesn't exist in this SSTable" checks require zero disk I/O.
 
 Tradeoff: bloom filter size. 10 bits per key gives ~1% false positive rate. At 10M keys per SSTable, the filter is 12.5 MB — easily kept in RAM. False positives waste one SSTable read; they never return wrong data.`,
+    followups: ["Can you ever get a false negative from a bloom filter? What does that imply about its safety for this use case?"],
   },
 ];

@@ -768,9 +768,13 @@ WS wss://engagement.hotstar.com/live/{matchId}/commentary
 
 export const HOTSTAR_QNA = [
   {
+    id: "hs-q1",
+    category: "Scale & Performance",
     difficulty: "Hard",
-    q: "How does Hotstar prevent origin servers from getting overwhelmed when 20 million viewers all press play at 7:30 PM?",
-    a: `Three-layer thundering herd mitigation:
+    round: "System Design Round",
+    asked_at: ["Hotstar", "Netflix", "Amazon"],
+    question: "How does Hotstar prevent origin servers from getting overwhelmed when 20 million viewers all press play at 7:30 PM?",
+    answer: `Three-layer thundering herd mitigation:
 
 1. Active segment push: the transcode farm PUSHes each new 2-second segment to CDN edges the moment it's ready — before any viewer requests it. By the time viewers request segment N, it's already cached at the CDN edge nearest to them. No origin hit.
 
@@ -779,11 +783,16 @@ export const HOTSTAR_QNA = [
 3. Manifest jitter: the m3u8 playlist is updated every 2 seconds. Clients are instructed to poll with ±1 second random jitter. This spreads 20M manifest requests over a 2-second window instead of a synchronized spike.
 
 Without these: 32M viewers × 1 cache miss each = 32M origin requests in seconds → instant death.`,
+    followups: ["How would you test this at scale before IPL begins?", "What's the failure mode if active segment push is delayed by 3+ seconds?"],
   },
   {
+    id: "hs-q2",
+    category: "Architecture",
     difficulty: "Hard",
-    q: "Design the live score fan-out system for 32 million concurrent IPL viewers.",
-    a: `Broadcast bus pattern with horizontal fan-out workers:
+    round: "System Design Round",
+    asked_at: ["Hotstar", "Twitter", "ESPN"],
+    question: "Design the live score fan-out system for 32 million concurrent IPL viewers.",
+    answer: `Broadcast bus pattern with horizontal fan-out workers:
 
 1. Score ingestor: single Go process receives ball-by-ball data via TCP from BCCI data feed → publishes to Kafka topic "live.scores".
 
@@ -794,11 +803,16 @@ Without these: 32M viewers × 1 cache miss each = 32M origin requests in seconds
 Key math: 32M viewers × 1 update per 10 seconds = 3.2M pushes/second across all workers = 32K pushes/second per worker. Manageable.
 
 Circuit breaker: if score service latency > 500ms, player hides score widget. Video delivery is completely independent — score service failure cannot affect playback.`,
+    followups: ["What happens to the fan-out worker's connections if it crashes mid-match?", "How would you scale beyond 100 fan-out workers without losing connection affinity?"],
   },
   {
+    id: "hs-q3",
+    category: "CDN & Streaming",
     difficulty: "Hard",
-    q: "How does Hotstar handle the tradeoff between live latency and buffering stability for Indian mobile users?",
-    a: `Hotstar runs different latency profiles based on subscriber tier and network quality:
+    round: "Deep Dive",
+    asked_at: ["Hotstar", "Netflix", "YouTube"],
+    question: "How does Hotstar handle the tradeoff between live latency and buffering stability for Indian mobile users?",
+    answer: `Hotstar runs different latency profiles based on subscriber tier and network quality:
 
 Standard HLS (10–30s latency): used for most users. Larger client buffer (15–30 seconds of pre-buffered video) absorbs India's notoriously jittery mobile networks (Jio congestion, BSNL packet loss). A viewer on 4G in a crowded stadium won't rebuffer even with 10-second bandwidth spikes. Cost: they're 20 seconds behind WhatsApp.
 
@@ -811,11 +825,16 @@ Starburst player prioritizes stability over latency:
 • Live edge drift correction: 1.1× playback speed to catch up, not skip
 
 Audio-only mode: for < 0.4 Mbps users (rural 2G), the player falls back to 32 kbps AAC audio + static scorecard. A unique Indian use case that significantly expands the total addressable audience.`,
+    followups: ["How do you measure whether a viewer is experiencing rebuffering in production?", "Design an A/B test to validate that LL-HLS is better for premium users."],
   },
   {
+    id: "hs-q4",
+    category: "Scale & Performance",
     difficulty: "Hard",
-    q: "How would you pre-scale Hotstar's infrastructure for IPL without wasting money on idle capacity all year?",
-    a: `Key insight: IPL is predictable — every match date is known months ahead. Use a tiered provisioning strategy.
+    round: "Deep Dive",
+    asked_at: ["Hotstar", "Amazon", "Google"],
+    question: "How would you pre-scale Hotstar's infrastructure for IPL without wasting money on idle capacity all year?",
+    answer: `Key insight: IPL is predictable — every match date is known months ahead. Use a tiered provisioning strategy.
 
 Outside IPL: ~1M peak concurrent viewers. Autoscaling handles normal day/night variation. Minimal reserved capacity.
 
@@ -829,22 +848,32 @@ Why not autoscale to peak?
 • Kubernetes HPA takes 2–3 minutes to spin up pods. Thundering herd arrives in 0–5 minutes. You cannot scale to IPL peak — you must be at peak before the first viewer arrives.
 
 Cost optimization: reserved instances + spot instances for fault-tolerant batch jobs (transcode re-runs, segment validation). Post-match, aggressively scale down 30 minutes after match ends. Annual AWS bill spike is 2× for 7 weeks, then back to baseline.`,
+    followups: ["How do you run a realistic load test before the actual IPL season?"],
   },
   {
+    id: "hs-q5",
+    category: "CDN & Streaming",
     difficulty: "Medium",
-    q: "What is CDN request coalescing and why is it critical for live streaming?",
-    a: `Request coalescing (also called request collapsing) is a CDN feature where concurrent cache miss requests for the same object are collapsed into a single origin fetch.
+    round: "System Design Round",
+    asked_at: ["Hotstar", "Netflix", "Cloudflare"],
+    question: "What is CDN request coalescing and why is it critical for live streaming?",
+    answer: `Request coalescing (also called request collapsing) is a CDN feature where concurrent cache miss requests for the same object are collapsed into a single origin fetch.
 
 Without coalescing: segment_001.ts is new (just created by transcode farm). 50,000 viewers at the Mumbai CDN PoP all request it simultaneously. CDN has no cache entry → all 50,000 requests fan back to origin → origin gets 50,000 concurrent hits for the same 2-second video file. Multiplied across 8 PoPs in India alone = 400,000 origin requests per 2-second segment cycle.
 
 With coalescing: CDN receives 50,000 requests, sees they're all for the same URL, sends ONE request to origin. Holds the other 49,999 requests in a queue. Origin responds with the segment. CDN caches it and serves all 49,999 queued requests instantly.
 
 For live streaming it's critical because: segments are created continuously (every 2s), they're never in cache when first created, and the entire audience requests each new segment within the same 2-second window. Coalescing plus active push is what prevents origin implosion at IPL scale.`,
+    followups: ["What's the maximum queue wait time for a coalesced request, and how does that affect perceived latency?"],
   },
   {
+    id: "hs-q6",
+    category: "Security & DRM",
     difficulty: "Medium",
-    q: "How does JWT-based auth work at CDN edge for live streaming? Why not call an auth service per segment?",
-    a: `Calling an auth service per segment at 32M viewers × 1 segment per 2 seconds = 16M auth calls/second. No auth service survives that.
+    round: "Deep Dive",
+    asked_at: ["Hotstar", "Netflix", "Amazon"],
+    question: "How does JWT-based auth work at CDN edge for live streaming? Why not call an auth service per segment?",
+    answer: `Calling an auth service per segment at 32M viewers × 1 segment per 2 seconds = 16M auth calls/second. No auth service survives that.
 
 JWT self-contained auth:
 1. User authenticates and calls Playback Auth Service (POST /playback/token) — one call.
@@ -856,11 +885,16 @@ JWT self-contained auth:
 Token refresh: player calls /token/refresh every 12 minutes (before the 15-minute expiry). This is the ONLY database call in the entire playback lifecycle — once per 12 minutes per viewer.
 
 CDN never calls origin for auth validation. The JWT is self-validating. This is what makes 32M concurrent viewers feasible.`,
+    followups: ["How do you revoke a JWT before its 15-minute expiry (e.g., user cancels subscription mid-match)?", "What are the security risks of embedding tokens in URLs?"],
   },
   {
+    id: "hs-q7",
+    category: "Fault Tolerance",
     difficulty: "Medium",
-    q: "How does Hotstar implement graceful degradation when systems start struggling under IPL peak load?",
-    a: `Priority hierarchy: video delivery > auth > live score > polls > social features.
+    round: "System Design Round",
+    asked_at: ["Hotstar", "Netflix", "Google"],
+    question: "How does Hotstar implement graceful degradation when systems start struggling under IPL peak load?",
+    answer: `Priority hierarchy: video delivery > auth > live score > polls > social features.
 
 Circuit breakers per service:
 • Auth service p99 > 50ms: stop re-validating active sessions, use cached JWT for next 5 minutes. Worst case: a cancelled subscription watches an extra 5 minutes.
@@ -871,11 +905,16 @@ Circuit breakers per service:
 Quality ladder shedding: temporarily remove 4K tier from master playlist when CDN bandwidth is saturated. ABR players step down to 1080p automatically. 4K viewers are a tiny minority; removing them frees 30% of total bandwidth.
 
 Admission control (last resort): new login attempts get HTTP 503 + Retry-After: 30. Existing sessions with valid JWTs are NEVER dropped. This protects the viewers already watching while throttling new joiners during extreme spikes. Combined with a visual queue counter to manage user expectation.`,
+    followups: ["How do you decide the thresholds for each circuit breaker in production?"],
   },
   {
+    id: "hs-q8",
+    category: "CDN & Streaming",
     difficulty: "Medium",
-    q: "Explain HLS adaptive bitrate streaming and how Hotstar tunes it for India.",
-    a: `HLS works by splitting video into small segments (2 seconds for Hotstar live). Each segment is stored at multiple quality levels (360p to 4K). The master playlist lists all quality variant URLs. The player chooses which quality to request next based on available bandwidth.
+    round: "Screening",
+    asked_at: ["Hotstar", "Netflix", "YouTube"],
+    question: "Explain HLS adaptive bitrate streaming and how Hotstar tunes it for India.",
+    answer: `HLS works by splitting video into small segments (2 seconds for Hotstar live). Each segment is stored at multiple quality levels (360p to 4K). The master playlist lists all quality variant URLs. The player chooses which quality to request next based on available bandwidth.
 
 Standard ABR flow:
 1. Measure download time of last segment → estimate bandwidth.
@@ -890,11 +929,16 @@ Hotstar tunes for India:
 • Audio-only fallback at < 0.4 Mbps — unique feature for 2G users (rural India, crowded stadiums).
 • Live edge correction: if playback drifts > 10s behind live, play at 1.1× speed to catch up — seamless to viewers.
 • Per-device quality caps: low-end Android (< 2GB RAM) capped at 480p to prevent decoder stutter.`,
+    followups: ["What metric would you use to measure ABR algorithm quality? How would you A/B test it?"],
   },
   {
+    id: "hs-q9",
+    category: "CDN & Streaming",
     difficulty: "Easy",
-    q: "Why does Hotstar use 2-second HLS segments instead of longer (6–10s) segments?",
-    a: `Tradeoff: shorter segments = lower latency + finer ABR granularity, but higher request volume and CDN pressure.
+    round: "Screening",
+    asked_at: ["Hotstar", "Akamai", "Fastly"],
+    question: "Why does Hotstar use 2-second HLS segments instead of longer (6–10s) segments?",
+    answer: `Tradeoff: shorter segments = lower latency + finer ABR granularity, but higher request volume and CDN pressure.
 
 6-second segments (YouTube/Netflix default for VOD):
 • Only 10 requests/minute per viewer — low CDN load
@@ -912,11 +956,16 @@ The CDN cost is manageable because:
 • 2-second segments are served entirely from CDN cache (never origin)
 • CDN request volume scales linearly with viewers but not with origin cost
 • Manifest polling (every 2s) is the more significant load — 32M × 0.5 req/s = 16M/s, which is why manifest active push is critical`,
+    followups: ["At what point does reducing segment size below 2s become counterproductive?"],
   },
   {
+    id: "hs-q10",
+    category: "Scale & Performance",
     difficulty: "Easy",
-    q: "Why does Hotstar pre-scale to peak capacity before an IPL match instead of relying on auto-scaling?",
-    a: `Auto-scaling works well for gradual ramp-up over minutes or hours. IPL thundering herd is a cliff edge.
+    round: "Screening",
+    asked_at: ["Hotstar", "Amazon", "Netflix"],
+    question: "Why does Hotstar pre-scale to peak capacity before an IPL match instead of relying on auto-scaling?",
+    answer: `Auto-scaling works well for gradual ramp-up over minutes or hours. IPL thundering herd is a cliff edge.
 
 What auto-scaling does:
 • Monitors CPU/request rate → triggers pod scaling when threshold crossed.
@@ -929,5 +978,6 @@ What IPL looks like:
 • 7:33:00 PM: new pods ready. 20M viewers — but the service already struggled for 2.5 minutes.
 
 Pre-scaling solution: manually scale to peak capacity at T-4 hours. The cost of over-provisioning for 4 hours is negligible compared to the revenue and reputation damage of a broken match stream. Reserved instances reduce per-hour cost. Auto-scaling is used after the match to ramp DOWN over 30 minutes — which is exactly the gradual ramp-down auto-scaling handles well.`,
+    followups: ["How would you automate the pre-scale playbook so SREs don't have to do it manually before every match?"],
   },
 ];

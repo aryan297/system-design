@@ -752,43 +752,67 @@ Link token generation (anyoneWithLink):
 
 export const GOOGLE_DRIVE_QNA = [
   {
+    id: "gdrive-q1",
+    category: "Architecture",
     difficulty: "Hard",
-    q: "How does Google Drive achieve deduplication across billions of files?",
-    a: `Content-addressed storage (CAS): every 256 KB chunk is SHA-256 hashed. The chunk store (Colossus) is a key-value store from hash → bytes. Before uploading, the client sends all chunk hashes to the Upload Service. The service checks a bloom filter first (fast O(1) membership test), then confirms with the actual index. Only truly missing chunks are transferred. This means two users uploading the same popular PDF transfer 0 bytes after the first upload — the chunks already exist. Deduplication happens transparently at the chunk level, not the file level.`,
+    round: "System Design Round",
+    asked_at: ["Google", "Dropbox", "Box"],
+    question: "How does Google Drive achieve deduplication across billions of files?",
+    answer: `Content-addressed storage (CAS): every 256 KB chunk is SHA-256 hashed. The chunk store (Colossus) is a key-value store from hash → bytes. Before uploading, the client sends all chunk hashes to the Upload Service. The service checks a bloom filter first (fast O(1) membership test), then confirms with the actual index. Only truly missing chunks are transferred. This means two users uploading the same popular PDF transfer 0 bytes after the first upload — the chunks already exist. Deduplication happens transparently at the chunk level, not the file level.`,
+    followups: ["How would you handle dedup across users who don't share files?", "What are the privacy implications of cross-user deduplication?"],
   },
   {
+    id: "gdrive-q2",
+    category: "Architecture",
     difficulty: "Hard",
-    q: "Design the sync protocol for Google Drive. How do devices stay in sync efficiently?",
-    a: `Three-layer sync:
+    round: "System Design Round",
+    asked_at: ["Google", "Dropbox", "Microsoft"],
+    question: "Design the sync protocol for Google Drive. How do devices stay in sync efficiently?",
+    answer: `Three-layer sync:
 1. Change log: every Spanner write publishes an event to Pub/Sub with {fileId, userId, version}.
 2. Push notification: Notification Service fans out WebSocket pushes to all active devices of the affected user — lightweight "something changed" signal, not the actual diff.
 3. Delta fetch: device receives push, calls GET /changes?pageToken={lastSyncToken} to get ordered change list, then GET /files/{id}/diff?fromVersion=N&toVersion=M to fetch only changed chunks.
 
 Key insight: the push is a signal, not the payload. Device pulls diffs on demand. Offline device reconnects, provides its last sync token, and replays changes sequentially. Chunk delta means only modified 256 KB windows are downloaded, not the full file.`,
+    followups: ["How does the sync token prevent missing changes after a long offline period?", "What happens if a device's sync token expires?"],
   },
   {
+    id: "gdrive-q3",
+    category: "Architecture",
     difficulty: "Hard",
-    q: "How does Google Drive handle real-time concurrent editing?",
-    a: `Google Docs/Sheets use Operational Transformation (OT), not Drive's chunk storage. The file in Drive is just a pointer to a Doc ID.
+    round: "Deep Dive",
+    asked_at: ["Google", "Notion", "Atlassian"],
+    question: "How does Google Drive handle real-time concurrent editing in Google Docs?",
+    answer: `Google Docs/Sheets use Operational Transformation (OT), not Drive's chunk storage. The file in Drive is just a pointer to a Doc ID.
 
 OT server maintains a total-ordered log of all operations. When Alice and Bob edit simultaneously, their operations are transformed relative to each other before application. Example: Alice inserts at position 5, Bob deletes at position 3. If Bob's delete lands first, Alice's insert position is transformed to 4.
 
 Every operation carries a revision number. Reconnecting clients send their local revision and receive all ops since then — they replay transforms to reach the current state. Autosave takes periodic Spanner snapshots (every 30s or on last-user-close) rather than writing every keystroke.`,
+    followups: ["How does OT differ from CRDT? Which is better for collaborative editing?", "How do you handle a user who has been offline for hours reconnecting to a doc?"],
   },
   {
+    id: "gdrive-q4",
+    category: "Fault Tolerance",
     difficulty: "Hard",
-    q: "How does Google Drive ensure durability of 11 nines (99.999999999%)?",
-    a: `Three durability layers stacked:
+    round: "Deep Dive",
+    asked_at: ["Google", "Amazon", "Microsoft"],
+    question: "How does Google Drive ensure durability of 11 nines (99.999999999%)?",
+    answer: `Three durability layers stacked:
 1. Colossus synchronous replication: 3 replicas within the same zone, write only ACKed after 2/3 confirm.
 2. Erasure coding across zones: 6+3 Reed-Solomon encoding means the original data is recoverable even if 3 out of 9 zone-level shards are lost. Surviving 3 full zone failures is extremely unlikely.
 3. Cross-region async replication: periodic copies to a geographically distant region (e.g., US-EAST to EU-WEST) to survive regional catastrophes.
 
 Chunks are immutable — once written, never modified. GC only runs when all file versions referencing a chunk are permanently deleted. This immutability makes replication simple and prevents write-after-write hazards.`,
+    followups: ["What is the difference between availability (nines of uptime) and durability (nines of data safety)?", "How does erasure coding compare to simple 3× replication in cost?"],
   },
   {
+    id: "gdrive-q5",
+    category: "Fault Tolerance",
     difficulty: "Medium",
-    q: "How does Google Drive handle conflicts when two clients edit the same file offline?",
-    a: `For Google Docs: OT handles it — no Drive-level conflict since Docs has its own operation log.
+    round: "System Design Round",
+    asked_at: ["Google", "Dropbox", "Apple"],
+    question: "How does Google Drive handle conflicts when two clients edit the same file offline?",
+    answer: `For Google Docs: OT handles it — no Drive-level conflict since Docs has its own operation log.
 
 For binary files (PDFs, images, etc.):
 • Optimistic concurrency via ETags. PATCH request includes If-Match: "etag-v41". If the server version is already v42, returns 412 Precondition Failed.
@@ -798,22 +822,32 @@ For binary files (PDFs, images, etc.):
 • User sees both files and manually resolves.
 
 This "conflicted copy" strategy is the same as Dropbox — it trades automatic resolution for explicit user awareness.`,
+    followups: ["Can you design a merge strategy better than last-write-wins for structured files like JSON?"],
   },
   {
+    id: "gdrive-q6",
+    category: "Security & DRM",
     difficulty: "Medium",
-    q: "How does Drive's permission system prevent one user from searching another's private files?",
-    a: `Permission-aware search indexing: when a file is indexed into Elasticsearch, its document includes a sharedWith array listing all user IDs and group IDs with access. Every search query adds a mandatory filter:
+    round: "Deep Dive",
+    asked_at: ["Google", "Box", "Dropbox"],
+    question: "How does Drive's permission system prevent one user from searching another's private files?",
+    answer: `Permission-aware search indexing: when a file is indexed into Elasticsearch, its document includes a sharedWith array listing all user IDs and group IDs with access. Every search query adds a mandatory filter:
 
 { bool: { should: [{ term: { ownerId: userId } }, { term: { sharedWith: userId } }] }}
 
 This means Elasticsearch only returns documents the querying user can access. When access is revoked, the indexer updates the sharedWith array for the affected file (async, within ~5 seconds).
 
 For downloading, there's a separate ACL check: Auth Middleware queries Spanner shares table (with Redis cache, 5 min TTL) on every /download request — Elasticsearch results are just suggestions, the actual file serve always re-verifies permissions.`,
+    followups: ["What's the risk of the ~5 second search index lag after revoking access?", "How would you handle a user with access via a Google Group that they just left?"],
   },
   {
+    id: "gdrive-q7",
+    category: "API Design",
     difficulty: "Medium",
-    q: "How does Google Drive's resumable upload work? Why is it important?",
-    a: `Resumable uploads solve two problems: large files over unreliable connections, and efficiency via deduplication.
+    round: "System Design Round",
+    asked_at: ["Google", "Amazon", "Meta"],
+    question: "How does Google Drive's resumable upload work? Why is it important?",
+    answer: `Resumable uploads solve two problems: large files over unreliable connections, and efficiency via deduplication.
 
 Protocol:
 1. Client POSTs metadata → gets a session URL with uploadId.
@@ -823,11 +857,16 @@ Protocol:
 5. Session state stored in Bigtable (expires after 7 days of inactivity).
 
 Why it matters: without this, a 4 GB video that drops on the last 256 KB restarts from zero. With it, it restarts from the last successful chunk. The dedup handshake also means uploading a file that 1,000 users already have costs 0 bytes of transfer — just metadata.`,
+    followups: ["How would you handle a session that expires mid-upload?", "What's the tradeoff of keeping session state in Bigtable vs a relational DB?"],
   },
   {
+    id: "gdrive-q8",
+    category: "Scale & Performance",
     difficulty: "Medium",
-    q: "How would you design Google Drive's thumbnail generation pipeline?",
-    a: `Event-driven, async pipeline:
+    round: "Deep Dive",
+    asked_at: ["Google", "Meta", "Pinterest"],
+    question: "How would you design Google Drive's thumbnail generation pipeline?",
+    answer: `Event-driven, async pipeline:
 
 1. Upload finalize publishes event to Pub/Sub: {fileId, mimeType, chunkRef[0]}.
 2. Thumbnail Worker pool consumes events (Pub/Sub pull subscription, N workers).
@@ -838,11 +877,16 @@ Why it matters: without this, a 4 GB video that drops on the last 256 KB restart
 7. Served via CDN (immutable URL since versioned — cache forever until file update).
 
 This is fire-and-forget. Users see a placeholder while the thumbnail generates. For updated files, version in URL changes, CDN cache naturally invalidates.`,
+    followups: ["How do you handle thumbnail generation for a 2-hour 4K video efficiently?", "What happens if the thumbnail worker crashes mid-job?"],
   },
   {
+    id: "gdrive-q9",
+    category: "Database Design",
     difficulty: "Easy",
-    q: "What database does Google Drive use for file metadata and why?",
-    a: `Cloud Spanner — Google's globally distributed, externally consistent relational database.
+    round: "Screening",
+    asked_at: ["Google", "Amazon", "Microsoft"],
+    question: "What database does Google Drive use for file metadata and why?",
+    answer: `Cloud Spanner — Google's globally distributed, externally consistent relational database.
 
 Why Spanner over alternatives:
 • ACID transactions: moving a file between folders must be atomic. NoSQL (Cassandra, DynamoDB) can't do this reliably across rows.
@@ -851,11 +895,16 @@ Why Spanner over alternatives:
 • SQL: complex queries like "list all files in folder X modified after date Y" use standard SQL.
 
 Alternative considered: Bigtable is used for upload session state (append-heavy, no transactions needed). Redis is the ACL hot cache (5 min TTL). But the source of truth for the file tree is always Spanner.`,
+    followups: ["Could you use DynamoDB instead of Spanner? What would you lose?"],
   },
   {
+    id: "gdrive-q10",
+    category: "Security & DRM",
     difficulty: "Easy",
-    q: "How does Google Drive implement the 'Anyone with link' sharing feature?",
-    a: `HMAC-signed token embedded in the share URL:
+    round: "Screening",
+    asked_at: ["Google", "Dropbox", "Box"],
+    question: "How does Google Drive implement the 'Anyone with link' sharing feature?",
+    answer: `HMAC-signed token embedded in the share URL:
 
 1. When user enables "anyone with link", Drive generates: token = HMAC-SHA256(secretKey, fileId + ":anyoneWithLink")
 2. The secret key is stored per-file in Spanner (shares table, link_token column).
@@ -865,5 +914,6 @@ Alternative considered: Bigtable is used for upload session state (append-heavy,
 Revocation: delete the shares row and rotate the per-file secret key. Old tokens immediately fail HMAC verification — no need to invalidate CDN caches because every request re-validates the token with Drive.
 
 This avoids the need for a user account to access the file while still allowing instant revocation.`,
+    followups: ["What prevents someone from brute-forcing the HMAC token?", "How would you add expiry to a shared link?"],
   },
 ];
