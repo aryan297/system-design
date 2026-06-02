@@ -824,12 +824,12 @@ function estimateTokens(messages: Message[]): number {
     "github": {
       "command": "npx",
       "args": ["-y", "@github/mcp-server"],
-      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }
+      "env": { "GITHUB_TOKEN": "\${GITHUB_TOKEN}" }
     },
     "postgres": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-postgres"],
-      "env": { "DATABASE_URL": "${DATABASE_URL}" }
+      "env": { "DATABASE_URL": "\${DATABASE_URL}" }
     },
     "custom-internal": {
       "command": "python3",
