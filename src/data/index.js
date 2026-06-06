@@ -16,6 +16,8 @@ import { GOOGLE_DRIVE_HLD, GOOGLE_DRIVE_LLD, GOOGLE_DRIVE_QNA } from "./googledr
 import { HOTSTAR_HLD, HOTSTAR_LLD, HOTSTAR_QNA } from "./hotstar";
 import { DYNAMODB_HLD, DYNAMODB_LLD, DYNAMODB_QNA } from "./dynamodb";
 import { CLAUDECODE_HLD, CLAUDECODE_LLD, CLAUDECODE_QNA } from "./claudecode";
+import { NPCI_HLD, NPCI_LLD, NPCI_QNA } from "./npci";
+import { MAKEMYTRIP_HLD, MAKEMYTRIP_LLD, MAKEMYTRIP_QNA } from "./makemytrip";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -126,6 +128,18 @@ const REGISTRY = {
     hld: CLAUDECODE_HLD,
     lld: CLAUDECODE_LLD,
     qna: CLAUDECODE_QNA,
+  },
+  npci: {
+    meta: { icon: "🇮🇳", color: "#FF6600" },
+    hld: NPCI_HLD,
+    lld: NPCI_LLD,
+    qna: NPCI_QNA,
+  },
+  "make-my-trip": {
+    meta: { icon: "✈️", color: "#E03A3C" },
+    hld: MAKEMYTRIP_HLD,
+    lld: MAKEMYTRIP_LLD,
+    qna: MAKEMYTRIP_QNA,
   },
 };
 

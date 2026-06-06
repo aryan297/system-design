@@ -3215,4 +3215,910 @@ func main() {
       },
     ],
   },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 6. Advanced Patterns
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "advanced-patterns",
+    icon: "🔧",
+    title: "Advanced Patterns",
+    problems: [
+      {
+        id: "circuit-breaker",
+        title: "Circuit Breaker",
+        difficulty: "Medium",
+        description:
+          "Wrap external service calls with a circuit breaker. After N consecutive failures the breaker trips OPEN and rejects calls immediately. After a timeout it enters HALF_OPEN, allowing one probe — success resets to CLOSED.",
+        requirements: [
+          "Three states: CLOSED (normal), OPEN (reject all), HALF_OPEN (one probe)",
+          "Call(fn func() error) error — runs fn if circuit is not OPEN",
+          "Configurable failure threshold and reset timeout",
+          "Thread-safe with sync.Mutex",
+        ],
+        concepts: ["State machine", "sync.Mutex", "time.Since", "Higher-order functions"],
+        approach:
+          "Track failure count and last failure time. CLOSED → OPEN when failures ≥ threshold. OPEN → HALF_OPEN after timeout elapses. HALF_OPEN → CLOSED on success, back to OPEN on any failure. Execute fn outside the lock to avoid holding it during I/O.",
+        code: `package main
+
+import (
+\t"errors"
+\t"fmt"
+\t"sync"
+\t"time"
+)
+
+type CBState int
+
+const (
+\tStateClosed   CBState = iota // requests pass through normally
+\tStateOpen                    // requests rejected immediately, fn never called
+\tStateHalfOpen                // one probe request allowed to test recovery
+)
+
+func (s CBState) String() string {
+\tswitch s {
+\tcase StateClosed:
+\t\treturn "CLOSED"
+\tcase StateOpen:
+\t\treturn "OPEN"
+\tdefault:
+\t\treturn "HALF_OPEN"
+\t}
+}
+
+// CircuitBreaker wraps calls to a downstream service
+// CLOSED → (N failures) → OPEN → (timeout) → HALF_OPEN → (success) → CLOSED
+type CircuitBreaker struct {
+\tmu          sync.Mutex
+\tstate       CBState
+\tfailures    int
+\tthreshold   int
+\ttimeout     time.Duration
+\tlastFailure time.Time
+}
+
+func NewCircuitBreaker(threshold int, timeout time.Duration) *CircuitBreaker {
+\treturn &CircuitBreaker{threshold: threshold, timeout: timeout, state: StateClosed}
+}
+
+// Call executes fn through the circuit breaker
+func (cb *CircuitBreaker) Call(fn func() error) error {
+\tcb.mu.Lock()
+\tif cb.state == StateOpen {
+\t\tif time.Since(cb.lastFailure) >= cb.timeout {
+\t\t\tcb.state = StateHalfOpen
+\t\t\tfmt.Println("circuit: HALF_OPEN — probe allowed")
+\t\t} else {
+\t\t\tcb.mu.Unlock()
+\t\t\treturn errors.New("circuit OPEN — request rejected")
+\t\t}
+\t}
+\tcb.mu.Unlock()
+
+\t// Execute outside the lock — avoids holding lock during network I/O
+\terr := fn()
+
+\tcb.mu.Lock()
+\tdefer cb.mu.Unlock()
+\tif err != nil {
+\t\tcb.failures++
+\t\tcb.lastFailure = time.Now()
+\t\tif cb.state == StateHalfOpen || cb.failures >= cb.threshold {
+\t\t\tcb.state = StateOpen
+\t\t\tfmt.Printf("circuit: OPEN (failures=%d)\\n", cb.failures)
+\t\t}
+\t\treturn err
+\t}
+\tcb.failures = 0
+\tcb.state = StateClosed
+\tfmt.Println("circuit: CLOSED — recovered")
+\treturn nil
+}
+
+func (cb *CircuitBreaker) State() string {
+\tcb.mu.Lock()
+\tdefer cb.mu.Unlock()
+\treturn cb.state.String()
+}
+
+func main() {
+\tcb := NewCircuitBreaker(3, 2*time.Second)
+\tfail := func() error { return errors.New("downstream timeout") }
+\tok := func() error { return nil }
+
+\t// Trip the breaker — 3 failures
+\tfor i := 0; i < 3; i++ {
+\t\terr := cb.Call(fail)
+\t\tfmt.Printf("call %d: %v\\n", i+1, err)
+\t}
+
+\t// 4th call — OPEN, rejected before fn runs
+\tif err := cb.Call(fail); err != nil {
+\t\tfmt.Println("rejected:", err)
+\t}
+
+\t// Wait for timeout → HALF_OPEN, probe succeeds → CLOSED
+\ttime.Sleep(2 * time.Second)
+\tcb.Call(ok)
+\tfmt.Println("final state:", cb.State()) // CLOSED
+}`,
+      },
+      {
+        id: "sliding-window-limiter",
+        title: "Sliding Window Rate Limiter",
+        difficulty: "Medium",
+        description:
+          "Rate limiter using a sliding window (not token bucket). Tracks exact request timestamps within a rolling window — eliminates the double-burst problem of fixed-window counters at window boundaries.",
+        requirements: [
+          "Allow(userID string) bool — true if user is under limit",
+          "Configurable: N requests per window duration",
+          "Lazy eviction: expired timestamps removed on each Allow call",
+          "Thread-safe with sync.Mutex",
+        ],
+        concepts: ["Sliding window", "sync.Mutex", "[]time.Time per user", "Lazy eviction"],
+        approach:
+          "Per-user slice of request timestamps. On Allow: trim entries older than now−window, then check count < limit. If allowed, append now. Amortised O(1) per eviction — no background goroutine needed. Fixed-window counters allow 2× burst at boundary; sliding window prevents this.",
+        code: `package main
+
+import (
+\t"fmt"
+\t"sync"
+\t"time"
+)
+
+// SlidingWindowLimiter tracks request timestamps within a rolling window per user
+type SlidingWindowLimiter struct {
+\tmu       sync.Mutex
+\trequests map[string][]time.Time
+\tlimit    int
+\twindow   time.Duration
+}
+
+func NewSlidingWindowLimiter(limit int, window time.Duration) *SlidingWindowLimiter {
+\treturn &SlidingWindowLimiter{
+\t\trequests: make(map[string][]time.Time),
+\t\tlimit:    limit,
+\t\twindow:   window,
+\t}
+}
+
+// Allow returns true if the user has capacity remaining in the current window
+func (l *SlidingWindowLimiter) Allow(userID string) bool {
+\tl.mu.Lock()
+\tdefer l.mu.Unlock()
+
+\tnow := time.Now()
+\tcutoff := now.Add(-l.window)
+
+\t// Evict timestamps that have fallen outside the sliding window
+\treqs := l.requests[userID]
+\ti := 0
+\tfor i < len(reqs) && reqs[i].Before(cutoff) {
+\t\ti++
+\t}
+\treqs = reqs[i:] // drop expired entries
+
+\tif len(reqs) >= l.limit {
+\t\tl.requests[userID] = reqs
+\t\treturn false
+\t}
+\tl.requests[userID] = append(reqs, now)
+\treturn true
+}
+
+func main() {
+\t// 3 requests per second
+\trl := NewSlidingWindowLimiter(3, time.Second)
+
+\tfmt.Println("--- burst 5 requests instantly ---")
+\tfor i := 1; i <= 5; i++ {
+\t\tfmt.Printf("req %d: allowed=%v\\n", i, rl.Allow("user-1"))
+\t}
+\t// 1,2,3 → true; 4,5 → false
+
+\tfmt.Println("--- wait 1s, window slides forward ---")
+\ttime.Sleep(time.Second)
+\tfor i := 1; i <= 3; i++ {
+\t\tfmt.Printf("req %d: allowed=%v\\n", i, rl.Allow("user-1"))
+\t}
+\t// all 3 allowed — old timestamps expired
+}`,
+      },
+      {
+        id: "consistent-hashing",
+        title: "Consistent Hash Ring",
+        difficulty: "Hard",
+        description:
+          "Distribute keys across servers using a consistent hash ring with virtual nodes. Adding or removing a server remaps only ~1/N of all keys — vs. full remap with modulo hashing.",
+        requirements: [
+          "Add(node string) — places node at replicas virtual positions on the ring",
+          "Remove(node string) — removes all virtual nodes for this server",
+          "Get(key string) string — returns the responsible server for a key",
+          "Binary search O(log N) for Get; virtual nodes reduce load variance",
+        ],
+        concepts: ["Ring hashing", "crc32", "Binary search", "Virtual nodes", "sync.RWMutex"],
+        approach:
+          "Hash each virtual node name (node+index) to a uint32 position. Keep sorted positions in a slice. Get hashes the key and binary-searches for the first ring position ≥ key hash; wraps to 0 if past the last position (ring semantics). 150 replicas per node gives roughly ±10% load balance.",
+        code: `package main
+
+import (
+\t"fmt"
+\t"hash/crc32"
+\t"sort"
+\t"sync"
+)
+
+// ConsistentHashRing distributes keys across nodes using virtual nodes
+// Key property: adding/removing a node only remaps ~1/N of keys
+type ConsistentHashRing struct {
+\tmu       sync.RWMutex
+\treplicas int
+\tring     map[uint32]string // ring position → server name
+\tsorted   []uint32          // sorted positions for binary search
+}
+
+func NewRing(replicas int) *ConsistentHashRing {
+\treturn &ConsistentHashRing{replicas: replicas, ring: make(map[uint32]string)}
+}
+
+func hashPos(s string) uint32 {
+\treturn crc32.ChecksumIEEE([]byte(s))
+}
+
+// Add places replicas virtual nodes for this server on the ring
+func (r *ConsistentHashRing) Add(node string) {
+\tr.mu.Lock()
+\tdefer r.mu.Unlock()
+\tfor i := 0; i < r.replicas; i++ {
+\t\tpos := hashPos(fmt.Sprintf("%s#%d", node, i))
+\t\tr.ring[pos] = node
+\t\tr.sorted = append(r.sorted, pos)
+\t}
+\tsort.Slice(r.sorted, func(i, j int) bool { return r.sorted[i] < r.sorted[j] })
+}
+
+// Remove deletes all virtual nodes for a server from the ring
+func (r *ConsistentHashRing) Remove(node string) {
+\tr.mu.Lock()
+\tdefer r.mu.Unlock()
+\tfor i := 0; i < r.replicas; i++ {
+\t\tdelete(r.ring, hashPos(fmt.Sprintf("%s#%d", node, i)))
+\t}
+\tr.sorted = r.sorted[:0]
+\tfor pos := range r.ring {
+\t\tr.sorted = append(r.sorted, pos)
+\t}
+\tsort.Slice(r.sorted, func(i, j int) bool { return r.sorted[i] < r.sorted[j] })
+}
+
+// Get returns the server responsible for key (clockwise ring walk, O(log N))
+func (r *ConsistentHashRing) Get(key string) string {
+\tif len(r.sorted) == 0 {
+\t\treturn ""
+\t}
+\tr.mu.RLock()
+\tdefer r.mu.RUnlock()
+\th := hashPos(key)
+\tidx := sort.Search(len(r.sorted), func(i int) bool { return r.sorted[i] >= h })
+\tif idx == len(r.sorted) {
+\t\tidx = 0 // wrap around the ring
+\t}
+\treturn r.ring[r.sorted[idx]]
+}
+
+func main() {
+\tring := NewRing(150) // 150 virtual nodes per server
+\tring.Add("server-A")
+\tring.Add("server-B")
+\tring.Add("server-C")
+
+\tkeys := []string{"user:1", "user:2", "session:abc", "cart:xyz", "order:999"}
+\tfmt.Println("--- initial ---")
+\tfor _, k := range keys {
+\t\tfmt.Printf("%-14s → %s\\n", k, ring.Get(k))
+\t}
+
+\t// Remove server-B — only ~1/3 of keys remap, rest unchanged
+\tring.Remove("server-B")
+\tfmt.Println("--- after removing server-B ---")
+\tfor _, k := range keys {
+\t\tfmt.Printf("%-14s → %s\\n", k, ring.Get(k))
+\t}
+}`,
+      },
+      {
+        id: "leaderboard",
+        title: "Real-Time Leaderboard",
+        difficulty: "Easy",
+        description:
+          "Game leaderboard with score updates and ranked top-K queries. Ties broken alphabetically. Production variant uses a Redis sorted set (O(log N) per update vs O(N log N) here).",
+        requirements: [
+          "UpdateScore(playerID string, score int) — set absolute score",
+          "AddScore(playerID string, delta int) — increment score",
+          "TopK(k int) []PlayerScore — ranked top K",
+          "Rank(playerID string) (rank, score int, found bool)",
+        ],
+        concepts: ["map + sort.Slice", "sync.RWMutex", "Struct slice", "Tie-breaking sort"],
+        approach:
+          "Map for O(1) updates. TopK collects all into a slice, sorts by score desc then player ID asc for ties, assigns 1-based ranks, returns first K. Acceptable for ≤100K players; Redis ZREVRANGE for production scale.",
+        code: `package main
+
+import (
+\t"fmt"
+\t"sort"
+\t"sync"
+)
+
+type PlayerScore struct {
+\tPlayerID string
+\tScore    int
+\tRank     int
+}
+
+type Leaderboard struct {
+\tmu     sync.RWMutex
+\tscores map[string]int
+}
+
+func NewLeaderboard() *Leaderboard {
+\treturn &Leaderboard{scores: make(map[string]int)}
+}
+
+func (lb *Leaderboard) UpdateScore(playerID string, score int) {
+\tlb.mu.Lock()
+\tdefer lb.mu.Unlock()
+\tlb.scores[playerID] = score
+}
+
+func (lb *Leaderboard) AddScore(playerID string, delta int) {
+\tlb.mu.Lock()
+\tdefer lb.mu.Unlock()
+\tlb.scores[playerID] += delta
+}
+
+// TopK returns the top K players, sorted by score desc; ties broken by player ID asc
+func (lb *Leaderboard) TopK(k int) []PlayerScore {
+\tlb.mu.RLock()
+\tdefer lb.mu.RUnlock()
+
+\tall := make([]PlayerScore, 0, len(lb.scores))
+\tfor id, score := range lb.scores {
+\t\tall = append(all, PlayerScore{PlayerID: id, Score: score})
+\t}
+\tsort.Slice(all, func(i, j int) bool {
+\t\tif all[i].Score != all[j].Score {
+\t\t\treturn all[i].Score > all[j].Score
+\t\t}
+\t\treturn all[i].PlayerID < all[j].PlayerID
+\t})
+\tif k > len(all) {
+\t\tk = len(all)
+\t}
+\tfor i := range all[:k] {
+\t\tall[i].Rank = i + 1
+\t}
+\treturn all[:k]
+}
+
+func (lb *Leaderboard) Rank(playerID string) (rank, score int, found bool) {
+\tfor _, p := range lb.TopK(len(lb.scores)) {
+\t\tif p.PlayerID == playerID {
+\t\t\treturn p.Rank, p.Score, true
+\t\t}
+\t}
+\treturn 0, 0, false
+}
+
+func main() {
+\tlb := NewLeaderboard()
+\tplayers := map[string]int{
+\t\t"alice": 4200, "bob": 3800, "carol": 4200,
+\t\t"dave": 5100, "eve": 3100, "frank": 4750,
+\t}
+\tfor id, s := range players {
+\t\tlb.UpdateScore(id, s)
+\t}
+
+\tfmt.Println("Top 3:")
+\tfor _, p := range lb.TopK(3) {
+\t\tfmt.Printf("  #%d %s — %d pts\\n", p.Rank, p.PlayerID, p.Score)
+\t}
+\t// #1 dave 5100 | #2 frank 4750 | #3 alice 4200 (alice < carol alphabetically)
+
+\tlb.AddScore("bob", 1500)
+\trank, score, _ := lb.Rank("bob")
+\tfmt.Printf("bob after +1500: rank #%d score %d\\n", rank, score)
+}`,
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 7. Search & Data Structures
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "search-data-structures",
+    icon: "🔍",
+    title: "Search & Data Structures",
+    problems: [
+      {
+        id: "trie-autocomplete",
+        title: "Trie / Autocomplete",
+        difficulty: "Medium",
+        description:
+          "Prefix tree supporting word insertion, exact search, prefix membership, and autocomplete. Each path from root to an isEnd node forms a valid word.",
+        requirements: [
+          "Insert(word string)",
+          "Search(word string) bool — exact match only",
+          "StartsWith(prefix string) bool",
+          "Autocomplete(prefix string) []string — all words with this prefix, sorted",
+          "Delete(word string) bool",
+        ],
+        concepts: ["Trie / prefix tree", "DFS", "map[rune]*TrieNode", "Recursive traversal"],
+        approach:
+          "Each node has children map[rune]*TrieNode and isEnd bool. Insert walks character by character, creating nodes as needed. Autocomplete navigates to the prefix endpoint then DFS-collects all isEnd descendants. Delete just clears isEnd — nodes are not physically removed (leaf cleanup is a follow-up).",
+        code: `package main
+
+import (
+\t"fmt"
+\t"sort"
+)
+
+type TrieNode struct {
+\tchildren map[rune]*TrieNode
+\tisEnd    bool
+\tword     string // stored at isEnd nodes for easy DFS retrieval
+}
+
+func newNode() *TrieNode {
+\treturn &TrieNode{children: make(map[rune]*TrieNode)}
+}
+
+type Trie struct{ root *TrieNode }
+
+func NewTrie() *Trie { return &Trie{root: newNode()} }
+
+// Insert adds word — O(len(word))
+func (t *Trie) Insert(word string) {
+\tcur := t.root
+\tfor _, ch := range word {
+\t\tif cur.children[ch] == nil {
+\t\t\tcur.children[ch] = newNode()
+\t\t}
+\t\tcur = cur.children[ch]
+\t}
+\tcur.isEnd = true
+\tcur.word = word
+}
+
+// Search returns true only for exact inserted words — O(len(word))
+func (t *Trie) Search(word string) bool {
+\tcur := t.root
+\tfor _, ch := range word {
+\t\tif cur.children[ch] == nil {
+\t\t\treturn false
+\t\t}
+\t\tcur = cur.children[ch]
+\t}
+\treturn cur.isEnd // prefix can exist without the word being inserted
+}
+
+// StartsWith returns true if any inserted word starts with prefix — O(len(prefix))
+func (t *Trie) StartsWith(prefix string) bool {
+\tcur := t.root
+\tfor _, ch := range prefix {
+\t\tif cur.children[ch] == nil {
+\t\t\treturn false
+\t\t}
+\t\tcur = cur.children[ch]
+\t}
+\treturn true
+}
+
+// Autocomplete returns all words sharing prefix, sorted alphabetically
+func (t *Trie) Autocomplete(prefix string) []string {
+\tcur := t.root
+\tfor _, ch := range prefix {
+\t\tif cur.children[ch] == nil {
+\t\t\treturn nil
+\t\t}
+\t\tcur = cur.children[ch]
+\t}
+\tvar results []string
+\tt.dfs(cur, &results)
+\tsort.Strings(results)
+\treturn results
+}
+
+func (t *Trie) dfs(node *TrieNode, results *[]string) {
+\tif node.isEnd {
+\t\t*results = append(*results, node.word)
+\t}
+\tfor _, child := range node.children {
+\t\tt.dfs(child, results)
+\t}
+}
+
+// Delete unmarks a word — O(len(word)); child nodes remain for shared prefixes
+func (t *Trie) Delete(word string) bool {
+\tcur := t.root
+\tfor _, ch := range word {
+\t\tif cur.children[ch] == nil {
+\t\t\treturn false
+\t\t}
+\t\tcur = cur.children[ch]
+\t}
+\tif !cur.isEnd {
+\t\treturn false
+\t}
+\tcur.isEnd = false
+\tcur.word = ""
+\treturn true
+}
+
+func main() {
+\ttrie := NewTrie()
+\tfor _, w := range []string{"apple", "app", "application", "apply", "apt", "banana", "band", "bandana"} {
+\t\ttrie.Insert(w)
+\t}
+
+\tfmt.Println(trie.Search("app"))         // true
+\tfmt.Println(trie.Search("ap"))          // false — prefix only, not inserted
+\tfmt.Println(trie.StartsWith("ap"))      // true
+
+\tfmt.Println(trie.Autocomplete("app"))   // [app apple application apply]
+\tfmt.Println(trie.Autocomplete("ban"))   // [band banana bandana]
+
+\ttrie.Delete("app")
+\tfmt.Println(trie.Search("app"))         // false — deleted
+\tfmt.Println(trie.Autocomplete("app"))   // [apple application apply] — subtree intact
+}`,
+      },
+      {
+        id: "message-queue-dlq",
+        title: "Message Queue with DLQ",
+        difficulty: "Medium",
+        description:
+          "In-memory FIFO queue with retry support and a dead-letter queue (DLQ). Failed messages are retried up to N times, then moved to the DLQ for manual inspection or replay.",
+        requirements: [
+          "Enqueue(payload string) int — adds message, returns ID",
+          "Dequeue() (Message, bool) — removes front message",
+          "Ack(msg) — acknowledge success (discards message)",
+          "Nack(msg) — re-queues at back if retries remain, else → DLQ",
+          "ReplayDLQ() — moves all DLQ messages back to main queue with reset retry count",
+        ],
+        concepts: ["Slice as FIFO queue", "Dead-letter queue", "Retry pattern", "sync.Mutex"],
+        approach:
+          "Main queue is []Message (FIFO: append to back, dequeue from front). Nack increments Retries; if > maxRetries, append to DLQ. ReplayDLQ resets Retries and moves messages back. Ack is a no-op — caller already holds the dequeued message.",
+        code: `package main
+
+import (
+\t"fmt"
+\t"sync"
+)
+
+type Message struct {
+\tID      int
+\tPayload string
+\tRetries int
+}
+
+// MsgQueue is a FIFO queue with retry-and-DLQ semantics
+type MsgQueue struct {
+\tmu         sync.Mutex
+\tmessages   []Message
+\tdlq        []Message
+\tmaxRetries int
+\tnextID     int
+}
+
+func NewQueue(maxRetries int) *MsgQueue {
+\treturn &MsgQueue{maxRetries: maxRetries}
+}
+
+func (q *MsgQueue) Enqueue(payload string) int {
+\tq.mu.Lock()
+\tdefer q.mu.Unlock()
+\tq.nextID++
+\tq.messages = append(q.messages, Message{ID: q.nextID, Payload: payload})
+\treturn q.nextID
+}
+
+func (q *MsgQueue) Dequeue() (Message, bool) {
+\tq.mu.Lock()
+\tdefer q.mu.Unlock()
+\tif len(q.messages) == 0 {
+\t\treturn Message{}, false
+\t}
+\tmsg := q.messages[0]
+\tq.messages = q.messages[1:]
+\treturn msg, true
+}
+
+func (q *MsgQueue) Ack(msg Message) {
+\tfmt.Printf("ACK  msg#%d %q\\n", msg.ID, msg.Payload)
+}
+
+// Nack re-queues at back if retries remain; moves to DLQ otherwise
+func (q *MsgQueue) Nack(msg Message) {
+\tq.mu.Lock()
+\tdefer q.mu.Unlock()
+\tmsg.Retries++
+\tif msg.Retries > q.maxRetries {
+\t\tq.dlq = append(q.dlq, msg)
+\t\tfmt.Printf("DLQ  msg#%d after %d retries\\n", msg.ID, msg.Retries-1)
+\t\treturn
+\t}
+\tq.messages = append(q.messages, msg)
+\tfmt.Printf("NACK msg#%d retry %d/%d\\n", msg.ID, msg.Retries, q.maxRetries)
+}
+
+func (q *MsgQueue) DLQSize() int {
+\tq.mu.Lock()
+\tdefer q.mu.Unlock()
+\treturn len(q.dlq)
+}
+
+// ReplayDLQ re-enqueues all DLQ messages with reset retry counts
+func (q *MsgQueue) ReplayDLQ() {
+\tq.mu.Lock()
+\tdefer q.mu.Unlock()
+\tfor _, msg := range q.dlq {
+\t\tmsg.Retries = 0
+\t\tq.messages = append(q.messages, msg)
+\t}
+\tfmt.Printf("replayed %d DLQ messages\\n", len(q.dlq))
+\tq.dlq = q.dlq[:0]
+}
+
+func main() {
+\tq := NewQueue(2) // 2 retries before DLQ
+
+\tq.Enqueue("order:123 placed")
+\tq.Enqueue("payment:456 failed")
+
+\t// First message — OK
+\tif msg, ok := q.Dequeue(); ok {
+\t\tq.Ack(msg)
+\t}
+
+\t// Second message — fail 3 times → DLQ
+\tfor i := 0; i < 3; i++ {
+\t\tif msg, ok := q.Dequeue(); ok {
+\t\t\tq.Nack(msg)
+\t\t}
+\t}
+\t// NACK retry 1/2, NACK retry 2/2, DLQ on 3rd attempt
+
+\tfmt.Println("DLQ size:", q.DLQSize()) // 1
+
+\tq.ReplayDLQ()
+\tif msg, ok := q.Dequeue(); ok {
+\t\tq.Ack(msg) // success this time
+\t}
+\tfmt.Println("DLQ size after replay:", q.DLQSize()) // 0
+}`,
+      },
+      {
+        id: "snake-ladder",
+        title: "Snake and Ladder Game",
+        difficulty: "Easy",
+        description:
+          "Simulate a multi-player Snake and Ladder game on a 100-square board. Handle dice rolls, snake/ladder jumps, overshoot rule (must land exactly on 100 to win), and win detection.",
+        requirements: [
+          "NewGame(players []string, jumps map[int]int)",
+          "Roll() — advances current player, returns (player, dice, won)",
+          "Overshoot rule: if roll takes player past 100, stay in place",
+          "jumps map handles both snakes (head→tail) and ladders (bottom→top)",
+        ],
+        concepts: ["map for jump destinations", "Modulo turn tracking", "rand.Intn", "Struct slice"],
+        approach:
+          "One jumps map covers snakes and ladders — direction is implied by whether dest > src (ladder) or dest < src (snake). After rolling, check overshoot, then look up jumps[newPos]. Turn alternates via turn % len(players).",
+        code: `package main
+
+import (
+\t"fmt"
+\t"math/rand"
+)
+
+type Player struct {
+\tName string
+\tPos  int
+}
+
+type SnakeLadder struct {
+\tplayers []*Player
+\tjumps   map[int]int // square → destination (snake or ladder)
+\tturn    int
+\trng     *rand.Rand
+}
+
+// NewGame: jumps covers both snakes {99:7} and ladders {4:25}
+func NewGame(names []string, jumps map[int]int) *SnakeLadder {
+\tp := make([]*Player, len(names))
+\tfor i, n := range names {
+\t\tp[i] = &Player{Name: n}
+\t}
+\treturn &SnakeLadder{players: p, jumps: jumps, rng: rand.New(rand.NewSource(42))}
+}
+
+// Roll advances the current player — returns player, dice rolled, and whether they won
+func (g *SnakeLadder) Roll() (*Player, int, bool) {
+\tp := g.players[g.turn%len(g.players)]
+\tg.turn++
+\tdice := g.rng.Intn(6) + 1
+\tnewPos := p.Pos + dice
+
+\tif newPos > 100 {
+\t\tfmt.Printf("%s rolled %d — overshoot, stays at %d\\n", p.Name, dice, p.Pos)
+\t\treturn p, dice, false
+\t}
+
+\tif dest, ok := g.jumps[newPos]; ok {
+\t\tif dest > newPos {
+\t\t\tfmt.Printf("%s rolled %d → %d — LADDER to %d\\n", p.Name, dice, newPos, dest)
+\t\t} else {
+\t\t\tfmt.Printf("%s rolled %d → %d — SNAKE to %d\\n", p.Name, dice, newPos, dest)
+\t\t}
+\t\tnewPos = dest
+\t} else {
+\t\tfmt.Printf("%s rolled %d → %d\\n", p.Name, dice, newPos)
+\t}
+
+\tp.Pos = newPos
+\tif p.Pos == 100 {
+\t\tfmt.Printf("%s wins!\\n", p.Name)
+\t\treturn p, dice, true
+\t}
+\treturn p, dice, false
+}
+
+func main() {
+\tjumps := map[int]int{
+\t\t// Ladders (bottom → top)
+\t\t4: 25, 13: 46, 33: 49, 42: 63, 50: 69, 62: 81, 74: 92,
+\t\t// Snakes (head → tail)
+\t\t27: 5, 40: 3, 43: 18, 54: 31, 66: 45, 76: 58, 89: 53, 99: 78,
+\t}
+\tgame := NewGame([]string{"Alice", "Bob"}, jumps)
+\tfor {
+\t\t_, _, won := game.Roll()
+\t\tif won {
+\t\t\tbreak
+\t\t}
+\t}
+}`,
+      },
+      {
+        id: "inverted-index",
+        title: "Inverted Index (Mini Search Engine)",
+        difficulty: "Medium",
+        description:
+          "Full-text search over documents using an inverted index. Search returns documents containing ALL query terms (AND semantics), ranked by total term frequency. Case-insensitive, punctuation-stripped tokenisation.",
+        requirements: [
+          "AddDocument(id int, text string) — tokenises and indexes the document",
+          "Search(query string) []int — document IDs containing ALL query words, ranked by TF",
+          "Case-insensitive tokenisation, punctuation stripped",
+          "Efficient AND: intersect posting lists starting from the smallest",
+        ],
+        concepts: ["Inverted index", "map[string]map[int]bool posting lists", "Set intersection", "TF ranking", "strings.Fields"],
+        approach:
+          "Build index: map[term]→set{docIDs}. Also track tf[docID][term]=count. Search: sort query terms by posting list size (smallest first for cheapest intersection), intersect, then rank survivors by total TF score.",
+        code: `package main
+
+import (
+\t"fmt"
+\t"sort"
+\t"strings"
+\t"unicode"
+)
+
+type InvertedIndex struct {
+\tpostings map[string]map[int]bool // term → posting list (set of docIDs)
+\ttf       map[int]map[string]int  // docID → term → frequency
+\tdocs     map[int]string          // docID → original text
+}
+
+func NewIndex() *InvertedIndex {
+\treturn &InvertedIndex{
+\t\tpostings: make(map[string]map[int]bool),
+\t\ttf:       make(map[int]map[string]int),
+\t\tdocs:     make(map[int]string),
+\t}
+}
+
+// tokenise lowercases and strips non-alphanumeric characters
+func tokenise(text string) []string {
+\tvar tokens []string
+\tfor _, word := range strings.Fields(text) {
+\t\tclean := strings.Map(func(r rune) rune {
+\t\t\tif unicode.IsLetter(r) || unicode.IsDigit(r) {
+\t\t\t\treturn unicode.ToLower(r)
+\t\t\t}
+\t\t\treturn -1
+\t\t}, word)
+\t\tif clean != "" {
+\t\t\ttokens = append(tokens, clean)
+\t\t}
+\t}
+\treturn tokens
+}
+
+// AddDocument tokenises text and adds it to all relevant posting lists
+func (idx *InvertedIndex) AddDocument(id int, text string) {
+\tidx.docs[id] = text
+\tidx.tf[id] = make(map[string]int)
+\tfor _, term := range tokenise(text) {
+\t\tif idx.postings[term] == nil {
+\t\t\tidx.postings[term] = make(map[int]bool)
+\t\t}
+\t\tidx.postings[term][id] = true
+\t\tidx.tf[id][term]++
+\t}
+}
+
+// Search returns docIDs containing ALL query words, ranked by total term frequency
+func (idx *InvertedIndex) Search(query string) []int {
+\tterms := tokenise(query)
+\tif len(terms) == 0 {
+\t\treturn nil
+\t}
+\t// Sort by posting list size — intersecting smallest first is cheapest
+\tsort.Slice(terms, func(i, j int) bool {
+\t\treturn len(idx.postings[terms[i]]) < len(idx.postings[terms[j]])
+\t})
+
+\t// Start with a copy of the smallest posting list
+\tmatches := make(map[int]bool)
+\tfor id := range idx.postings[terms[0]] {
+\t\tmatches[id] = true
+\t}
+\t// Intersect with each remaining term's posting list
+\tfor _, term := range terms[1:] {
+\t\tfor id := range matches {
+\t\t\tif !idx.postings[term][id] {
+\t\t\t\tdelete(matches, id)
+\t\t\t}
+\t\t}
+\t}
+
+\t// Rank survivors by total TF score
+\ttype result struct{ id, score int }
+\tvar ranked []result
+\tfor id := range matches {
+\t\tscore := 0
+\t\tfor _, term := range terms {
+\t\t\tscore += idx.tf[id][term]
+\t\t}
+\t\tranked = append(ranked, result{id, score})
+\t}
+\tsort.Slice(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+
+\tids := make([]int, len(ranked))
+\tfor i, r := range ranked {
+\t\tids[i] = r.id
+\t}
+\treturn ids
+}
+
+func main() {
+\tidx := NewIndex()
+\tidx.AddDocument(1, "Go is a statically typed compiled language")
+\tidx.AddDocument(2, "Python is a dynamically typed interpreted language")
+\tidx.AddDocument(3, "Go is fast and compiled, very compiled")
+\tidx.AddDocument(4, "Rust is statically typed and compiled")
+
+\tresults := idx.Search("compiled language")
+\tfmt.Println("'compiled language':", results) // docs containing both words
+
+\tfmt.Println("'Go compiled':")
+\tfor _, id := range idx.Search("Go compiled") {
+\t\tfmt.Printf("  doc %d: %s\\n", id, idx.docs[id])
+\t}
+\t// doc 3 ranked first (compiled appears 3x)
+}`,
+      },
+    ],
+  },
 ];

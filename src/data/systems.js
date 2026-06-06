@@ -125,4 +125,18 @@ export const SYSTEMS = [
     description: "AI coding agent — agentic loop, tool-use API, prompt caching, context compression, MCP protocol",
     color: "#D97706",
   },
+  {
+    id: "npci",
+    name: "NPCI / UPI",
+    icon: "🇮🇳",
+    description: "India's payment switch — 13B transactions/month, VPA directory, real-time debit/credit, DNS settlement",
+    color: "#FF6600",
+  },
+  {
+    id: "make-my-trip",
+    name: "MakeMyTrip",
+    icon: "✈️",
+    description: "Online travel agency — 100+ airline GDS connections, booking saga, dynamic pricing, refund engine",
+    color: "#E03A3C",
+  },
 ];

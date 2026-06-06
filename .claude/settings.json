@@ -5,7 +5,9 @@
       "Bash(cp /Users/administrator/Desktop/basic/new_practice/twoSum.html /Users/administrator/Desktop/basic/design_system/public/visualizers/two-sum.html)",
       "Bash(awk -F'\"' '{print NR\": \"$2}')",
       "Bash(grep -v \"^[0-9]*: $\")",
-      "Bash(grep -n \"^  {$\\\\|id: \\\\\"\" /Users/administrator/Desktop/basic/design_system/src/data/dsa.js)"
+      "Bash(grep -n \"^  {$\\\\|id: \\\\\"\" /Users/administrator/Desktop/basic/design_system/src/data/dsa.js)",
+      "Bash(grep -n '`' /Users/administrator/Desktop/basic/design_system/src/data/codeReview.js)",
+      "Bash(grep -v \"^[0-9]*:\\\\`\")"
     ]
   }
 }

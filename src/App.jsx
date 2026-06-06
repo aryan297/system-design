@@ -8,9 +8,11 @@ import LayersPage from "./pages/LayersPage";
 import EncyclopediaPage from "./pages/EncyclopediaPage";
 import MachineCodingPage from "./pages/MachineCodingPage";
 import GoBasicsPage from "./pages/GoBasicsPage";
+import CodeReviewPage from "./pages/CodeReviewPage";
 import { DSA_CATEGORIES } from "./data/dsa";
 import { MC_CATEGORIES } from "./data/machineCoding";
 import { GO_BASICS_CATEGORIES } from "./data/goBasics";
+import { CR_CATEGORIES } from "./data/codeReview";
 import "./styles/globals.css";
 
 const firstCat = DSA_CATEGORIES[0];
@@ -19,6 +21,8 @@ const firstMC = MC_CATEGORIES[0];
 const firstMCProblem = firstMC.problems[0];
 const firstGB = GO_BASICS_CATEGORIES[0];
 const firstGBTopic = firstGB.topics[0];
+const firstCR = CR_CATEGORIES[0];
+const firstCRProblem = firstCR.problems[0];
 
 export default function App() {
   return (
@@ -51,6 +55,12 @@ export default function App() {
             element={<Navigate to={`/go-basics/${firstGB.id}/${firstGBTopic.id}`} replace />}
           />
           <Route path="go-basics/:categoryId/:topicId" element={<GoBasicsPage />} />
+          {/* Code Review routes */}
+          <Route
+            path="code-review"
+            element={<Navigate to={`/code-review/${firstCR.id}/${firstCRProblem.id}`} replace />}
+          />
+          <Route path="code-review/:categoryId/:problemId" element={<CodeReviewPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
