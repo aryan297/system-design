@@ -1952,4 +1952,2920 @@ func main() {
       },
     ],
   },
+
+  // ─────────────────────────────────────────────────────────────
+  // 5. Go Idioms & Gotchas
+  // ─────────────────────────────────────────────────────────────
+  {
+    id: "go-idioms",
+    title: "Go Idioms & Gotchas",
+    icon: "🐹",
+    problems: [
+      {
+        id: "nil-map-write",
+        title: "Write to Nil Map",
+        difficulty: "Easy",
+        description:
+          "A session store initializes its struct but forgets to initialize the inner map. The first write panics at runtime — find the root cause and fix it.",
+        category: "Go Idioms",
+        buggyCode: `package main
+
+import "fmt"
+
+type SessionStore struct {
+	sessions map[string]string
+}
+
+func NewSessionStore() *SessionStore {
+	return &SessionStore{}
+}
+
+func (s *SessionStore) Set(id, value string) {
+	s.sessions[id] = value
+}
+
+func (s *SessionStore) Get(id string) (string, bool) {
+	v, ok := s.sessions[id]
+	return v, ok
+}
+
+func main() {
+	store := NewSessionStore()
+	store.Set("user-1", "alice") // panic: assignment to entry in nil map
+	fmt.Println(store.Get("user-1"))
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Nil map write causes runtime panic",
+            description:
+              "Reading from a nil map is safe (returns zero value + false). Writing to a nil map panics immediately: 'assignment to entry in nil map'. NewSessionStore() returns a struct with a zero-value map field, which is nil.",
+          },
+          {
+            severity: "High",
+            title: "Constructor does not initialize fields",
+            description:
+              "NewSessionStore() is the right pattern for constructors, but it returns an incomplete object. Any constructor that returns a struct with map/slice fields must initialize them with make().",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type SessionStore struct {
+	sessions map[string]string
+}
+
+func NewSessionStore() *SessionStore {
+	// ❌ ISSUE: &SessionStore{} creates a zero-value struct.
+	// The zero value of a map is nil — NOT an empty map.
+	// Reading nil map: safe, returns zero value.
+	// Writing nil map: panic at runtime.
+	// ✅ FIX: initialize with make: sessions: make(map[string]string)
+	return &SessionStore{}
+}
+
+func (s *SessionStore) Set(id, value string) {
+	// ❌ ISSUE: s.sessions is nil here — this line panics.
+	// "panic: assignment to entry in nil map"
+	s.sessions[id] = value
+}
+
+func (s *SessionStore) Get(id string) (string, bool) {
+	// ✅ Reading a nil map is safe — returns "", false.
+	// But it's still wrong design — sessions should always be initialized.
+	v, ok := s.sessions[id]
+	return v, ok
+}
+
+func main() {
+	store := NewSessionStore()
+	store.Set("user-1", "alice") // panics here
+	fmt.Println(store.Get("user-1"))
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type SessionStore struct {
+	mu       sync.RWMutex
+	sessions map[string]string
+}
+
+func NewSessionStore() *SessionStore {
+	return &SessionStore{
+		sessions: make(map[string]string), // always initialize maps in constructors
+	}
+}
+
+func (s *SessionStore) Set(id, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[id] = value
+}
+
+func (s *SessionStore) Get(id string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := s.sessions[id]
+	return v, ok
+}
+
+func main() {
+	store := NewSessionStore()
+	store.Set("user-1", "alice")
+	if v, ok := store.Get("user-1"); ok {
+		fmt.Println(v) // alice
+	}
+}`,
+        keyTakeaways: [
+          "The zero value of a map is nil — reading is safe, writing panics",
+          "Always use make(map[K]V) in constructors — never rely on zero-value maps",
+          "Same applies to slices used as queues/stacks — initialize with make([]T, 0) or nil is OK since append handles nil slices",
+          "Add a sync.RWMutex whenever a map is accessed from multiple goroutines",
+          "go vet and -race catch some but not all nil map panics — unit tests are the best safety net",
+        ],
+      },
+
+      {
+        id: "interface-nil-trap",
+        title: "Interface Nil Trap",
+        difficulty: "Medium",
+        description:
+          "An error-checking helper returns nil but the caller's nil check passes even when an error exists — a classic Go interface gotcha. Explain why and fix it.",
+        category: "Go Idioms",
+        buggyCode: `package main
+
+import "fmt"
+
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Field, e.Message)
+}
+
+func validateAge(age int) *ValidationError {
+	if age < 0 {
+		return &ValidationError{Field: "age", Message: "must be >= 0"}
+	}
+	return nil
+}
+
+func validate(age int) error {
+	return validateAge(age)
+}
+
+func main() {
+	err := validate(10)
+	if err != nil {
+		fmt.Println("invalid:", err)
+	} else {
+		fmt.Println("valid") // we expect this
+	}
+
+	err2 := validate(-1)
+	if err2 != nil {
+		fmt.Println("invalid:", err2)
+	} else {
+		fmt.Println("valid") // bug: this prints even though age is -1
+	}
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Typed nil returned as interface — interface is never nil",
+            description:
+              "validate() returns an error interface. validateAge() returns a *ValidationError (a concrete pointer type). When validateAge returns nil, it returns a typed nil (*ValidationError)(nil). When assigned to the error interface, the interface holds {type=*ValidationError, value=nil} — which is NOT equal to nil interface {type=nil, value=nil}. So err != nil is always true.",
+          },
+          {
+            severity: "High",
+            title: "validateAge should return error, not *ValidationError",
+            description:
+              "Functions that feed into an error interface should return error, not a concrete error type. This avoids the typed-nil trap entirely. The concrete type is only needed if the caller uses errors.As() to inspect it.",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Field, e.Message)
+}
+
+// ❌ ISSUE: returns *ValidationError (concrete pointer type), not error (interface).
+// When this returns nil, it returns (*ValidationError)(nil) — a typed nil.
+// A typed nil assigned to an interface creates a non-nil interface value.
+func validateAge(age int) *ValidationError {
+	if age < 0 {
+		return &ValidationError{Field: "age", Message: "must be >= 0"}
+	}
+	return nil // this is (*ValidationError)(nil), NOT nil interface
+}
+
+func validate(age int) error {
+	// ❌ ISSUE: assigning (*ValidationError)(nil) to error interface.
+	// Result: error interface = { type: *ValidationError, value: nil }
+	// This is NOT equal to nil (which is { type: nil, value: nil }).
+	// So: err != nil is ALWAYS true, even for valid input.
+	return validateAge(age)
+}
+
+func main() {
+	err := validate(10)
+	if err != nil {
+		// ❌ BUG: this branch is taken for age=10 (valid input)
+		// because the interface holds a typed nil, not a true nil.
+		fmt.Println("invalid:", err) // prints "invalid: <nil>" — confusing
+	}
+}`,
+        fixedCode: `package main
+
+import "fmt"
+
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Field, e.Message)
+}
+
+// FIX option 1: return error interface directly.
+// nil return is now a true nil interface — no typed nil problem.
+func validateAge(age int) error {
+	if age < 0 {
+		return &ValidationError{Field: "age", Message: "must be >= 0"}
+	}
+	return nil // true nil interface
+}
+
+func validate(age int) error {
+	return validateAge(age)
+}
+
+// FIX option 2 (if caller needs concrete type):
+// return (*ValidationError, bool) instead of error.
+func validateAge2(age int) (*ValidationError, bool) {
+	if age < 0 {
+		return &ValidationError{Field: "age", Message: "must be >= 0"}, true
+	}
+	return nil, false
+}
+
+func main() {
+	err := validate(10)
+	if err != nil {
+		fmt.Println("invalid:", err)
+	} else {
+		fmt.Println("valid") // correctly prints "valid"
+	}
+
+	err2 := validate(-1)
+	if err2 != nil {
+		fmt.Println("invalid:", err2) // correctly prints the error
+	}
+}`,
+        keyTakeaways: [
+          "An interface holds {type, value} — a typed nil gives {type=*T, value=nil} which != nil interface",
+          "Functions returning errors should return the error interface, not concrete *ErrorType",
+          "Rule: never return a concrete pointer type from a function that feeds into an error interface",
+          "To extract the concrete type use errors.As() — it handles the typed nil case correctly",
+          "This is one of the most common and subtle Go bugs in real codebases",
+        ],
+      },
+
+      {
+        id: "defer-in-loop",
+        title: "Defer Inside a Loop",
+        difficulty: "Medium",
+        description:
+          "A function opens and processes multiple files in a loop using defer to close them. Under load it exhausts file descriptors — explain why and fix it.",
+        category: "Go Idioms",
+        buggyCode: `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+func processFiles(paths []string) error {
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		defer f.Close() // intended to close after each iteration
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			fmt.Println(scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("scan %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func main() {
+	files := []string{"a.txt", "b.txt", "c.txt"}
+	if err := processFiles(files); err != nil {
+		fmt.Println("error:", err)
+	}
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "defer in loop defers to function return, not loop iteration",
+            description:
+              "defer does not fire at the end of each loop iteration — it fires when the enclosing FUNCTION returns. With 1000 files, all 1000 file descriptors are open simultaneously until processFiles() returns. This exhausts the OS fd limit (~1024) mid-loop and causes open() to fail.",
+          },
+          {
+            severity: "Medium",
+            title: "File not closed on early error return",
+            description:
+              "When scanner.Err() triggers an early return, the defer is registered but the file for this iteration may have already been processed. The defer fires at function exit but all previous files are still open until then.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+func processFiles(paths []string) error {
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		// ❌ ISSUE: defer is scoped to the FUNCTION, not the loop body.
+		// This does NOT close f at the end of this iteration.
+		// Instead, all deferred closes queue up and fire when
+		// processFiles() returns — potentially holding 1000s of open fds.
+		// ✅ FIX: extract the loop body into a helper function so
+		// defer fires correctly after each file.
+		defer f.Close()
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			fmt.Println(scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("scan %s: %w", path, err)
+		}
+		// f is NOT closed here — it stays open for the entire function lifetime.
+	}
+	// All deferred f.Close() calls fire here — after all files were open simultaneously.
+	return nil
+}
+
+func main() {
+	files := []string{"a.txt", "b.txt", "c.txt"}
+	if err := processFiles(files); err != nil {
+		fmt.Println("error:", err)
+	}
+}`,
+        fixedCode: `package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+
+// processOne handles a single file — defer fires when THIS function returns.
+func processOne(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close() // fires correctly when processOne returns
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fmt.Println(scanner.Text())
+	}
+	return scanner.Err()
+}
+
+func processFiles(paths []string) error {
+	for _, path := range paths {
+		if err := processOne(path); err != nil {
+			return fmt.Errorf("processFiles: %w", err)
+		}
+		// f is already closed here — only 1 fd open at a time
+	}
+	return nil
+}
+
+// Alternative: explicit close without defer (no helper needed).
+func processFilesAlt(paths []string) error {
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			fmt.Println(scanner.Text())
+		}
+		scanErr := scanner.Err()
+		f.Close() // explicit close every iteration
+		if scanErr != nil {
+			return fmt.Errorf("scan %s: %w", path, scanErr)
+		}
+	}
+	return nil
+}
+
+func main() {
+	files := []string{"a.txt", "b.txt", "c.txt"}
+	if err := processFiles(files); err != nil {
+		fmt.Println("error:", err)
+	}
+}`,
+        keyTakeaways: [
+          "defer fires when the enclosing FUNCTION returns, not at the end of a block or loop",
+          "Never use defer inside a loop to close resources — extract a helper function instead",
+          "Alternative: explicit f.Close() at the bottom of the loop (no defer)",
+          "With 1000 iterations, deferred closes open 1000 fds simultaneously — fd limit panic",
+          "This applies to any resource: DB rows, network connections, mutexes (don't defer Unlock in loops)",
+        ],
+      },
+
+      {
+        id: "value-vs-pointer-receiver",
+        title: "Value vs Pointer Receiver Mutation",
+        difficulty: "Easy",
+        description:
+          "A counter struct uses value receivers to increment its count. Calls to Increment have no effect — explain Go's copy semantics and fix the receiver type.",
+        category: "Go Idioms",
+        buggyCode: `package main
+
+import "fmt"
+
+type Counter struct {
+	count int
+	name  string
+}
+
+func (c Counter) Increment() {
+	c.count++
+}
+
+func (c Counter) Reset() {
+	c.count = 0
+}
+
+func (c Counter) Value() int {
+	return c.count
+}
+
+func (c Counter) SetName(name string) {
+	c.name = name
+}
+
+func main() {
+	c := Counter{name: "requests"}
+	c.Increment()
+	c.Increment()
+	c.Increment()
+	fmt.Println(c.Value()) // prints 0, not 3
+	c.SetName("hits")
+	fmt.Println(c.name) // prints "requests", not "hits"
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Value receiver — method operates on a copy, not the original",
+            description:
+              "Go passes a COPY of the struct to value receiver methods. c.count++ modifies the copy, which is discarded when the method returns. The original Counter is untouched. All mutating methods (Increment, Reset, SetName) must use pointer receivers.",
+          },
+          {
+            severity: "Medium",
+            title: "Mixing value and pointer receivers on the same type is confusing",
+            description:
+              "Go allows mixing, but it violates the convention: if any method mutates state, ALL methods should use pointer receivers. This ensures the method set is consistent and the type satisfies interfaces that include both mutating and read-only methods.",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type Counter struct {
+	count int
+	name  string
+}
+
+// ❌ ISSUE: value receiver — Go passes a copy of Counter.
+// c.count++ modifies the LOCAL copy, not the caller's Counter.
+// The increment is lost when the method returns.
+// ✅ FIX: change to (c *Counter) to receive a pointer to the original.
+func (c Counter) Increment() {
+	c.count++ // modifies copy — caller sees no change
+}
+
+// ❌ ISSUE: same problem — Reset modifies a throwaway copy.
+func (c Counter) Reset() {
+	c.count = 0 // caller's c.count is unchanged
+}
+
+// ✅ Value receiver is OK here — Value() is read-only (no mutation).
+// But for consistency with the rest of the type, pointer receiver is preferred.
+func (c Counter) Value() int {
+	return c.count
+}
+
+// ❌ ISSUE: SetName modifies a copy — c.name in caller is unchanged.
+func (c Counter) SetName(name string) {
+	c.name = name // lost on return
+}
+
+func main() {
+	c := Counter{name: "requests"}
+	c.Increment()
+	c.Increment()
+	c.Increment()
+	fmt.Println(c.Value()) // 0 — all increments were discarded
+	c.SetName("hits")
+	fmt.Println(c.name) // "requests" — SetName had no effect
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type Counter struct {
+	mu    sync.Mutex
+	count int
+	name  string
+}
+
+// All methods use pointer receivers — consistent and correct.
+
+func (c *Counter) Increment() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.count++ // modifies the original Counter
+}
+
+func (c *Counter) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.count = 0
+}
+
+func (c *Counter) Value() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count
+}
+
+func (c *Counter) SetName(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.name = name
+}
+
+func main() {
+	c := &Counter{name: "requests"} // use pointer so methods work correctly
+	c.Increment()
+	c.Increment()
+	c.Increment()
+	fmt.Println(c.Value()) // 3
+	c.SetName("hits")
+	fmt.Println(c.name) // "hits"
+}`,
+        keyTakeaways: [
+          "Value receivers receive a COPY — mutations are lost when the method returns",
+          "Pointer receivers receive the address — mutations persist on the caller's struct",
+          "Rule: if any method mutates state, all methods on that type should use pointer receivers",
+          "Instantiate with &Counter{} (pointer) when your methods require pointer receivers",
+          "Value receivers are fine for small, immutable structs (like time.Time) — use judgment",
+        ],
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // 6. Design Patterns
+  // ─────────────────────────────────────────────────────────────
+  {
+    id: "design-patterns",
+    title: "Design Patterns",
+    icon: "🏗️",
+    problems: [
+      {
+        id: "singleton-race",
+        title: "Unsafe Singleton Initialization",
+        difficulty: "Medium",
+        description:
+          "A config singleton uses a manual nil-check for lazy initialization. Under concurrent access it initializes multiple times — replace it with the correct Go idiom.",
+        category: "Design Patterns",
+        buggyCode: `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type Config struct {
+	Host string
+	Port int
+}
+
+var instance *Config
+
+func GetConfig() *Config {
+	if instance == nil {
+		instance = &Config{Host: "localhost", Port: 8080}
+		fmt.Println("Config initialized")
+	}
+	return instance
+}
+
+func main() {
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cfg := GetConfig()
+			_ = cfg
+		}()
+	}
+	wg.Wait()
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Data race on nil check — multiple goroutines initialize simultaneously",
+            description:
+              "The if instance == nil check and the assignment instance = &Config{...} are not atomic. Two goroutines can both see nil and both create a Config. One overwrites the other, potentially discarding state. go test -race detects this as a data race.",
+          },
+          {
+            severity: "High",
+            title: "Double-checked locking without memory barriers is broken in Go",
+            description:
+              "Even wrapping with a mutex and re-checking inside is error-prone and verbose. Go's sync.Once is the idiomatic, safe, and efficient solution — it uses atomic operations internally and guarantees exactly-once execution.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type Config struct {
+	Host string
+	Port int
+}
+
+var instance *Config
+
+func GetConfig() *Config {
+	// ❌ ISSUE: DATA RACE.
+	// Multiple goroutines read instance == nil concurrently.
+	// Both can see nil and proceed to initialize.
+	// This is a classic TOCTOU (time-of-check-time-of-use) race.
+	// Detected by: go test -race
+	if instance == nil {
+		// ❌ ISSUE: two goroutines can both reach here simultaneously.
+		// Both create a new Config, one overwrites the other.
+		// If Config held state (DB connection, file handle), the
+		// first one leaks — it's created and immediately discarded.
+		instance = &Config{Host: "localhost", Port: 8080}
+		fmt.Println("Config initialized") // may print multiple times
+	}
+	return instance
+}
+
+func main() {
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cfg := GetConfig()
+			_ = cfg
+		}()
+	}
+	wg.Wait()
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type Config struct {
+	Host string
+	Port int
+}
+
+var (
+	instance *Config
+	once     sync.Once
+)
+
+func GetConfig() *Config {
+	// sync.Once guarantees the function runs exactly once,
+	// even under concurrent access. Internally uses atomic CAS.
+	once.Do(func() {
+		instance = &Config{Host: "localhost", Port: 8080}
+		fmt.Println("Config initialized") // prints exactly once
+	})
+	return instance
+}
+
+// Alternative: initialize at package level (simplest for truly static config)
+var globalConfig = &Config{Host: "localhost", Port: 8080}
+
+func GetConfig2() *Config { return globalConfig }
+
+func main() {
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cfg := GetConfig()
+			_ = cfg
+		}()
+	}
+	wg.Wait()
+}`,
+        keyTakeaways: [
+          "sync.Once is the idiomatic Go singleton — exactly-once, race-free, no boilerplate",
+          "The nil-check pattern is a data race without a mutex protecting both check AND assignment",
+          "Package-level var init runs once before main() — simplest option for static singletons",
+          "For DB connection pools, prefer dependency injection over global singletons",
+          "Always run go test -race in CI to catch initialization races early",
+        ],
+      },
+
+      {
+        id: "mutable-default-arg",
+        title: "Shared Mutable Default in Options Struct",
+        difficulty: "Medium",
+        description:
+          "A client library reuses a default Options struct across callers. One caller modifying options unexpectedly changes behavior for all other callers — find the aliasing bug.",
+        category: "Design Patterns",
+        buggyCode: `package main
+
+import "fmt"
+
+type Options struct {
+	Headers map[string]string
+	Timeout int
+}
+
+var defaultOptions = &Options{
+	Headers: map[string]string{"Content-Type": "application/json"},
+	Timeout: 30,
+}
+
+type Client struct {
+	opts *Options
+}
+
+func NewClient(opts *Options) *Client {
+	if opts == nil {
+		opts = defaultOptions
+	}
+	return &Client{opts: opts}
+}
+
+func (c *Client) AddHeader(key, value string) {
+	c.opts.Headers[key] = value
+}
+
+func main() {
+	c1 := NewClient(nil) // uses defaultOptions
+	c1.AddHeader("X-Request-ID", "abc-123")
+
+	c2 := NewClient(nil) // also uses defaultOptions
+	fmt.Println(c2.opts.Headers)
+	// prints: map[Content-Type:application/json X-Request-ID:abc-123]
+	// c2 was polluted by c1's mutation
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "All nil-option clients share the same mutable map",
+            description:
+              "defaultOptions is a package-level pointer. All clients that pass nil receive the same *Options and the same Headers map. AddHeader on c1 mutates the shared map — c2, c3, and all future clients see c1's headers. This is a classic aliasing bug.",
+          },
+          {
+            severity: "High",
+            title: "Default should be copied, not shared",
+            description:
+              "When using a default Options, return a deep copy so each client has independent state. Maps and slices inside structs must be copied manually — a shallow struct copy still shares the inner map pointer.",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type Options struct {
+	Headers map[string]string
+	Timeout int
+}
+
+// ❌ ISSUE: package-level pointer to a mutable Options.
+// All callers that receive this pointer share the SAME Headers map.
+var defaultOptions = &Options{
+	Headers: map[string]string{"Content-Type": "application/json"},
+	Timeout: 30,
+}
+
+type Client struct {
+	opts *Options
+}
+
+func NewClient(opts *Options) *Client {
+	if opts == nil {
+		// ❌ ISSUE: directly assigning the global pointer.
+		// c.opts and defaultOptions.Headers point to the SAME map.
+		// Any mutation via c.opts.Headers also mutates defaultOptions.Headers.
+		// ✅ FIX: return a deep copy so each client owns its options.
+		opts = defaultOptions
+	}
+	return &Client{opts: opts}
+}
+
+func (c *Client) AddHeader(key, value string) {
+	// ❌ ISSUE: mutating the shared defaultOptions.Headers map.
+	// All other clients that used nil opts now see this header.
+	c.opts.Headers[key] = value
+}
+
+func main() {
+	c1 := NewClient(nil)
+	c1.AddHeader("X-Request-ID", "abc-123") // corrupts defaultOptions
+
+	c2 := NewClient(nil)
+	fmt.Println(c2.opts.Headers) // X-Request-ID appears — pollution from c1
+}`,
+        fixedCode: `package main
+
+import "fmt"
+
+type Options struct {
+	Headers map[string]string
+	Timeout int
+}
+
+func defaultOpts() *Options {
+	return &Options{
+		Headers: map[string]string{"Content-Type": "application/json"},
+		Timeout: 30,
+	}
+}
+
+// clone returns a deep copy of Options — each caller gets independent state.
+func (o *Options) clone() *Options {
+	headers := make(map[string]string, len(o.Headers))
+	for k, v := range o.Headers {
+		headers[k] = v
+	}
+	return &Options{Headers: headers, Timeout: o.Timeout}
+}
+
+type Client struct {
+	opts *Options
+}
+
+func NewClient(opts *Options) *Client {
+	if opts == nil {
+		opts = defaultOpts() // fresh copy every time
+	} else {
+		opts = opts.clone() // defensive copy from caller-provided opts
+	}
+	return &Client{opts: opts}
+}
+
+func (c *Client) AddHeader(key, value string) {
+	c.opts.Headers[key] = value // safe — c owns its own map
+}
+
+func main() {
+	c1 := NewClient(nil)
+	c1.AddHeader("X-Request-ID", "abc-123")
+
+	c2 := NewClient(nil)
+	fmt.Println(c2.opts.Headers)
+	// map[Content-Type:application/json] — c2 is clean
+}`,
+        keyTakeaways: [
+          "Structs containing maps or slices must be deep-copied — a struct copy only copies the pointer",
+          "Default options should be functions (returning new instances), not package-level pointers",
+          "Defensive copy: clone caller-provided options so internal mutations don't escape",
+          "Immutable options pattern: build options once, then freeze — use functional options (WithX) instead of setters",
+          "Document if a type is safe to share vs must be used by one owner",
+        ],
+      },
+
+      {
+        id: "observer-leak",
+        title: "Observer Pattern — Listener Leak",
+        difficulty: "Medium",
+        description:
+          "An event bus registers listeners but provides no way to unsubscribe. Long-running services accumulate stale listeners and memory grows unboundedly — design the fix.",
+        category: "Design Patterns",
+        buggyCode: `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type EventBus struct {
+	mu        sync.RWMutex
+	listeners map[string][]func(data interface{})
+}
+
+func NewEventBus() *EventBus {
+	return &EventBus{listeners: make(map[string][]func(interface{}))}
+}
+
+func (b *EventBus) Subscribe(event string, fn func(interface{})) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.listeners[event] = append(b.listeners[event], fn)
+}
+
+func (b *EventBus) Publish(event string, data interface{}) {
+	b.mu.RLock()
+	fns := b.listeners[event]
+	b.mu.RUnlock()
+	for _, fn := range fns {
+		fn(data)
+	}
+}
+
+type Service struct {
+	name string
+}
+
+func (s *Service) start(bus *EventBus) {
+	bus.Subscribe("order.created", func(data interface{}) {
+		fmt.Printf("[%s] order: %v\\n", s.name, data)
+	})
+}
+
+func main() {
+	bus := NewEventBus()
+	for i := 0; i < 1000; i++ {
+		svc := &Service{name: fmt.Sprintf("svc-%d", i)}
+		svc.start(bus)
+		// Service is done, but its listener lives in bus forever
+	}
+	bus.Publish("order.created", "order-42")
+	// 1000 closures called — 999 are stale, holding svc references
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "No Unsubscribe — listeners accumulate forever",
+            description:
+              "Every Subscribe call appends to a slice that is never trimmed. Even after a Service is no longer needed, its closure (and the *Service it captures) stays in the bus indefinitely. 1000 short-lived services = 1000 permanent listener entries and 1000 *Service allocations that cannot be GC'd.",
+          },
+          {
+            severity: "High",
+            title: "Publish holds RLock while calling listeners — blocks new subscriptions",
+            description:
+              "Publish takes RLock, copies the slice, then releases before calling handlers — that part is correct. But if a listener calls Subscribe inside its handler, it tries to acquire Lock while Publish holds RLock, causing a deadlock in the recursive case.",
+          },
+          {
+            severity: "Medium",
+            title: "No listener ID returned — impossible to unsubscribe specific listener",
+            description:
+              "Subscribe should return a unique token/ID that the caller can use to unsubscribe. Without an ID, you can only unsubscribe ALL listeners for an event, not a specific one.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+type EventBus struct {
+	mu        sync.RWMutex
+	// ❌ ISSUE: listeners slice grows on every Subscribe and is never trimmed.
+	// Each entry holds a closure which captures the subscriber struct.
+	// GC cannot collect the subscriber as long as the bus holds the closure.
+	listeners map[string][]func(data interface{})
+}
+
+func NewEventBus() *EventBus {
+	return &EventBus{listeners: make(map[string][]func(interface{}))}
+}
+
+// ❌ ISSUE: Subscribe returns nothing.
+// The caller has no handle to unsubscribe later.
+// ✅ FIX: return a unique subscription ID (or an Unsubscribe func).
+func (b *EventBus) Subscribe(event string, fn func(interface{})) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.listeners[event] = append(b.listeners[event], fn)
+}
+
+func (b *EventBus) Publish(event string, data interface{}) {
+	b.mu.RLock()
+	fns := b.listeners[event]
+	b.mu.RUnlock()
+	// ✅ Releasing lock before calling handlers is correct — avoids deadlock
+	// if a handler calls Subscribe. But fns is a slice header pointing to
+	// the backing array — if Subscribe grows the slice while we iterate,
+	// we may call stale or new entries. Copy fns to be safe.
+	for _, fn := range fns {
+		fn(data)
+	}
+}
+
+type Service struct {
+	name string
+}
+
+func (s *Service) start(bus *EventBus) {
+	// ❌ ISSUE: closure captures s (*Service).
+	// Even after s goes out of scope in main, the closure in bus keeps s alive.
+	bus.Subscribe("order.created", func(data interface{}) {
+		fmt.Printf("[%s] order: %v\\n", s.name, data)
+	})
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+)
+
+type subscription struct {
+	id uint64
+	fn func(interface{})
+}
+
+type EventBus struct {
+	mu        sync.RWMutex
+	listeners map[string][]*subscription
+	nextID    atomic.Uint64
+}
+
+func NewEventBus() *EventBus {
+	return &EventBus{listeners: make(map[string][]*subscription)}
+}
+
+// Subscribe returns an ID the caller uses to unsubscribe.
+func (b *EventBus) Subscribe(event string, fn func(interface{})) uint64 {
+	id := b.nextID.Add(1)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.listeners[event] = append(b.listeners[event], &subscription{id: id, fn: fn})
+	return id
+}
+
+// Unsubscribe removes the listener with the given ID.
+func (b *EventBus) Unsubscribe(event string, id uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	subs := b.listeners[event]
+	for i, s := range subs {
+		if s.id == id {
+			b.listeners[event] = append(subs[:i], subs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (b *EventBus) Publish(event string, data interface{}) {
+	b.mu.RLock()
+	// Copy the slice so we can release the lock before calling handlers.
+	subs := make([]*subscription, len(b.listeners[event]))
+	copy(subs, b.listeners[event])
+	b.mu.RUnlock()
+
+	for _, s := range subs {
+		s.fn(data)
+	}
+}
+
+type Service struct {
+	name   string
+	subID  uint64
+	bus    *EventBus
+}
+
+func (s *Service) start() {
+	s.subID = s.bus.Subscribe("order.created", func(data interface{}) {
+		fmt.Printf("[%s] order: %v\\n", s.name, data)
+	})
+}
+
+func (s *Service) stop() {
+	s.bus.Unsubscribe("order.created", s.subID) // releases closure + *Service
+}
+
+func main() {
+	bus := NewEventBus()
+	svc := &Service{name: "svc-1", bus: bus}
+	svc.start()
+	bus.Publish("order.created", "order-42")
+	svc.stop() // listener removed — svc can now be GC'd
+}`,
+        keyTakeaways: [
+          "Always return an Unsubscribe handle (ID or func) from Subscribe — callers need a way out",
+          "Listeners capture variables — a listener that outlives its owner prevents GC of that owner",
+          "Copy the listener slice before releasing the lock, then call handlers without holding any lock",
+          "Consider weak references or cleanup callbacks for auto-unsubscribe when subscriber is GC'd",
+          "In production: use channel-based pubsub (NATS, Redis) rather than in-process buses for durability",
+        ],
+      },
+
+      {
+        id: "functional-options",
+        title: "Constructor with Too Many Parameters",
+        difficulty: "Easy",
+        description:
+          "A server constructor takes 8 positional parameters. Adding a 9th breaks all callers. Refactor using the functional options pattern — the standard Go idiom for optional config.",
+        category: "Design Patterns",
+        buggyCode: `package main
+
+import "fmt"
+
+type Server struct {
+	host        string
+	port        int
+	timeout     int
+	maxConns    int
+	tls         bool
+	logLevel    string
+	readTimeout int
+	writeTimeout int
+}
+
+func NewServer(
+	host string,
+	port int,
+	timeout int,
+	maxConns int,
+	tls bool,
+	logLevel string,
+	readTimeout int,
+	writeTimeout int,
+) *Server {
+	return &Server{
+		host:         host,
+		port:         port,
+		timeout:      timeout,
+		maxConns:     maxConns,
+		tls:          tls,
+		logLevel:     logLevel,
+		readTimeout:  readTimeout,
+		writeTimeout: writeTimeout,
+	}
+}
+
+func main() {
+	// ❌ All callers must pass ALL arguments in order — easy to mix up
+	s := NewServer("localhost", 8080, 30, 100, false, "info", 5, 10)
+	fmt.Printf("%+v\\n", s)
+}`,
+        issues: [
+          {
+            severity: "High",
+            title: "Positional parameters — easy to mix up, impossible to have defaults",
+            description:
+              "NewServer(host, port, timeout, maxConns, tls, logLevel, readTimeout, writeTimeout) — passing 8 arguments in order is error-prone. Swapping timeout and maxConns compiles fine but produces wrong behavior. Adding a 9th param breaks every call site.",
+          },
+          {
+            severity: "Medium",
+            title: "No defaults — callers must always specify every option",
+            description:
+              "Most servers use the same timeout, maxConns, and logLevel. Positional constructors force every caller to re-specify them. Functional options let callers override only what differs from the default.",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type Server struct {
+	host         string
+	port         int
+	timeout      int
+	maxConns     int
+	tls          bool
+	logLevel     string
+	readTimeout  int
+	writeTimeout int
+}
+
+// ❌ ISSUE: 8 positional parameters — fragile, unreadable at call sites.
+// Adding a 9th parameter means updating EVERY caller.
+// Callers can't skip optional params or use defaults.
+// What does NewServer("localhost", 8080, 30, 100, false, "info", 5, 10) mean?
+// The reader must count args and match them to the parameter list.
+func NewServer(
+	host string,
+	port int,
+	timeout int,
+	maxConns int,
+	tls bool,
+	logLevel string,
+	readTimeout int,
+	writeTimeout int,
+) *Server {
+	return &Server{
+		host:         host,
+		port:         port,
+		timeout:      timeout,
+		maxConns:     maxConns,
+		tls:          tls,
+		logLevel:     logLevel,
+		readTimeout:  readTimeout,
+		writeTimeout: writeTimeout,
+	}
+}
+
+func main() {
+	// ❌ ISSUE: Which is readTimeout, which is writeTimeout?
+	// Which int is maxConns vs timeout? Impossible to tell from the call site.
+	s := NewServer("localhost", 8080, 30, 100, false, "info", 5, 10)
+	fmt.Printf("%+v\\n", s)
+}`,
+        fixedCode: `package main
+
+import "fmt"
+
+type Server struct {
+	host         string
+	port         int
+	timeout      int
+	maxConns     int
+	tls          bool
+	logLevel     string
+	readTimeout  int
+	writeTimeout int
+}
+
+// Option is a function that configures a Server.
+type Option func(*Server)
+
+// Each option is self-documenting at the call site.
+func WithHost(host string) Option         { return func(s *Server) { s.host = host } }
+func WithPort(port int) Option            { return func(s *Server) { s.port = port } }
+func WithTimeout(t int) Option            { return func(s *Server) { s.timeout = t } }
+func WithMaxConns(n int) Option           { return func(s *Server) { s.maxConns = n } }
+func WithTLS(enabled bool) Option         { return func(s *Server) { s.tls = enabled } }
+func WithLogLevel(level string) Option    { return func(s *Server) { s.logLevel = level } }
+func WithReadTimeout(t int) Option        { return func(s *Server) { s.readTimeout = t } }
+func WithWriteTimeout(t int) Option       { return func(s *Server) { s.writeTimeout = t } }
+
+func NewServer(opts ...Option) *Server {
+	// Sensible defaults — callers only specify what differs.
+	s := &Server{
+		host:         "localhost",
+		port:         8080,
+		timeout:      30,
+		maxConns:     100,
+		logLevel:     "info",
+		readTimeout:  5,
+		writeTimeout: 10,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func main() {
+	// Call site is self-documenting — only override what you need.
+	s := NewServer(
+		WithHost("0.0.0.0"),
+		WithPort(9090),
+		WithTLS(true),
+		WithLogLevel("debug"),
+	)
+	fmt.Printf("%+v\\n", s)
+}`,
+        keyTakeaways: [
+          "Functional options (Option func(*T)) are the standard Go idiom for optional config",
+          "Self-documenting at the call site — WithPort(9090) is clear, 9090 as 2nd arg is not",
+          "Adding new options is backwards-compatible — no existing callers need updating",
+          "Provide defaults in NewServer so callers only override what differs",
+          "Used in stdlib (http.Server), gRPC, zap — well-understood by all Go engineers",
+        ],
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // 7. Database & Query Issues
+  // ─────────────────────────────────────────────────────────────
+  {
+    id: "database-queries",
+    title: "Database & Query Issues",
+    icon: "🗄️",
+    problems: [
+      {
+        id: "n-plus-one",
+        title: "N+1 Query Problem",
+        difficulty: "Medium",
+        description:
+          "An order listing endpoint executes one query per order to fetch user details. With 500 orders it fires 501 queries — identify the N+1 and rewrite with a JOIN or batch fetch.",
+        category: "Database",
+        buggyCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+
+	_ "github.com/lib/pq"
+)
+
+type User struct {
+	ID   int
+	Name string
+}
+
+type Order struct {
+	ID     int
+	UserID int
+	Amount float64
+	User   *User
+}
+
+var db *sql.DB
+
+func getOrders() ([]*Order, error) {
+	rows, err := db.Query("SELECT id, user_id, amount FROM orders LIMIT 500")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []*Order
+	for rows.Next() {
+		o := &Order{}
+		if err := rows.Scan(&o.ID, &o.UserID, &o.Amount); err != nil {
+			return nil, err
+		}
+
+		// Fetch user for each order — 1 query per order = N+1 total
+		var u User
+		err := db.QueryRow(
+			"SELECT id, name FROM users WHERE id = $1", o.UserID,
+		).Scan(&u.ID, &u.Name)
+		if err != nil {
+			return nil, err
+		}
+		o.User = &u
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
+func main() {
+	orders, err := getOrders()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, o := range orders {
+		fmt.Printf("Order %d by %s: $%.2f\\n", o.ID, o.User.Name, o.Amount)
+	}
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "N+1 queries — 1 list query + N per-row queries",
+            description:
+              "For 500 orders: 1 SELECT on orders + 500 SELECT on users = 501 round-trips. Each round-trip adds ~1ms latency. Total: ~500ms added to response time. A JOIN or batch IN-clause resolves all data in 1-2 queries.",
+          },
+          {
+            severity: "High",
+            title: "Same user may be fetched multiple times",
+            description:
+              "If 50 orders belong to the same user, that user is fetched 50 times. A user ID cache (map[int]*User) within the request cuts redundant fetches. A JOIN eliminates them entirely.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+
+	_ "github.com/lib/pq"
+)
+
+type User struct {
+	ID   int
+	Name string
+}
+
+type Order struct {
+	ID     int
+	UserID int
+	Amount float64
+	User   *User
+}
+
+var db *sql.DB
+
+func getOrders() ([]*Order, error) {
+	// ✅ 1 query to fetch all orders — this part is fine.
+	rows, err := db.Query("SELECT id, user_id, amount FROM orders LIMIT 500")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []*Order
+	for rows.Next() {
+		o := &Order{}
+		if err := rows.Scan(&o.ID, &o.UserID, &o.Amount); err != nil {
+			return nil, err
+		}
+
+		// ❌ ISSUE: N+1 QUERY — one extra DB round-trip per order.
+		// For 500 orders: 500 additional queries = 501 total.
+		// Each query adds ~1ms latency: +500ms to response time.
+		// If user 42 has 50 orders, user 42 is fetched 50 times.
+		//
+		// ✅ FIX option 1: JOIN in the main query
+		//   SELECT o.id, o.user_id, o.amount, u.id, u.name
+		//   FROM orders o JOIN users u ON u.id = o.user_id
+		//
+		// ✅ FIX option 2: batch fetch
+		//   Collect all userIDs, then: SELECT * FROM users WHERE id = ANY($1)
+		var u User
+		err := db.QueryRow(
+			"SELECT id, name FROM users WHERE id = $1", o.UserID,
+		).Scan(&u.ID, &u.Name)
+		if err != nil {
+			return nil, err
+		}
+		o.User = &u
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}`,
+        fixedCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+
+	"github.com/lib/pq"
+	_ "github.com/lib/pq"
+)
+
+type User struct{ ID int; Name string }
+type Order struct {
+	ID     int
+	UserID int
+	Amount float64
+	User   *User
+}
+
+var db *sql.DB
+
+// FIX: JOIN approach — 1 query, 0 N+1.
+func getOrdersJoin() ([]*Order, error) {
+	rows, err := db.Query(`+"`"+`
+		SELECT o.id, o.user_id, o.amount, u.id, u.name
+		FROM orders o
+		JOIN users u ON u.id = o.user_id
+		LIMIT 500`+"`"+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []*Order
+	for rows.Next() {
+		o := &Order{User: &User{}}
+		if err := rows.Scan(&o.ID, &o.UserID, &o.Amount, &o.User.ID, &o.User.Name); err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
+// FIX: batch fetch approach — 2 queries, deduplicates users.
+func getOrdersBatch() ([]*Order, error) {
+	rows, err := db.Query("SELECT id, user_id, amount FROM orders LIMIT 500")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []*Order
+	userIDs := map[int]bool{}
+	for rows.Next() {
+		o := &Order{}
+		rows.Scan(&o.ID, &o.UserID, &o.Amount)
+		orders = append(orders, o)
+		userIDs[o.UserID] = true
+	}
+
+	ids := make([]int, 0, len(userIDs))
+	for id := range userIDs {
+		ids = append(ids, id)
+	}
+
+	// Single query for all unique users
+	urows, err := db.Query("SELECT id, name FROM users WHERE id = ANY($1)", pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer urows.Close()
+
+	users := map[int]*User{}
+	for urows.Next() {
+		u := &User{}
+		urows.Scan(&u.ID, &u.Name)
+		users[u.ID] = u
+	}
+
+	for _, o := range orders {
+		o.User = users[o.UserID]
+	}
+	return orders, nil
+}
+
+func main() {
+	orders, err := getOrdersJoin()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, o := range orders {
+		fmt.Printf("Order %d by %s: $%.2f\\n", o.ID, o.User.Name, o.Amount)
+	}
+}`,
+        keyTakeaways: [
+          "N+1 = 1 list query + N per-row queries — O(N) round-trips, kills latency at scale",
+          "Fix with JOIN (1 query) or batch IN/ANY (2 queries, deduplicates users)",
+          "Use a request-scoped user cache map[int]*User to avoid re-fetching same user",
+          "ORM tools (GORM, sqlx) have N+1 issues too — use Preload/Joins explicitly",
+          "Detect with slow query logs: sudden jump from 1 to 501 queries per endpoint",
+        ],
+      },
+
+      {
+        id: "missing-transaction",
+        title: "Multi-Step Operation Without Transaction",
+        difficulty: "Medium",
+        description:
+          "A transfer function debits one account and credits another with two separate queries. If the process crashes between them, money is lost — add a transaction.",
+        category: "Database",
+        buggyCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+func transfer(fromID, toID int, amount float64) error {
+	// Step 1: debit source
+	_, err := db.Exec(
+		"UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1",
+		amount, fromID,
+	)
+	if err != nil {
+		return fmt.Errorf("debit: %w", err)
+	}
+
+	// ← process could crash here, money is debited but not credited
+
+	// Step 2: credit destination
+	_, err = db.Exec(
+		"UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+		amount, toID,
+	)
+	if err != nil {
+		return fmt.Errorf("credit: %w", err)
+	}
+
+	return nil
+}
+
+func main() {
+	if err := transfer(1, 2, 500.00); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("transfer complete")
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "No transaction — crash between steps loses money",
+            description:
+              "If the process crashes, network drops, or DB connection fails after the debit but before the credit, account 1 loses $500 with no corresponding credit to account 2. The two UPDATEs must be atomic — either both commit or both rollback.",
+          },
+          {
+            severity: "High",
+            title: "No check that debit actually affected a row",
+            description:
+              "If account fromID doesn't exist or has insufficient funds, the WHERE clause filters it out — 0 rows affected, no error. The credit still runs and adds money to toID from nowhere. Always check sql.Result.RowsAffected() after conditional updates.",
+          },
+          {
+            severity: "Medium",
+            title: "Deadlock risk when two transfers run concurrently",
+            description:
+              "transfer(A→B) and transfer(B→A) running concurrently: A locks row A, B locks row B, then each waits for the other's lock — deadlock. Fix: always lock accounts in consistent order (lower ID first) within the transaction.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+func transfer(fromID, toID int, amount float64) error {
+	// ❌ ISSUE: NO TRANSACTION.
+	// The debit and credit are separate, independent queries.
+	// If anything fails between them: data inconsistency (money lost or created).
+	// ✅ FIX: wrap both in db.BeginTx, defer tx.Rollback(), commit at end.
+
+	// Step 1: debit
+	result, err := db.Exec(
+		"UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1",
+		amount, fromID,
+	)
+	if err != nil {
+		return fmt.Errorf("debit: %w", err)
+	}
+
+	// ❌ ISSUE: not checking RowsAffected.
+	// If balance < amount, WHERE balance >= $1 filters the row out.
+	// 0 rows affected, no error — but money was NOT debited.
+	// The credit below still runs and adds money to toID out of thin air.
+	_ = result
+
+	// ← CRASH HERE: debit committed, credit never runs. $500 lost.
+
+	// Step 2: credit
+	_, err = db.Exec(
+		"UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+		amount, toID,
+	)
+	if err != nil {
+		return fmt.Errorf("credit: %w", err)
+	}
+
+	return nil
+}`,
+        fixedCode: `package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+func transfer(ctx context.Context, fromID, toID int, amount float64) error {
+	// Consistent lock order prevents deadlocks between concurrent transfers.
+	if fromID > toID {
+		fromID, toID = toID, fromID
+	}
+
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() // no-op if Commit already called
+
+	// Debit with explicit row-level lock
+	result, err := tx.ExecContext(ctx,
+		"UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1",
+		amount, fromID,
+	)
+	if err != nil {
+		return fmt.Errorf("debit: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("insufficient funds or account %d not found", fromID)
+	}
+
+	// Credit
+	result, err = tx.ExecContext(ctx,
+		"UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+		amount, toID,
+	)
+	if err != nil {
+		return fmt.Errorf("credit: %w", err)
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		return fmt.Errorf("destination account %d not found", toID)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+func main() {
+	if err := transfer(context.Background(), 1, 2, 500.00); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("transfer complete")
+}`,
+        keyTakeaways: [
+          "Multi-step mutations must be in a transaction — atomicity is non-negotiable for money",
+          "Always defer tx.Rollback() immediately after BeginTx — it's a no-op after Commit",
+          "Check RowsAffected() on conditional UPDATEs — 0 rows with no error is a silent failure",
+          "Use Serializable isolation for financial transactions to prevent phantom reads",
+          "Lock rows in consistent ID order to prevent deadlocks between concurrent transfers",
+        ],
+      },
+
+      {
+        id: "missing-index",
+        title: "Unindexed Column in Hot Query Path",
+        difficulty: "Hard",
+        description:
+          "An API endpoint filtering orders by status runs fine with 1k rows but causes full table scans at 10M rows. Identify the missing index and explain the query plan.",
+        category: "Database",
+        buggyCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"time"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+// Called on every page load — high frequency endpoint
+func getPendingOrders(userID int) ([]int, error) {
+	start := time.Now()
+
+	rows, err := db.Query(
+		"SELECT id FROM orders WHERE user_id = $1 AND status = 'pending'",
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+
+	log.Printf("getPendingOrders took %v, found %d", time.Since(start), len(ids))
+	return ids, rows.Err()
+}
+
+// Schema (missing critical index):
+// CREATE TABLE orders (
+//   id        SERIAL PRIMARY KEY,
+//   user_id   INT NOT NULL,
+//   status    VARCHAR(20) NOT NULL,
+//   amount    DECIMAL,
+//   created_at TIMESTAMP
+// );`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Full table scan on 10M rows — no index on (user_id, status)",
+            description:
+              "Without an index, Postgres scans every row in the orders table to find matches. At 10M rows this is 100ms+ per query. A composite index on (user_id, status) allows an index scan returning results in <1ms. This is the most common production performance disaster.",
+          },
+          {
+            severity: "High",
+            title: "Composite index order matters — user_id must come first",
+            description:
+              "The query filters on both user_id and status. The index (user_id, status) lets Postgres go straight to user 42's rows, then filter by status. The index (status, user_id) is much less selective as 'pending' spans millions of rows across all users.",
+          },
+          {
+            severity: "Medium",
+            title: "No EXPLAIN ANALYZE in development — issues caught late in production",
+            description:
+              "EXPLAIN ANALYZE shows Seq Scan vs Index Scan, rows estimated vs actual, and cost. Running it before deployment catches missing indexes before they become production fires.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"time"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+func getPendingOrders(userID int) ([]int, error) {
+	start := time.Now()
+
+	// ❌ ISSUE: This query runs fine on 1k rows.
+	// On 10M rows without an index, Postgres does a SEQUENTIAL SCAN:
+	// - Reads every page of the orders table from disk
+	// - Filters each row for user_id=$1 AND status='pending'
+	// - Cost: O(N) where N = total rows = ~100ms+ at 10M rows
+	//
+	// EXPLAIN ANALYZE output (no index, 10M rows):
+	//   Seq Scan on orders (cost=0.00..250000 rows=1234 width=4)
+	//   Actual time=0.042..198.231 rows=23 loops=1
+	//
+	// ✅ FIX: CREATE INDEX idx_orders_user_status ON orders(user_id, status);
+	// EXPLAIN ANALYZE after index:
+	//   Index Scan using idx_orders_user_status on orders
+	//   Index Cond: ((user_id = 42) AND (status = 'pending'))
+	//   Actual time=0.045..0.112 rows=23 loops=1
+	rows, err := db.Query(
+		"SELECT id FROM orders WHERE user_id = $1 AND status = 'pending'",
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []int
+	for rows.Next() {
+		var id int
+		// ❌ ISSUE: Scan error not checked
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+
+	log.Printf("getPendingOrders took %v, found %d", time.Since(start), len(ids))
+	return ids, rows.Err()
+}
+
+// ❌ ISSUE: Schema has no index on (user_id, status).
+// CREATE TABLE orders (
+//   id        SERIAL PRIMARY KEY,  -- B-tree index on id only
+//   user_id   INT NOT NULL,        -- NO INDEX
+//   status    VARCHAR(20) NOT NULL, -- NO INDEX
+//   ...
+// );`,
+        fixedCode: `-- Migration: add the composite index
+-- Run on the live DB (CONCURRENTLY avoids table lock):
+CREATE INDEX CONCURRENTLY idx_orders_user_status
+  ON orders(user_id, status)
+  WHERE status != 'completed'; -- partial index: excludes bulk of rows
+
+-- Why (user_id, status) and not (status, user_id)?
+-- user_id is high-cardinality (1 per user), status is low-cardinality ('pending', 'paid', 'completed').
+-- Leading with the high-cardinality column narrows results much faster.
+
+-- EXPLAIN ANALYZE before index (10M rows):
+-- Seq Scan on orders  (actual time=98..198 ms, rows=23)
+
+-- EXPLAIN ANALYZE after index:
+-- Index Scan using idx_orders_user_status  (actual time=0.08..0.12 ms, rows=23)
+-- 1000x speedup.
+
+-- For "pending" orders specifically, a partial index is even faster:
+-- Only indexes rows WHERE status = 'pending' (smaller, faster, maintained only on relevant writes)`,
+        keyTakeaways: [
+          "Missing indexes are the #1 cause of production DB performance fires",
+          "Always run EXPLAIN ANALYZE before deploying queries that touch large tables",
+          "Composite index column order matters: high-cardinality (user_id) first, low-cardinality (status) second",
+          "Use CREATE INDEX CONCURRENTLY in production to avoid locking the table",
+          "Partial indexes (WHERE status != 'completed') are smaller and faster for skewed data",
+        ],
+      },
+
+      {
+        id: "connection-pool",
+        title: "Database Connection Pool Misconfiguration",
+        difficulty: "Hard",
+        description:
+          "A service opens a new DB connection per request and never limits the pool. Under load it exhausts Postgres's connection limit — configure the pool correctly.",
+        category: "Database",
+        buggyCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"net/http"
+
+	_ "github.com/lib/pq"
+)
+
+func newDB() *sql.DB {
+	db, err := sql.Open("postgres", "postgres://localhost/mydb")
+	if err != nil {
+		log.Fatal(err)
+	}
+	return db
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	// Opens a new connection (or reuses from pool) on every request
+	db := newDB()
+	// ❌ ISSUE: db is never closed — connection pool leaks
+	// ❌ ISSUE: no pool size limits configured
+
+	row := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM orders")
+	var count int
+	row.Scan(&count)
+	fmt.Fprintf(w, "orders: %d\\n", count)
+}
+
+func main() {
+	http.HandleFunc("/", handler)
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "sql.Open called per request — creates a new pool each time, leaks connections",
+            description:
+              "sql.Open creates a new connection pool. Creating a pool per request means each request's connections are never returned to a shared pool — they leak. At 100 RPS, 100 pools are opened per second, quickly hitting Postgres's max_connections (default 100).",
+          },
+          {
+            severity: "Critical",
+            title: "No pool size limits — unconstrained connections exhaust Postgres",
+            description:
+              "Without SetMaxOpenConns, Go's sql.DB opens unlimited connections. Under load, 1000 goroutines each waiting for a query = 1000 open connections. Postgres hits max_connections and starts refusing new ones with 'too many connections'.",
+          },
+          {
+            severity: "High",
+            title: "No SetMaxIdleConns / ConnMaxLifetime — idle connections waste resources",
+            description:
+              "Without MaxIdleConns, Go keeps all opened connections idle after use. 1000 concurrent requests = 1000 idle connections after the burst, each consuming memory on both client and server. Set MaxIdleConns <= MaxOpenConns and ConnMaxLifetime to recycle stale connections.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"net/http"
+
+	_ "github.com/lib/pq"
+)
+
+// ❌ ISSUE: newDB() creates a NEW connection pool on every call.
+// sql.Open allocates a new *sql.DB (a new pool manager).
+// A pool is meant to be shared across the application — not per-request.
+func newDB() *sql.DB {
+	db, err := sql.Open("postgres", "postgres://localhost/mydb")
+	if err != nil {
+		log.Fatal(err)
+	}
+	// ❌ ISSUE: no pool limits configured.
+	// Default: MaxOpenConns=0 (unlimited), MaxIdleConns=2.
+	// Unlimited open connections under load = Postgres max_connections exceeded.
+	return db
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	// ❌ ISSUE: creating a new pool per request.
+	// 1000 concurrent requests = 1000 separate pools.
+	// Each pool has its own idle connections that never go away.
+	db := newDB()
+	// ❌ ISSUE: db.Close() never called — pool leaks permanently.
+	// Even if Close was called, creating per-request pools is still wrong.
+
+	row := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM orders")
+	var count int
+	row.Scan(&count) // Scan error also discarded
+	fmt.Fprintf(w, "orders: %d\\n", count)
+}`,
+        fixedCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	_ "github.com/lib/pq"
+)
+
+// Package-level singleton — ONE pool shared by all requests.
+var db *sql.DB
+
+func initDB() {
+	var err error
+	db, err = sql.Open("postgres", "postgres://localhost/mydb?sslmode=disable")
+	if err != nil {
+		log.Fatal("sql.Open:", err)
+	}
+
+	// Tuning guide:
+	// MaxOpenConns: cap total connections to DB. Rule of thumb: num_cpu * 4, or
+	// match Postgres max_connections / num_app_instances.
+	db.SetMaxOpenConns(25)
+
+	// MaxIdleConns: keep warm connections ready. Set <= MaxOpenConns.
+	// Higher = faster response under burst. Lower = fewer idle resources.
+	db.SetMaxIdleConns(10)
+
+	// ConnMaxLifetime: rotate connections to avoid stale TCP sessions and
+	// spread reconnect load. 5 minutes is a common production value.
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	// ConnMaxIdleTime: drop idle connections sooner than the lifetime.
+	db.SetConnMaxIdleTime(1 * time.Minute)
+
+	// Verify connectivity at startup — fail fast.
+	if err := db.Ping(); err != nil {
+		log.Fatal("db.Ping:", err)
+	}
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	// Borrow a connection from the shared pool — returns it automatically.
+	row := db.QueryRowContext(r.Context(), "SELECT COUNT(*) FROM orders")
+	var count int
+	if err := row.Scan(&count); err != nil {
+		http.Error(w, "query failed", 500)
+		return
+	}
+	fmt.Fprintf(w, "orders: %d\\n", count)
+}
+
+func main() {
+	initDB()
+	http.HandleFunc("/", handler)
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}`,
+        keyTakeaways: [
+          "sql.Open creates a pool — call it ONCE at startup, share the *sql.DB globally",
+          "SetMaxOpenConns: prevents exhausting Postgres max_connections under load",
+          "SetMaxIdleConns: keeps N warm connections ready for bursts, should be <= MaxOpenConns",
+          "SetConnMaxLifetime: rotates connections to avoid stale TCP and distribute reconnects",
+          "Call db.Ping() at startup to fail fast if DB is unreachable before traffic hits",
+        ],
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // 8. Observability & Production
+  // ─────────────────────────────────────────────────────────────
+  {
+    id: "observability",
+    title: "Observability & Production",
+    icon: "📊",
+    problems: [
+      {
+        id: "logging-secrets",
+        title: "Sensitive Data in Logs",
+        difficulty: "Easy",
+        description:
+          "An auth handler logs the full request body including passwords and tokens. Identify every leak and implement safe structured logging.",
+        category: "Observability",
+        buggyCode: `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+)
+
+type LoginRequest struct {
+	Username string
+	Password string
+	Token    string
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("decode error: %v", err)
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	// Log the incoming request for debugging
+	log.Printf("login attempt: %+v", req)
+
+	// Validate
+	if req.Username == "" || req.Password == "" {
+		log.Printf("validation failed for user %s, password=%s", req.Username, req.Password)
+		http.Error(w, "missing credentials", 400)
+		return
+	}
+
+	// Simulate auth
+	if req.Password != "secret" {
+		log.Printf("auth failed: user=%s pass=%s token=%s", req.Username, req.Password, req.Token)
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+
+	fmt.Fprintln(w, "ok")
+}
+
+func main() {
+	http.HandleFunc("/login", loginHandler)
+	http.ListenAndServe(":8080", nil)
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Password logged in plaintext — OWASP A09 Security Logging Failure",
+            description:
+              "log.Printf(\"login attempt: %+v\", req) dumps the full struct including Password and Token to logs. Logs are stored long-term, often shipped to ELK/Datadog/Splunk, and accessible to many engineers. Plaintext passwords in logs is a critical security violation and likely a compliance breach (PCI-DSS, SOC2).",
+          },
+          {
+            severity: "Critical",
+            title: "Token logged — session hijacking risk",
+            description:
+              "Auth tokens in logs allow any log reader to impersonate users. Logs should NEVER contain bearer tokens, API keys, session IDs, or any secret material. Always redact or omit these fields.",
+          },
+          {
+            severity: "High",
+            title: "Structured logging missing — hard to query, parse, and alert on",
+            description:
+              "fmt-style log strings are hard to index, filter, and alert on. Use structured logging (slog, zap, zerolog) with key-value pairs so logs are queryable: log.With('user', req.Username).Error('auth failed').",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+)
+
+type LoginRequest struct {
+	Username string
+	Password string
+	Token    string
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("decode error: %v", err)
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	// ❌ CRITICAL: logs password and token in plaintext.
+	// "%+v" prints all struct fields including Password and Token.
+	// This appears in every log shipper, every log archive, forever.
+	// Anyone with log access can steal credentials.
+	log.Printf("login attempt: %+v", req) // Password=secret Token=eyJhb...
+
+	if req.Username == "" || req.Password == "" {
+		// ❌ CRITICAL: explicitly logging the password in the message.
+		// Even "validation failed" logs should never include credential values.
+		log.Printf("validation failed for user %s, password=%s", req.Username, req.Password)
+		http.Error(w, "missing credentials", 400)
+		return
+	}
+
+	if req.Password != "secret" {
+		// ❌ CRITICAL: three secrets logged in one line.
+		// user= is OK. pass= and token= are critical violations.
+		log.Printf("auth failed: user=%s pass=%s token=%s", req.Username, req.Password, req.Token)
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+
+	fmt.Fprintln(w, "ok")
+}`,
+        fixedCode: `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+)
+
+type LoginRequest struct {
+	Username string
+	Password string // never log this
+	Token    string // never log this
+}
+
+var logger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	Level: slog.LevelInfo,
+}))
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		logger.Error("decode failed", "error", err)
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	// Log only non-sensitive fields: username, request_id, IP.
+	// Never log: password, token, card number, SSN, email (depends on policy).
+	logger.Info("login attempt", "username", req.Username, "ip", r.RemoteAddr)
+
+	if req.Username == "" || req.Password == "" {
+		logger.Warn("validation failed", "username", req.Username, "reason", "missing credentials")
+		// Note: we log that credentials are missing but NOT their values.
+		http.Error(w, "missing credentials", 400)
+		return
+	}
+
+	if req.Password != "secret" {
+		logger.Warn("auth failed", "username", req.Username)
+		// Do NOT log the wrong password — it may be a typo of the real one.
+		// Do NOT log the token — it may be valid for another user.
+		http.Error(w, "unauthorized", 401)
+		return
+	}
+
+	logger.Info("login success", "username", req.Username)
+	fmt.Fprintln(w, "ok")
+}
+
+func main() {
+	http.HandleFunc("/login", loginHandler)
+	if err := http.ListenAndServe(":8080", nil); err != nil {
+		logger.Error("server error", "error", err)
+	}
+}`,
+        keyTakeaways: [
+          "Never log: passwords, tokens, API keys, card numbers, SSNs, or raw PII",
+          "Never use %+v or %v on structs that contain sensitive fields — log fields explicitly",
+          "Use structured logging (slog, zap, zerolog) — key-value pairs are queryable and auditable",
+          "Log the username (for audit) but never the credential value — even wrong passwords",
+          "Add a log audit to your security review checklist before every release",
+        ],
+      },
+
+      {
+        id: "panic-recovery",
+        title: "Missing Panic Recovery in HTTP Handler",
+        difficulty: "Medium",
+        description:
+          "A nil pointer dereference in one handler crashes the entire HTTP server process. Add middleware-level panic recovery so one bad request cannot take down the service.",
+        category: "Observability",
+        buggyCode: `package main
+
+import (
+	"fmt"
+	"net/http"
+)
+
+type User struct {
+	Name string
+}
+
+func getUser(id string) *User {
+	if id == "admin" {
+		return &User{Name: "Admin"}
+	}
+	return nil // user not found
+}
+
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	user := getUser(id)
+	// No nil check — panics when user is nil
+	fmt.Fprintf(w, "Hello, %s\\n", user.Name)
+}
+
+func adminHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintln(w, "admin page")
+}
+
+func main() {
+	http.HandleFunc("/profile", profileHandler)
+	http.HandleFunc("/admin", adminHandler)
+	// GET /profile?id=unknown → panic → entire server crashes
+	// All users lose access until the process is restarted
+	http.ListenAndServe(":8080", nil)
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Nil pointer dereference crashes the entire server process",
+            description:
+              "user.Name on a nil *User panics. In Go's net/http, each request runs in its own goroutine. A panic in a handler goroutine that is not recovered propagates up and crashes the entire process. All in-flight requests are dropped and the service is down until restart.",
+          },
+          {
+            severity: "High",
+            title: "No nil check on pointer returned from getUser",
+            description:
+              "getUser can return nil (user not found). The caller must check before dereferencing. Returning (*User, error) or (*User, bool) forces the caller to handle the not-found case explicitly.",
+          },
+          {
+            severity: "Medium",
+            title: "No recovery middleware — panic from any handler brings down all handlers",
+            description:
+              "Even if this handler is fixed, the next nil dereference or index out of bounds in any handler would crash the server. A recovery middleware at the top of the handler chain catches any panic, logs it with stack trace, and returns 500 to the client.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"fmt"
+	"net/http"
+)
+
+type User struct {
+	Name string
+}
+
+func getUser(id string) *User {
+	if id == "admin" {
+		return &User{Name: "Admin"}
+	}
+	// ❌ ISSUE: returns nil with no indication of why.
+	// Callers must remember to nil-check — easy to forget.
+	// ✅ FIX: return (*User, error) or (*User, bool) to force callers to handle it.
+	return nil
+}
+
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	user := getUser(id)
+
+	// ❌ ISSUE: no nil check before dereferencing user.
+	// GET /profile?id=unknown: user == nil → user.Name panics.
+	// The panic propagates up through net/http's goroutine.
+	// net/http does NOT recover panics by default (before Go 1.22).
+	// Result: the entire server process crashes.
+	fmt.Fprintf(w, "Hello, %s\\n", user.Name)
+}
+
+func adminHandler(w http.ResponseWriter, r *http.Request) {
+	// ❌ ISSUE: even this working handler becomes unavailable
+	// when profileHandler panics — the whole process dies.
+	fmt.Fprintln(w, "admin page")
+}
+
+func main() {
+	http.HandleFunc("/profile", profileHandler)
+	http.HandleFunc("/admin", adminHandler)
+	// No recovery middleware — one panic = full outage.
+	http.ListenAndServe(":8080", nil)
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"runtime/debug"
+)
+
+var logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
+type User struct {
+	Name string
+}
+
+func getUser(id string) (*User, bool) {
+	if id == "admin" {
+		return &User{Name: "Admin"}, true
+	}
+	return nil, false // explicit not-found
+}
+
+// recoveryMiddleware catches any panic in downstream handlers,
+// logs the stack trace, and returns 500 — server keeps running.
+func recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				stack := debug.Stack()
+				logger.Error("handler panic",
+					"error", fmt.Sprintf("%v", err),
+					"stack", string(stack),
+					"path", r.URL.Path,
+				)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func profileHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	user, ok := getUser(id)
+	if !ok {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+	fmt.Fprintf(w, "Hello, %s\\n", user.Name)
+}
+
+func adminHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintln(w, "admin page")
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/profile", profileHandler)
+	mux.HandleFunc("/admin", adminHandler)
+
+	// Wrap all handlers with recovery middleware.
+	http.ListenAndServe(":8080", recoveryMiddleware(mux))
+}`,
+        keyTakeaways: [
+          "A panic in a handler goroutine crashes the entire server — always add recovery middleware",
+          "Use recover() in a deferred function — recover() only works inside a deferred call",
+          "Log the full stack trace with debug.Stack() so the panic source is traceable",
+          "Return (*T, bool) or (*T, error) instead of *T to force callers to handle nil",
+          "Add recovery middleware once at the top of the handler chain, not in every handler",
+        ],
+      },
+
+      {
+        id: "missing-context-deadline",
+        title: "Context Without Deadline Propagation",
+        difficulty: "Hard",
+        description:
+          "A service chains three downstream calls — DB, cache, and external API. The outer HTTP request has a 5s deadline but the downstream calls ignore context — they outlive the cancelled request.",
+        category: "Observability",
+        buggyCode: `package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+var db *sql.DB
+
+func fetchUserFromDB(userID int) (string, error) {
+	// Uses context.Background() — ignores caller's deadline
+	row := db.QueryRowContext(context.Background(),
+		"SELECT name FROM users WHERE id = $1", userID,
+	)
+	var name string
+	return name, row.Scan(&name)
+}
+
+func fetchFromCache(userID int) (string, bool) {
+	// Simulates a cache call with no context
+	time.Sleep(100 * time.Millisecond)
+	return "", false
+}
+
+func callExternalAPI(userID int) error {
+	// HTTP call with no timeout and no context
+	resp, err := http.Get(fmt.Sprintf("https://api.example.com/user/%d", userID))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func userHandler(w http.ResponseWriter, r *http.Request) {
+	// r.Context() has the server's 5s deadline set by middleware
+	ctx := r.Context()
+	_ = ctx // context is received but never passed to downstream calls
+
+	name, err := fetchUserFromDB(1)
+	if err != nil {
+		http.Error(w, "db error", 500)
+		return
+	}
+
+	if _, ok := fetchFromCache(1); !ok {
+		if err := callExternalAPI(1); err != nil {
+			http.Error(w, "api error", 500)
+			return
+		}
+	}
+
+	fmt.Fprintf(w, "user: %s\\n", name)
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Downstream calls use context.Background() — deadline not propagated",
+            description:
+              "r.Context() carries the client's cancellation signal and any server-imposed deadline. fetchUserFromDB uses context.Background() — if the client disconnects or the 5s deadline fires, the DB query keeps running, burning DB connections for dead requests. Pass ctx to every downstream call.",
+          },
+          {
+            severity: "High",
+            title: "ctx is received but immediately discarded with _ = ctx",
+            description:
+              "This is a common code smell: the context is passed in but never used. A linter (contextcheck, revive) catches this. If you accept a context parameter, you must pass it to all downstream calls.",
+          },
+          {
+            severity: "High",
+            title: "http.Get has no context — outlives request cancellation",
+            description:
+              "http.Get does not accept a context. If the downstream API is slow and the client disconnects, the HTTP call continues for its full timeout. Use http.NewRequestWithContext(ctx, ...) so the request is cancelled when ctx is cancelled.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+var db *sql.DB
+
+func fetchUserFromDB(userID int) (string, error) {
+	// ❌ ISSUE: context.Background() ignores the caller's deadline and cancellation.
+	// If the HTTP request is cancelled at 5s, this DB query continues running.
+	// It holds a DB connection, burns CPU on Postgres, and returns a result
+	// that nobody will use. Under load: wasted connections = degraded DB.
+	// ✅ FIX: accept ctx context.Context as first parameter, pass it to QueryRowContext.
+	row := db.QueryRowContext(context.Background(),
+		"SELECT name FROM users WHERE id = $1", userID,
+	)
+	var name string
+	return name, row.Scan(&name)
+}
+
+func callExternalAPI(userID int) error {
+	// ❌ ISSUE: http.Get has no context — cannot be cancelled.
+	// Even if the caller's context is Done (deadline exceeded or client gone),
+	// this HTTP call will run to completion (or its own timeout).
+	// ✅ FIX: http.NewRequestWithContext(ctx, ...) so cancellation propagates.
+	resp, err := http.Get(fmt.Sprintf("https://api.example.com/user/%d", userID))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func userHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context() // carries 5s server deadline
+	// ❌ ISSUE: ctx is received but thrown away immediately.
+	// None of the downstream functions receive it.
+	// This is a code smell that contextcheck linter catches.
+	_ = ctx
+
+	// Downstream calls all use Background() or no context — deadline not propagated.
+	name, err := fetchUserFromDB(1)
+	_ = name
+	_ = err
+	_ = time.Second // unused import suppression
+}`,
+        fixedCode: `package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+var db *sql.DB
+var httpClient = &http.Client{Timeout: 3 * time.Second}
+
+// FIX: accept context as first parameter (Go convention).
+func fetchUserFromDB(ctx context.Context, userID int) (string, error) {
+	row := db.QueryRowContext(ctx, // propagates caller's deadline
+		"SELECT name FROM users WHERE id = $1", userID,
+	)
+	var name string
+	return name, row.Scan(&name)
+}
+
+func fetchFromCache(ctx context.Context, userID int) (string, bool) {
+	// In a real impl: redisClient.Get(ctx, key)
+	// Simulated:
+	select {
+	case <-ctx.Done():
+		return "", false // respect cancellation
+	case <-time.After(10 * time.Millisecond):
+		return "", false
+	}
+}
+
+func callExternalAPI(ctx context.Context, userID int) error {
+	url := fmt.Sprintf("https://api.example.com/user/%d", userID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("API call: %w", err)
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func userHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context() // 5s server deadline included
+
+	// Check context before each step — fail fast if already cancelled
+	if err := ctx.Err(); err != nil {
+		http.Error(w, "request cancelled", http.StatusRequestTimeout)
+		return
+	}
+
+	name, err := fetchUserFromDB(ctx, 1) // ctx passed through
+	if err != nil {
+		if ctx.Err() != nil {
+			http.Error(w, "timeout", http.StatusGatewayTimeout)
+			return
+		}
+		http.Error(w, "db error", 500)
+		return
+	}
+
+	if _, ok := fetchFromCache(ctx, 1); !ok {
+		if err := callExternalAPI(ctx, 1); err != nil {
+			http.Error(w, "api error", 500)
+			return
+		}
+	}
+
+	fmt.Fprintf(w, "user: %s\\n", name)
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user", userHandler)
+	http.ListenAndServe(":8080", mux)
+}`,
+        keyTakeaways: [
+          "Always propagate context through the entire call chain — every downstream call gets ctx",
+          "context.Background() in a handler is almost always wrong — use r.Context()",
+          "ctx as the first parameter is Go's convention for all functions that do I/O",
+          "Use http.NewRequestWithContext for all outbound HTTP calls — not http.Get",
+          "Install contextcheck linter to catch '_ = ctx' and context.Background() in handlers",
+        ],
+      },
+
+      {
+        id: "missing-metrics",
+        title: "Handler with No Observability",
+        difficulty: "Hard",
+        description:
+          "A payment handler has no latency tracking, error counting, or tracing. In production you cannot tell if it is slow, failing, or behaving abnormally — add structured observability.",
+        category: "Observability",
+        buggyCode: `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+)
+
+type PaymentRequest struct {
+	UserID int
+	Amount float64
+}
+
+func processPayment(req PaymentRequest) error {
+	// Simulates payment processing
+	return nil
+}
+
+func paymentHandler(w http.ResponseWriter, r *http.Request) {
+	var req PaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	if err := processPayment(req); err != nil {
+		log.Printf("payment failed: %v", err)
+		http.Error(w, "payment failed", 500)
+		return
+	}
+
+	fmt.Fprintln(w, "payment ok")
+}
+
+func main() {
+	http.HandleFunc("/pay", paymentHandler)
+	http.ListenAndServe(":8080", nil)
+}`,
+        issues: [
+          {
+            severity: "High",
+            title: "No latency tracking — cannot detect slowdowns",
+            description:
+              "Without timing, you cannot know if processPayment takes 5ms or 5s. When payments slow down at 3am, you have no data to debug. Record start/end time and emit a histogram or log duration on every request.",
+          },
+          {
+            severity: "High",
+            title: "No error rate metrics — cannot alert on payment failures",
+            description:
+              "Errors are logged but not counted. You cannot set an alert for 'error rate > 1%'. Use Prometheus counters or structured log fields that a log-based alert can trigger on.",
+          },
+          {
+            severity: "Medium",
+            title: "No request tracing — cannot follow a single payment across services",
+            description:
+              "Without a trace ID, you cannot correlate logs from the payment handler to downstream DB calls, fraud checks, and external gateway calls. Add a request ID to all log lines and propagate it via context.",
+          },
+          {
+            severity: "Medium",
+            title: "Unstructured log format — hard to query and alert on",
+            description:
+              "log.Printf produces plain strings. Splunk/Datadog/ELK need regex to parse them. Structured JSON logs (slog/zap) produce {\"level\":\"error\",\"handler\":\"payment\",\"error\":\"...\",\"user_id\":42} — directly queryable.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+)
+
+type PaymentRequest struct {
+	UserID int
+	Amount float64
+}
+
+func processPayment(req PaymentRequest) error {
+	return nil
+}
+
+func paymentHandler(w http.ResponseWriter, r *http.Request) {
+	// ❌ ISSUE: no start time recorded — cannot measure latency.
+	// Is this handler p50=5ms or p99=3s? No way to know without timing.
+
+	var req PaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// ❌ ISSUE: no metrics increment on 4xx error.
+		// Cannot alert: "decode errors spiking — bad client deployment".
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	if err := processPayment(req); err != nil {
+		// ❌ ISSUE: unstructured log — hard to query.
+		// "payment failed: <error>" has no user_id, no request_id, no amount.
+		// Correlating this log with the DB query that failed is impossible.
+		log.Printf("payment failed: %v", err)
+
+		// ❌ ISSUE: no error counter metric.
+		// Cannot set alert: payment_errors_total > 10 per minute.
+		http.Error(w, "payment failed", 500)
+		return
+	}
+
+	// ❌ ISSUE: no success metric, no latency emitted.
+	// On-call has no dashboard to verify the handler is healthy.
+	fmt.Fprintln(w, "payment ok")
+}`,
+        fixedCode: `package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"time"
+)
+
+var logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+type PaymentRequest struct {
+	UserID int
+	Amount float64
+}
+
+func processPayment(ctx context.Context, req PaymentRequest) error {
+	return nil
+}
+
+// requestIDMiddleware injects a unique request ID into every context and response.
+func requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqID := r.Header.Get("X-Request-ID")
+		if reqID == "" {
+			reqID = fmt.Sprintf("%d", time.Now().UnixNano())
+		}
+		ctx := context.WithValue(r.Context(), "request_id", reqID)
+		w.Header().Set("X-Request-ID", reqID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func paymentHandler(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx := r.Context()
+	reqID, _ := ctx.Value("request_id").(string)
+
+	base := logger.With(
+		"handler", "payment",
+		"request_id", reqID,
+		"method", r.Method,
+	)
+
+	var req PaymentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		base.Warn("decode failed", "error", err)
+		// In production: increment payment_decode_errors_total counter here
+		http.Error(w, "bad request", 400)
+		return
+	}
+
+	base = base.With("user_id", req.UserID, "amount", req.Amount)
+	base.Info("payment started")
+
+	if err := processPayment(ctx, req); err != nil {
+		duration := time.Since(start)
+		base.Error("payment failed",
+			"error", err,
+			"duration_ms", duration.Milliseconds(),
+		)
+		// In production: increment payment_errors_total{reason="processing"} counter
+		http.Error(w, "payment failed", 500)
+		return
+	}
+
+	duration := time.Since(start)
+	base.Info("payment success",
+		"duration_ms", duration.Milliseconds(),
+	)
+	// In production: observe payment_duration_seconds histogram
+	// In production: increment payment_success_total counter
+
+	fmt.Fprintln(w, "payment ok")
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/pay", paymentHandler)
+	// Prometheus metrics endpoint: /metrics
+	http.ListenAndServe(":8080", requestIDMiddleware(mux))
+}`,
+        keyTakeaways: [
+          "Record start := time.Now() at handler entry — emit duration on every code path",
+          "Use structured logging (slog/zap) — key-value fields are queryable in any log system",
+          "Add request_id to every log line — enables correlating logs across the full call chain",
+          "Emit Prometheus counters for success, error, and latency histogram per handler",
+          "Four golden signals: latency, traffic, errors, saturation — instrument all four",
+        ],
+      },
+    ],
+  },
 ];
