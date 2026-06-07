@@ -9,10 +9,12 @@ import EncyclopediaPage from "./pages/EncyclopediaPage";
 import MachineCodingPage from "./pages/MachineCodingPage";
 import GoBasicsPage from "./pages/GoBasicsPage";
 import CodeReviewPage from "./pages/CodeReviewPage";
+import SDInterviewPage from "./pages/SDInterviewPage";
 import { DSA_CATEGORIES } from "./data/dsa";
 import { MC_CATEGORIES } from "./data/machineCoding";
 import { GO_BASICS_CATEGORIES } from "./data/goBasics";
 import { CR_CATEGORIES } from "./data/codeReview";
+import { SDI_CATEGORIES } from "./data/sdInterview";
 import "./styles/globals.css";
 
 const firstCat = DSA_CATEGORIES[0];
@@ -23,6 +25,8 @@ const firstGB = GO_BASICS_CATEGORIES[0];
 const firstGBTopic = firstGB.topics[0];
 const firstCR = CR_CATEGORIES[0];
 const firstCRProblem = firstCR.problems[0];
+const firstSDI = SDI_CATEGORIES[0];
+const firstSDIProblem = firstSDI.problems[0];
 
 export default function App() {
   return (
@@ -61,6 +65,12 @@ export default function App() {
             element={<Navigate to={`/code-review/${firstCR.id}/${firstCRProblem.id}`} replace />}
           />
           <Route path="code-review/:categoryId/:problemId" element={<CodeReviewPage />} />
+          {/* System Design Interview Guide routes */}
+          <Route
+            path="system-design-guide"
+            element={<Navigate to={`/system-design-guide/${firstSDI.id}/${firstSDIProblem.id}`} replace />}
+          />
+          <Route path="system-design-guide/:categoryId/:problemId" element={<SDInterviewPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

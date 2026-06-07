@@ -4868,4 +4868,1557 @@ func main() {
       },
     ],
   },
+
+  // ─────────────────────────────────────────────────────────────
+  // 9. Business Logic Bugs
+  // ─────────────────────────────────────────────────────────────
+  {
+    id: "business-logic",
+    title: "Business Logic Bugs",
+    icon: "💼",
+    problems: [
+      {
+        id: "discount-stacking",
+        title: "Coupon Stacking Allows Unlimited Discounts",
+        difficulty: "Medium",
+        description:
+          "An e-commerce checkout applies coupons one at a time. A customer combines a 'first order' coupon with a 'seasonal sale' coupon and gets the order for free — find the business rule gap.",
+        category: "Business Logic",
+        buggyCode: `package main
+
+import "fmt"
+
+type Coupon struct {
+	Code           string
+	DiscountPct    float64 // 0.10 = 10% off
+	FirstOrderOnly bool
+}
+
+type Order struct {
+	Subtotal   float64
+	IsFirstOrder bool
+}
+
+func applyCoupon(order *Order, coupon Coupon) float64 {
+	if coupon.FirstOrderOnly && !order.IsFirstOrder {
+		return order.Subtotal // not eligible, no discount
+	}
+	discount := order.Subtotal * coupon.DiscountPct
+	order.Subtotal -= discount
+	return order.Subtotal
+}
+
+func checkout(order *Order, coupons []Coupon) float64 {
+	for _, c := range coupons {
+		applyCoupon(order, c)
+	}
+	return order.Subtotal
+}
+
+func main() {
+	order := &Order{Subtotal: 1000, IsFirstOrder: true}
+	coupons := []Coupon{
+		{Code: "FIRST20", DiscountPct: 0.20, FirstOrderOnly: true},
+		{Code: "SUMMER30", DiscountPct: 0.30},
+		{Code: "FLASH25", DiscountPct: 0.25},
+	}
+	final := checkout(order, coupons)
+	fmt.Printf("final total: %.2f\\n", final) // 315.00 — three coupons stacked!
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "No limit on number of coupons applied — discounts compound multiplicatively",
+            description:
+              "checkout loops through ALL coupons and applies each one sequentially to the already-discounted subtotal. 1000 → 800 (20% off) → 560 (30% off of 800) → 420 (25% off of 560). Three coupons combine into an effective 58% discount. Most businesses allow exactly ONE coupon per order — this logic has no such guard.",
+          },
+          {
+            severity: "High",
+            title: "Discount applied to already-discounted subtotal (compounding)",
+            description:
+              "Even if multiple coupons were intentionally allowed, applying % discounts sequentially to a shrinking subtotal compounds them multiplicatively rather than additively. 20%+30%+25% should arguably mean 75% off the ORIGINAL price (capped at some max), not a compounded 58%.",
+          },
+          {
+            severity: "Medium",
+            title: "No floor on final price — order could become free or negative",
+            description:
+              "With enough stacked coupons, Subtotal can reach zero or go negative. There's no MinOrderValue or floor check. A customer could theoretically get paid to checkout.",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type Coupon struct {
+	Code           string
+	DiscountPct    float64
+	FirstOrderOnly bool
+}
+
+type Order struct {
+	Subtotal     float64
+	IsFirstOrder bool
+}
+
+func applyCoupon(order *Order, coupon Coupon) float64 {
+	if coupon.FirstOrderOnly && !order.IsFirstOrder {
+		return order.Subtotal
+	}
+	// ❌ ISSUE: discount computed against the CURRENT (already discounted)
+	// subtotal. Sequential application compounds discounts multiplicatively:
+	// 1000 * 0.8 * 0.7 * 0.75 = 420 (58% off), not 1000 * (1 - 0.2 - 0.3 - 0.25) = 250
+	// Neither interpretation may be intended — the real bug is allowing 3 at all.
+	discount := order.Subtotal * coupon.DiscountPct
+	order.Subtotal -= discount
+	// ❌ ISSUE: no floor check — Subtotal could reach 0 or go negative
+	// with enough coupons (e.g., a 4th 50% coupon on top of these).
+	return order.Subtotal
+}
+
+func checkout(order *Order, coupons []Coupon) float64 {
+	// ❌ CRITICAL: BUSINESS LOGIC GAP — no limit on coupon count.
+	// Real checkout systems allow exactly ONE promotional code per order
+	// (sometimes a small whitelist of "stackable" combos).
+	// This loop blindly applies every coupon the client sends.
+	// A malicious or confused customer can submit an array of ALL
+	// known coupon codes and get the maximum possible discount.
+	// ✅ FIX: validate at most one non-stackable coupon; explicitly
+	// define which combinations are allowed to stack.
+	for _, c := range coupons {
+		applyCoupon(order, c)
+	}
+	return order.Subtotal
+}
+
+func main() {
+	order := &Order{Subtotal: 1000, IsFirstOrder: true}
+	coupons := []Coupon{
+		{Code: "FIRST20", DiscountPct: 0.20, FirstOrderOnly: true},
+		{Code: "SUMMER30", DiscountPct: 0.30},
+		{Code: "FLASH25", DiscountPct: 0.25},
+	}
+	final := checkout(order, coupons)
+	fmt.Printf("final total: %.2f\\n", final) // 315.00 — should likely be 800.00 (one coupon)
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+type Coupon struct {
+	Code           string
+	DiscountPct    float64
+	FirstOrderOnly bool
+	Stackable      bool // explicitly marked — most coupons are NOT
+}
+
+type Order struct {
+	Subtotal     float64
+	IsFirstOrder bool
+}
+
+const minOrderValue = 50.00 // floor — order can never be discounted below this
+
+// eligibleCoupons filters out coupons the order doesn't qualify for.
+func eligibleCoupons(order *Order, coupons []Coupon) []Coupon {
+	var eligible []Coupon
+	for _, c := range coupons {
+		if c.FirstOrderOnly && !order.IsFirstOrder {
+			continue
+		}
+		eligible = append(eligible, c)
+	}
+	return eligible
+}
+
+// checkout applies AT MOST ONE coupon (the best one for the customer),
+// unless coupons are explicitly marked Stackable.
+func checkout(order *Order, coupons []Coupon) (float64, string) {
+	eligible := eligibleCoupons(order, coupons)
+	if len(eligible) == 0 {
+		return order.Subtotal, ""
+	}
+
+	var stackable, single []Coupon
+	for _, c := range eligible {
+		if c.Stackable {
+			stackable = append(stackable, c)
+		} else {
+			single = append(single, c)
+		}
+	}
+
+	applied := []string{}
+	original := order.Subtotal
+
+	if len(stackable) > 0 {
+		// Stackable coupons apply additively against the ORIGINAL subtotal —
+		// not compounded against each other.
+		var totalPct float64
+		for _, c := range stackable {
+			totalPct += c.DiscountPct
+			applied = append(applied, c.Code)
+		}
+		if totalPct > 0.5 {
+			totalPct = 0.5 // cap total stackable discount at 50%
+		}
+		order.Subtotal = original * (1 - totalPct)
+	} else {
+		// Pick the single BEST coupon for the customer — highest discount.
+		sort.Slice(single, func(i, j int) bool {
+			return single[i].DiscountPct > single[j].DiscountPct
+		})
+		best := single[0]
+		order.Subtotal = original * (1 - best.DiscountPct)
+		applied = append(applied, best.Code)
+	}
+
+	// Floor: never discount below minOrderValue
+	if order.Subtotal < minOrderValue {
+		order.Subtotal = minOrderValue
+	}
+
+	return order.Subtotal, fmt.Sprintf("%v", applied)
+}
+
+func main() {
+	order := &Order{Subtotal: 1000, IsFirstOrder: true}
+	coupons := []Coupon{
+		{Code: "FIRST20", DiscountPct: 0.20, FirstOrderOnly: true},
+		{Code: "SUMMER30", DiscountPct: 0.30},
+		{Code: "FLASH25", DiscountPct: 0.25},
+	}
+	final, applied := checkout(order, coupons)
+	fmt.Printf("final total: %.2f, coupons applied: %s\\n", final, applied)
+	// final total: 700.00, coupons applied: [SUMMER30] — best single coupon only
+}`,
+        keyTakeaways: [
+          "Always model business rules explicitly — 'one coupon per order' must be enforced in code, not assumed",
+          "Mark which combinations are intentionally stackable; default to non-stackable",
+          "Sequential percentage discounts compound multiplicatively — decide additive vs multiplicative explicitly",
+          "Always add a floor/ceiling to discount calculations — never trust unbounded loops over user input",
+          "When in doubt, pick the single best offer for the customer rather than applying all of them",
+        ],
+      },
+
+      {
+        id: "date-range-boundary",
+        title: "Off-by-One in Date Range Filter",
+        difficulty: "Easy",
+        description:
+          "A 'transactions this month' report silently excludes the last day's transactions. Customers report missing data at month-end — find the boundary bug.",
+        category: "Business Logic",
+        buggyCode: `package main
+
+import (
+	"fmt"
+	"time"
+)
+
+type Transaction struct {
+	ID     int
+	Amount float64
+	When   time.Time
+}
+
+// monthRange returns [start, end) for the given year/month.
+func monthRange(year int, month time.Month) (time.Time, time.Time) {
+	start := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC) // last day of month
+	return start, end
+}
+
+func transactionsInMonth(txs []Transaction, year int, month time.Month) []Transaction {
+	start, end := monthRange(year, month)
+	var result []Transaction
+	for _, tx := range txs {
+		if tx.When.After(start) && tx.When.Before(end) {
+			result = append(result, tx)
+		}
+	}
+	return result
+}
+
+func main() {
+	txs := []Transaction{
+		{ID: 1, Amount: 100, When: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: 2, Amount: 200, When: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)},
+		{ID: 3, Amount: 300, When: time.Date(2026, 1, 31, 23, 59, 0, 0, time.UTC)},
+	}
+	jan := transactionsInMonth(txs, 2026, time.January)
+	fmt.Println(len(jan)) // 1 — should be 3! Jan 1 and Jan 31 are silently dropped
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "tx.When.After(start) excludes transactions exactly at midnight on day 1",
+            description:
+              "After() is a strict inequality — a transaction timestamped exactly 2026-01-01 00:00:00 is NOT 'after' that same instant. Any transaction recorded at the precise start of the month is silently dropped from the report. Use !Before(start) (i.e. >=) for an inclusive lower bound.",
+          },
+          {
+            severity: "Critical",
+            title: "end computed as last day at 00:00 — entire last day excluded",
+            description:
+              "time.Date(year, month+1, 0, ...) yields the last DAY of the month at midnight (e.g. Jan 31 00:00:00). tx.When.Before(end) excludes anything on Jan 31 after midnight — i.e., the ENTIRE last day. The intended range [Jan 1, Feb 1) should use the first day of the NEXT month as the exclusive end.",
+          },
+          {
+            severity: "High",
+            title: "Mismatched comparison operators create an inconsistent half-open interval",
+            description:
+              "The code mixes After (exclusive) and Before (exclusive), producing an OPEN interval (start, end) when the comment claims [start, end). For date ranges, the standard, bug-resistant pattern is: !before(start) && before(end), i.e. [start, end).",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"fmt"
+	"time"
+)
+
+type Transaction struct {
+	ID     int
+	Amount float64
+	When   time.Time
+}
+
+// monthRange returns [start, end) for the given year/month.
+func monthRange(year int, month time.Month) (time.Time, time.Time) {
+	start := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	// ❌ ISSUE: day=0 rolls back to the LAST DAY of the previous month
+	// relative to 'month+1' — i.e., the last day of THIS month at 00:00:00.
+	// For January: end = Jan 31 00:00:00.
+	// Anything from Jan 31 00:00:01 onward is excluded — the whole last day!
+	// ✅ FIX: end should be the FIRST day of the next month:
+	//   end := time.Date(year, month+1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC)
+	return start, end
+}
+
+func transactionsInMonth(txs []Transaction, year int, month time.Month) []Transaction {
+	start, end := monthRange(year, month)
+	var result []Transaction
+	for _, tx := range txs {
+		// ❌ ISSUE: After(start) is a STRICT inequality (>).
+		// A transaction at exactly start (Jan 1 00:00:00.000) is excluded
+		// because it is not strictly "after" itself.
+		// ❌ ISSUE: Before(end) is also strict (<), and combined with the
+		// wrong 'end' value above, drops the entire last day.
+		// ✅ FIX: use !tx.When.Before(start) && tx.When.Before(end)
+		// This forms the standard half-open interval [start, end).
+		if tx.When.After(start) && tx.When.Before(end) {
+			result = append(result, tx)
+		}
+	}
+	return result
+}
+
+func main() {
+	txs := []Transaction{
+		{ID: 1, Amount: 100, When: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: 2, Amount: 200, When: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)},
+		{ID: 3, Amount: 300, When: time.Date(2026, 1, 31, 23, 59, 0, 0, time.UTC)},
+	}
+	jan := transactionsInMonth(txs, 2026, time.January)
+	fmt.Println(len(jan)) // 1 — txs 1 and 3 silently missing from the report
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"time"
+)
+
+type Transaction struct {
+	ID     int
+	Amount float64
+	When   time.Time
+}
+
+// monthRange returns a half-open interval [start, end):
+// start = first instant of the month (inclusive)
+// end   = first instant of the NEXT month (exclusive)
+func monthRange(year int, month time.Month) (time.Time, time.Time) {
+	start := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 1, 0) // first day of next month — robust across month lengths
+	return start, end
+}
+
+// inRange checks the half-open interval [start, end) using only Before,
+// which avoids the inclusive/exclusive mismatch entirely:
+//   t in [start, end)  <=>  !t.Before(start) && t.Before(end)
+func inRange(t, start, end time.Time) bool {
+	return !t.Before(start) && t.Before(end)
+}
+
+func transactionsInMonth(txs []Transaction, year int, month time.Month) []Transaction {
+	start, end := monthRange(year, month)
+	var result []Transaction
+	for _, tx := range txs {
+		if inRange(tx.When, start, end) {
+			result = append(result, tx)
+		}
+	}
+	return result
+}
+
+func main() {
+	txs := []Transaction{
+		{ID: 1, Amount: 100, When: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{ID: 2, Amount: 200, When: time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)},
+		{ID: 3, Amount: 300, When: time.Date(2026, 1, 31, 23, 59, 0, 0, time.UTC)},
+	}
+	jan := transactionsInMonth(txs, 2026, time.January)
+	fmt.Println(len(jan)) // 3 — correct, all transactions included
+}`,
+        keyTakeaways: [
+          "Model date ranges as half-open intervals [start, end) — end is the start of the NEXT period",
+          "Use t.AddDate(0, 1, 0) to get 'next month' — handles Dec→Jan rollover and varying month lengths",
+          "Standard inclusive-lower/exclusive-upper check: !t.Before(start) && t.Before(end)",
+          "Never mix After/Before inconsistently — pick one canonical comparison form and apply it uniformly",
+          "Write boundary tests explicitly: first instant, last instant, and one tick past the end of every range",
+        ],
+      },
+
+      {
+        id: "inventory-race",
+        title: "Check-Then-Act Race in Inventory Reservation",
+        difficulty: "Hard",
+        description:
+          "A flash sale oversells a limited-stock item — 100 units in stock but 140 orders succeed. The 'check stock, then decrement' pattern has a classic TOCTOU race — fix it at the database level.",
+        category: "Business Logic",
+        buggyCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+// reserveStock is called concurrently by hundreds of checkout requests
+// during a flash sale for a product with limited stock.
+func reserveStock(productID, qty int) error {
+	var available int
+	err := db.QueryRow(
+		"SELECT stock FROM inventory WHERE product_id = $1", productID,
+	).Scan(&available)
+	if err != nil {
+		return err
+	}
+
+	if available < qty {
+		return fmt.Errorf("insufficient stock: have %d, want %d", available, qty)
+	}
+
+	// Decrement stock — separate statement from the check above
+	_, err = db.Exec(
+		"UPDATE inventory SET stock = stock - $1 WHERE product_id = $2",
+		qty, productID,
+	)
+	return err
+}
+
+func main() {
+	// Simulates 140 concurrent checkout attempts for 100 available units
+	for i := 0; i < 140; i++ {
+		go func(n int) {
+			if err := reserveStock(101, 1); err != nil {
+				fmt.Println("rejected:", n, err)
+				return
+			}
+			fmt.Println("reserved:", n)
+		}(i)
+	}
+	select {} // block forever for demo purposes
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Check-then-act (TOCTOU) race — read and write are not atomic",
+            description:
+              "Two goroutines can both SELECT stock=1, both see available=1 >= qty=1, and both proceed to UPDATE stock = stock - 1. The final stock can go to -1 (or worse at scale) and BOTH orders are accepted for the same single unit. This is the textbook overselling bug in flash sales and ticketing systems.",
+          },
+          {
+            severity: "Critical",
+            title: "No atomic conditional decrement — relies on app-level check",
+            description:
+              "The fix is to push the check into the SQL statement itself: UPDATE ... SET stock = stock - $1 WHERE product_id = $2 AND stock >= $1. This makes the check-and-decrement a single atomic operation enforced by the database, immune to races regardless of concurrency level.",
+          },
+          {
+            severity: "High",
+            title: "No verification that the UPDATE actually affected a row",
+            description:
+              "Even with the atomic UPDATE...WHERE pattern, you must check RowsAffected(). If 0 rows were affected, stock was insufficient at the moment of the update — return an 'out of stock' error instead of silently succeeding.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"database/sql"
+	"fmt"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+func reserveStock(productID, qty int) error {
+	// ❌ CRITICAL: STEP 1 — read current stock.
+	var available int
+	err := db.QueryRow(
+		"SELECT stock FROM inventory WHERE product_id = $1", productID,
+	).Scan(&available)
+	if err != nil {
+		return err
+	}
+
+	// ❌ CRITICAL: STEP 2 — check in application code.
+	// Between this check and the UPDATE below, ANY NUMBER of other
+	// goroutines can run the SAME check against the SAME stock value
+	// (it hasn't changed yet — nobody has written anything).
+	// Goroutine A: reads stock=1, passes check (1 >= 1)
+	// Goroutine B: reads stock=1, passes check (1 >= 1)   ← same instant
+	// Both proceed to decrement — stock ends at -1, both orders "succeed".
+	if available < qty {
+		return fmt.Errorf("insufficient stock: have %d, want %d", available, qty)
+	}
+
+	// ❌ CRITICAL: STEP 3 — decrement, in a SEPARATE statement.
+	// This is the "act" in check-then-act. The race window is the gap
+	// between the SELECT above and this UPDATE — easily microseconds,
+	// but under flash-sale concurrency (thousands of simultaneous
+	// requests) that's enough for massive overselling.
+	// ✅ FIX: combine check + decrement into ONE atomic SQL statement:
+	//   UPDATE inventory SET stock = stock - $1
+	//   WHERE product_id = $2 AND stock >= $1
+	// The database guarantees this read-modify-write is atomic per row.
+	_, err = db.Exec(
+		"UPDATE inventory SET stock = stock - $1 WHERE product_id = $2",
+		qty, productID,
+	)
+	return err
+}`,
+        fixedCode: `package main
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	_ "github.com/lib/pq"
+)
+
+var db *sql.DB
+
+// reserveStock performs an atomic conditional decrement.
+// The database guarantees the read-check-write happens as one indivisible
+// operation per row — no race window exists, regardless of concurrency.
+func reserveStock(ctx context.Context, productID, qty int) error {
+	result, err := db.ExecContext(ctx,
+		`+"`"+`UPDATE inventory
+		   SET stock = stock - $1
+		 WHERE product_id = $2
+		   AND stock >= $1`+"`"+`,
+		qty, productID,
+	)
+	if err != nil {
+		return fmt.Errorf("reserveStock: update failed: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("reserveStock: rows affected: %w", err)
+	}
+	if rows == 0 {
+		// Either the product doesn't exist, or stock < qty at the moment
+		// the database evaluated the WHERE clause — atomically determined.
+		return fmt.Errorf("reserveStock: insufficient stock for product %d", productID)
+	}
+
+	return nil
+}
+
+// Alternative for very high contention: SELECT ... FOR UPDATE inside a
+// transaction explicitly serializes access to the row.
+func reserveStockWithLock(ctx context.Context, productID, qty int) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var available int
+	// FOR UPDATE locks this row — other transactions block here until commit/rollback.
+	err = tx.QueryRowContext(ctx,
+		"SELECT stock FROM inventory WHERE product_id = $1 FOR UPDATE",
+		productID,
+	).Scan(&available)
+	if err != nil {
+		return err
+	}
+	if available < qty {
+		return fmt.Errorf("insufficient stock: have %d, want %d", available, qty)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE inventory SET stock = stock - $1 WHERE product_id = $2",
+		qty, productID,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func main() {
+	ctx := context.Background()
+	for i := 0; i < 140; i++ {
+		go func(n int) {
+			if err := reserveStock(ctx, 101, 1); err != nil {
+				fmt.Println("rejected:", n, err)
+				return
+			}
+			fmt.Println("reserved:", n)
+		}(i)
+	}
+	select {}
+}`,
+        keyTakeaways: [
+          "Check-then-act across two statements is NEVER safe under concurrency — collapse into one atomic operation",
+          "Push the condition into the SQL WHERE clause: UPDATE ... SET x = x - $1 WHERE x >= $1",
+          "Always check RowsAffected() — 0 rows means the atomic condition failed (e.g., out of stock)",
+          "SELECT ... FOR UPDATE is the alternative for complex multi-row logic that can't be a single statement",
+          "This exact bug pattern caused real-world overselling incidents at major e-commerce and ticketing platforms",
+        ],
+      },
+
+      {
+        id: "money-as-float",
+        title: "Currency Stored as Floating Point",
+        difficulty: "Medium",
+        description:
+          "An invoicing system computes totals using float64. Customers report invoices off by a cent — explain why floats are unsafe for money and migrate to integer cents.",
+        category: "Business Logic",
+        buggyCode: `package main
+
+import "fmt"
+
+type LineItem struct {
+	Description string
+	UnitPrice   float64 // dollars, e.g. 19.99
+	Quantity    int
+}
+
+func lineTotal(item LineItem) float64 {
+	return item.UnitPrice * float64(item.Quantity)
+}
+
+func invoiceTotal(items []LineItem, taxRate float64) float64 {
+	var subtotal float64
+	for _, item := range items {
+		subtotal += lineTotal(item)
+	}
+	tax := subtotal * taxRate
+	return subtotal + tax
+}
+
+func main() {
+	items := []LineItem{
+		{Description: "Widget", UnitPrice: 19.99, Quantity: 3},
+		{Description: "Gadget", UnitPrice: 9.10, Quantity: 7},
+	}
+	total := invoiceTotal(items, 0.0825)
+	fmt.Printf("Total: $%.2f\\n", total)
+
+	// Demonstrates the precision problem directly:
+	a := 0.1
+	b := 0.2
+	fmt.Println(a+b == 0.3)        // false!
+	fmt.Printf("%.17f\\n", a+b)    // 0.30000000000000004
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "float64 cannot represent most decimal fractions exactly",
+            description:
+              "0.1 and 0.2 have no exact binary floating-point representation. 0.1 + 0.2 == 0.30000000000000004, not 0.3. When you sum hundreds of line items and apply tax rates, these tiny errors accumulate and surface as 'invoice total off by $0.01' — a bug that erodes customer trust and fails financial audits (which require exact cent-level reconciliation).",
+          },
+          {
+            severity: "High",
+            title: "Comparing computed money values with == is fundamentally broken",
+            description:
+              "Anywhere this codebase compares a computed float total to an expected value with == (e.g., 'has the customer paid the exact amount?'), the comparison can spuriously fail due to representation error — rejecting valid payments or approving short payments.",
+          },
+          {
+            severity: "High",
+            title: "Rounding happens implicitly and inconsistently at print time",
+            description:
+              "fmt.Printf(\"%.2f\", total) rounds for DISPLAY but the underlying float still carries the imprecise value, which is used in subsequent calculations (e.g., next month's balance = this month's total - payment). Errors compound across statements/periods.",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type LineItem struct {
+	Description string
+	// ❌ ISSUE: float64 for currency. Decimal fractions like 19.99, 0.10, 0.0825
+	// are stored as the NEAREST representable binary fraction — not the exact value.
+	// Arithmetic on these approximations accumulates error.
+	UnitPrice float64
+	Quantity  int
+}
+
+func lineTotal(item LineItem) float64 {
+	// ❌ ISSUE: multiplying an imprecise float by an int compounds the error.
+	// 19.99 * 3 might not be exactly 59.97 in float64 representation.
+	return item.UnitPrice * float64(item.Quantity)
+}
+
+func invoiceTotal(items []LineItem, taxRate float64) float64 {
+	var subtotal float64
+	for _, item := range items {
+		// ❌ ISSUE: summing floats accumulates rounding error with every addition.
+		// Order of summation can even change the final result (floats are not
+		// associative: (a+b)+c != a+(b+c) in general).
+		subtotal += lineTotal(item)
+	}
+	// ❌ ISSUE: multiplying by a fractional tax rate (0.0825) introduces
+	// further representation error — the exact decimal 8.25% cannot be
+	// stored exactly as a binary float.
+	tax := subtotal * taxRate
+	return subtotal + tax
+}
+
+func main() {
+	items := []LineItem{
+		{Description: "Widget", UnitPrice: 19.99, Quantity: 3},
+		{Description: "Gadget", UnitPrice: 9.10, Quantity: 7},
+	}
+	total := invoiceTotal(items, 0.0825)
+	fmt.Printf("Total: $%.2f\\n", total) // looks fine here, but...
+
+	// ❌ This is the SAME class of bug, made obvious:
+	a := 0.1
+	b := 0.2
+	fmt.Println(a+b == 0.3)     // false — direct proof floats can't represent money exactly
+	fmt.Printf("%.17f\\n", a+b) // 0.30000000000000004
+}`,
+        fixedCode: `package main
+
+import "fmt"
+
+// Money represents an amount as an integer number of the smallest currency
+// unit (cents for USD, paise for INR). Integer arithmetic is EXACT —
+// no representation error, no accumulation, no surprises.
+type Money int64 // cents
+
+func Dollars(d int64, cents int64) Money {
+	return Money(d*100 + cents)
+}
+
+func (m Money) String() string {
+	sign := ""
+	v := int64(m)
+	if v < 0 {
+		sign, v = "-", -v
+	}
+	return fmt.Sprintf("%s$%d.%02d", sign, v/100, v%100)
+}
+
+type LineItem struct {
+	Description string
+	UnitPrice   Money // e.g. Dollars(19, 99) == 1999 cents
+	Quantity    int64
+}
+
+func lineTotal(item LineItem) Money {
+	// Integer multiplication — exact, no rounding error possible.
+	return item.UnitPrice * Money(item.Quantity)
+}
+
+// invoiceTotal computes tax using integer arithmetic with explicit,
+// well-defined rounding (round-half-up) applied exactly ONCE, at the end.
+func invoiceTotal(items []LineItem, taxBasisPoints int64) Money {
+	var subtotal Money
+	for _, item := range items {
+		subtotal += lineTotal(item)
+	}
+
+	// taxBasisPoints: 825 means 8.25% (basis points = hundredths of a percent)
+	// Compute tax in integer cents with explicit rounding:
+	taxCents := (int64(subtotal)*taxBasisPoints + 5000) / 10000 // round-half-up
+	return subtotal + Money(taxCents)
+}
+
+func main() {
+	items := []LineItem{
+		{Description: "Widget", UnitPrice: Dollars(19, 99), Quantity: 3},
+		{Description: "Gadget", UnitPrice: Dollars(9, 10), Quantity: 7},
+	}
+	total := invoiceTotal(items, 825) // 8.25% == 825 basis points
+	fmt.Println("Total:", total)      // exact, reproducible, audit-safe
+
+	// Integer equality is exact — safe to use == for comparing money.
+	a := Dollars(0, 10) // 10 cents
+	b := Dollars(0, 20) // 20 cents
+	c := Dollars(0, 30) // 30 cents
+	fmt.Println(a+b == c) // true — always, exactly
+}`,
+        keyTakeaways: [
+          "Never use float32/float64 for currency — binary floats cannot represent most decimal fractions exactly",
+          "Store money as integers in the smallest unit (cents, paise) — integer arithmetic is exact",
+          "Define rounding rules explicitly (round-half-up, banker's rounding) and apply them ONCE, at well-defined points",
+          "For arbitrary precision needs, use a decimal library (shopspring/decimal) — never raw floats",
+          "Equality comparisons on money (== ) are only safe with integer or decimal types, never floats",
+        ],
+      },
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────────────
+  // 10. Type Errors & Conversions
+  // ─────────────────────────────────────────────────────────────
+  {
+    id: "type-errors",
+    title: "Type Errors & Conversions",
+    icon: "🔢",
+    problems: [
+      {
+        id: "type-assertion-panic",
+        title: "Unchecked Type Assertion Panics",
+        difficulty: "Easy",
+        description:
+          "A generic event processor reads typed fields out of a map[string]interface{} payload. A field of unexpected type crashes the entire worker — find every unsafe assertion.",
+        category: "Type Errors",
+        buggyCode: `package main
+
+import "fmt"
+
+type Event struct {
+	Type    string
+	Payload map[string]interface{}
+}
+
+func processEvent(e Event) {
+	switch e.Type {
+	case "order.created":
+		// Direct type assertion — panics if the type doesn't match
+		orderID := e.Payload["order_id"].(int)
+		amount := e.Payload["amount"].(float64)
+		userID := e.Payload["user_id"].(string)
+		fmt.Printf("order %d for user %s: $%.2f\\n", orderID, userID, amount)
+
+	case "user.updated":
+		name := e.Payload["name"].(string)
+		fmt.Println("user updated:", name)
+	}
+}
+
+func main() {
+	// Simulates events from an upstream system —
+	// JSON numbers decode as float64, not int!
+	events := []Event{
+		{Type: "order.created", Payload: map[string]interface{}{
+			"order_id": 1001, // a real int — works
+			"amount":   49.99,
+			"user_id":  "u-42",
+		}},
+		{Type: "order.created", Payload: map[string]interface{}{
+			"order_id": float64(1002), // came from JSON — decoded as float64
+			"amount":   49.99,
+			"user_id":  "u-43",
+		}},
+	}
+	for _, e := range events {
+		processEvent(e) // second event panics: interface conversion
+	}
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Direct type assertion x.(T) panics on mismatch — crashes the whole worker",
+            description:
+              "e.Payload[\"order_id\"].(int) panics with 'interface conversion: interface {} is float64, not int' if the underlying value isn't exactly an int. In Go, encoding/json decodes ALL JSON numbers into interface{} as float64 — never int. Any event sourced from JSON will panic on this line.",
+          },
+          {
+            severity: "Critical",
+            title: "JSON numbers always decode to float64 in interface{} — never int",
+            description:
+              "This is one of the most common Go production bugs: json.Unmarshal(data, &map[string]interface{}{}) decodes {\"order_id\": 1001} as map[\"order_id\"] = float64(1001), not int(1001). Code that asserts .(int) on JSON-derived data will always panic, while hand-constructed test data with literal ints will pass — masking the bug until production JSON arrives.",
+          },
+          {
+            severity: "High",
+            title: "No use of the comma-ok form — cannot gracefully handle malformed events",
+            description:
+              "v, ok := x.(T) returns ok=false instead of panicking on mismatch. This lets the processor log a malformed event and continue, rather than crashing and losing every subsequent event in the batch.",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type Event struct {
+	Type    string
+	Payload map[string]interface{}
+}
+
+func processEvent(e Event) {
+	switch e.Type {
+	case "order.created":
+		// ❌ CRITICAL: x.(int) is an UNCHECKED type assertion.
+		// If e.Payload["order_id"] is not EXACTLY an int (e.g. it's a
+		// float64, which is what encoding/json produces for ALL numbers),
+		// this PANICS: "interface conversion: interface {} is float64, not int"
+		// One malformed/JSON-sourced event crashes the entire goroutine.
+		// ✅ FIX: use the comma-ok form: v, ok := x.(int)
+		orderID := e.Payload["order_id"].(int)
+
+		// ❌ CRITICAL: same issue — what if amount is sent as a JSON string "49.99"?
+		// Or as an int (49) instead of float (49.0)? Both panic here.
+		amount := e.Payload["amount"].(float64)
+
+		// ❌ CRITICAL: what if user_id is missing from the payload entirely?
+		// e.Payload["user_id"] returns nil (interface{} zero value).
+		// nil.(string) panics: "interface conversion: interface {} is nil, not string"
+		userID := e.Payload["user_id"].(string)
+
+		fmt.Printf("order %d for user %s: $%.2f\\n", orderID, userID, amount)
+
+	case "user.updated":
+		name := e.Payload["name"].(string)
+		fmt.Println("user updated:", name)
+	}
+	// ❌ ISSUE: no default case — unknown event types are silently ignored,
+	// which may itself be a business logic gap (should they be logged?).
+}
+
+func main() {
+	events := []Event{
+		{Type: "order.created", Payload: map[string]interface{}{
+			"order_id": 1001, // hand-written literal — happens to be int
+			"amount":   49.99,
+			"user_id":  "u-42",
+		}},
+		{Type: "order.created", Payload: map[string]interface{}{
+			// ❌ This is what REAL JSON-decoded data looks like:
+			// encoding/json ALWAYS produces float64 for JSON numbers.
+			"order_id": float64(1002),
+			"amount":   49.99,
+			"user_id":  "u-43",
+		}},
+	}
+	for _, e := range events {
+		processEvent(e) // second iteration panics — process crashes
+	}
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"log"
+)
+
+type Event struct {
+	Type    string
+	Payload map[string]interface{}
+}
+
+// getInt safely extracts an integer from a JSON-decoded interface{} value.
+// JSON numbers decode as float64 — this handles both float64 and int
+// so the function works whether the data came from JSON or was hand-built.
+func getInt(m map[string]interface{}, key string) (int, bool) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n), true // JSON number → float64 → int
+	case int:
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+func getFloat(m map[string]interface{}, key string) (float64, bool) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
+func getString(m map[string]interface{}, key string) (string, bool) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
+
+func processEvent(e Event) error {
+	switch e.Type {
+	case "order.created":
+		orderID, ok := getInt(e.Payload, "order_id")
+		if !ok {
+			return fmt.Errorf("processEvent: order.created missing/invalid order_id: %+v", e.Payload)
+		}
+		amount, ok := getFloat(e.Payload, "amount")
+		if !ok {
+			return fmt.Errorf("processEvent: order.created missing/invalid amount: %+v", e.Payload)
+		}
+		userID, ok := getString(e.Payload, "user_id")
+		if !ok {
+			return fmt.Errorf("processEvent: order.created missing/invalid user_id: %+v", e.Payload)
+		}
+		fmt.Printf("order %d for user %s: $%.2f\\n", orderID, userID, amount)
+		return nil
+
+	case "user.updated":
+		name, ok := getString(e.Payload, "name")
+		if !ok {
+			return fmt.Errorf("processEvent: user.updated missing/invalid name: %+v", e.Payload)
+		}
+		fmt.Println("user updated:", name)
+		return nil
+
+	default:
+		return fmt.Errorf("processEvent: unknown event type %q", e.Type)
+	}
+}
+
+func main() {
+	events := []Event{
+		{Type: "order.created", Payload: map[string]interface{}{
+			"order_id": float64(1002), // realistic: as decoded from JSON
+			"amount":   49.99,
+			"user_id":  "u-43",
+		}},
+		{Type: "order.created", Payload: map[string]interface{}{
+			"order_id": float64(1003),
+			"amount":   "not-a-number", // malformed — handled gracefully
+			"user_id":  "u-44",
+		}},
+	}
+	for _, e := range events {
+		if err := processEvent(e); err != nil {
+			log.Println("skipping malformed event:", err)
+			continue // one bad event doesn't crash the worker
+		}
+	}
+}`,
+        keyTakeaways: [
+          "Never use unchecked type assertions x.(T) on data from external sources — always use v, ok := x.(T)",
+          "encoding/json decodes ALL JSON numbers into interface{} as float64 — never int, even for whole numbers",
+          "Write a small set of safe getter helpers (getInt, getString) that normalize across JSON/native types",
+          "A single malformed message should produce a logged error, not crash the entire worker/goroutine",
+          "Prefer typed structs with json.Unmarshal over map[string]interface{} whenever the schema is known",
+        ],
+      },
+
+      {
+        id: "integer-overflow",
+        title: "Integer Overflow in ID Generation",
+        difficulty: "Medium",
+        description:
+          "A counter-based ID generator uses int32. After ~2.1 billion IDs it wraps to negative numbers, breaking database primary keys and URL routing — diagnose and fix the overflow.",
+        category: "Type Errors",
+        buggyCode: `package main
+
+import (
+	"fmt"
+	"sync/atomic"
+)
+
+// IDGenerator produces sequential, monotonically increasing IDs.
+type IDGenerator struct {
+	counter int32
+}
+
+func (g *IDGenerator) Next() int32 {
+	return atomic.AddInt32(&g.counter, 1)
+}
+
+func main() {
+	gen := &IDGenerator{counter: 2_147_483_645} // close to int32 max
+
+	for i := 0; i < 5; i++ {
+		id := gen.Next()
+		fmt.Println(id)
+	}
+	// 2147483646
+	// 2147483647   <- int32 max
+	// -2147483648  <- OVERFLOW: wraps to the most negative int32
+	// -2147483647
+	// -2147483646
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "int32 overflow silently wraps to negative — no error, no panic",
+            description:
+              "Go integer overflow is well-defined (two's complement wraparound) and produces NO runtime error. counter+1 when counter == math.MaxInt32 (2147483647) silently becomes math.MinInt32 (-2147483648). IDs suddenly go negative. Any code assuming 'IDs are positive and increasing' (database PKs, URL paths, sort order, pagination cursors) breaks catastrophically and silently.",
+          },
+          {
+            severity: "High",
+            title: "int32 has insufficient range for a long-lived high-throughput counter",
+            description:
+              "int32 maxes out at ~2.1 billion. A service generating 1000 IDs/second exhausts this range in about 24 days. int64 (max ~9.2 * 10^18) would take hundreds of millions of years at the same rate — the right default for IDs and counters unless memory constraints are extreme.",
+          },
+          {
+            severity: "Medium",
+            title: "No detection or alerting as the counter approaches its limit",
+            description:
+              "Even with int64, it's good practice to monitor counters approaching their type's range (or a configured business limit) and alert well in advance, rather than discovering the wraparound in production.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"fmt"
+	"sync/atomic"
+)
+
+type IDGenerator struct {
+	// ❌ ISSUE: int32 — range is approximately -2.1 billion to +2.1 billion.
+	// For an ID counter that should only ever increase, this is a ticking
+	// time bomb: there is no error when it overflows, just silent wraparound.
+	// ✅ FIX: use int64 (or uint64 if negative IDs are nonsensical anyway).
+	counter int32
+}
+
+func (g *IDGenerator) Next() int32 {
+	// ❌ ISSUE: atomic.AddInt32 performs wrapping arithmetic per Go spec.
+	// math.MaxInt32 (2147483647) + 1 == math.MinInt32 (-2147483648).
+	// This is NOT a panic, NOT an error — just a silently wrong value.
+	// Downstream: a negative "ID" gets written to an auto-increment-style
+	// PRIMARY KEY column, breaks URL routes like /orders/-2147483648,
+	// breaks "ORDER BY id DESC" assumptions, breaks pagination cursors
+	// that assume monotonic positive sequences.
+	return atomic.AddInt32(&g.counter, 1)
+}
+
+func main() {
+	gen := &IDGenerator{counter: 2_147_483_645}
+
+	for i := 0; i < 5; i++ {
+		id := gen.Next()
+		fmt.Println(id)
+		// 2147483646
+		// 2147483647   <- int32 max — last VALID id
+		// -2147483648  <- ❌ OVERFLOW — silent wraparound, no error raised
+		// -2147483647
+		// -2147483646
+	}
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"log"
+	"math"
+	"sync/atomic"
+)
+
+// alertThreshold triggers proactive monitoring well before any real limit.
+const alertThreshold = math.MaxInt64 - 1_000_000_000
+
+type IDGenerator struct {
+	// FIX: int64 — range ~9.2 * 10^18. At 100,000 IDs/sec this lasts
+	// for roughly 2.9 million years. Effectively unbounded for any
+	// realistic system lifetime.
+	counter int64
+}
+
+func (g *IDGenerator) Next() (int64, error) {
+	id := atomic.AddInt64(&g.counter, 1)
+
+	// Defensive check: even with int64, alert long before any real risk —
+	// catches misconfiguration (e.g., counter seeded incorrectly) early.
+	if id > alertThreshold {
+		log.Printf("WARNING: ID generator approaching int64 limit: %d", id)
+	}
+
+	// Defensive check: a wrapped value would appear negative — reject it
+	// outright rather than ever returning/persisting it.
+	if id < 0 {
+		return 0, fmt.Errorf("IDGenerator: counter overflowed (got %d) — system requires intervention", id)
+	}
+
+	return id, nil
+}
+
+func main() {
+	gen := &IDGenerator{counter: 2_147_483_645} // far below int64's real limits
+
+	for i := 0; i < 5; i++ {
+		id, err := gen.Next()
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(id)
+		// 2147483646
+		// 2147483647
+		// 2147483648   <- correctly continues past the old int32 boundary
+		// 2147483649
+		// 2147483650
+	}
+}
+
+// Note: for distributed ID generation at scale, prefer dedicated schemes
+// (Snowflake IDs, ULIDs, database sequences, UUID v7) over a single
+// in-process counter — they avoid both overflow AND single-point
+// coordination bottlenecks.`,
+        keyTakeaways: [
+          "Go integer overflow wraps silently (two's complement) — no panic, no error, just a wrong value",
+          "Default to int64 for any counter, ID, or accumulator unless you have a proven memory constraint",
+          "math.MaxInt32 (~2.1B) is reachable by real systems in weeks; math.MaxInt64 effectively never is",
+          "Add defensive checks (id < 0, approaching threshold) for any long-lived monotonic counter",
+          "For distributed/high-scale ID generation, use Snowflake, ULID, UUID v7, or DB sequences instead of a local counter",
+        ],
+      },
+
+      {
+        id: "float-equality",
+        title: "Comparing Floats with Equality",
+        difficulty: "Easy",
+        description:
+          "A pricing engine checks 'has the discount made this item free?' using ==. The check almost never triggers even when it logically should — explain floating-point comparison pitfalls.",
+        category: "Type Errors",
+        buggyCode: `package main
+
+import "fmt"
+
+type CartItem struct {
+	Price        float64
+	DiscountRate float64 // 1.0 = 100% off
+}
+
+func isFree(item CartItem) bool {
+	finalPrice := item.Price - (item.Price * item.DiscountRate)
+	return finalPrice == 0.0
+}
+
+func percentageRemaining(price, paid float64) float64 {
+	return (price - paid) / price * 100
+}
+
+func main() {
+	item := CartItem{Price: 49.99, DiscountRate: 1.0} // 100% off — should be free
+	fmt.Println("is free:", isFree(item))             // false! (rounding artifact)
+
+	// A second example showing the same root cause:
+	price := 19.99
+	paid := 19.99
+	remaining := percentageRemaining(price, paid)
+	fmt.Println("remaining %:", remaining)
+	fmt.Println("fully paid:", remaining == 0.0) // also potentially false
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Direct == comparison on computed floats fails due to representation error",
+            description:
+              "item.Price - (item.Price * item.DiscountRate) for Price=49.99, DiscountRate=1.0 should mathematically be 0, but floating-point multiplication and subtraction can leave a tiny residual like 7.105427357601002e-15. The == 0.0 check then evaluates to false, and a customer who should get a free item is charged a near-zero (but nonzero) amount — a confusing and embarrassing checkout bug.",
+          },
+          {
+            severity: "High",
+            title: "No epsilon/tolerance used for floating-point comparisons",
+            description:
+              "The standard fix for comparing floats is to check whether the absolute difference is within a small tolerance (epsilon): math.Abs(a - b) < epsilon. The exact epsilon depends on the magnitude of the values and the precision needed (for money, prefer integer cents entirely — see the 'Currency Stored as Floating Point' problem).",
+          },
+        ],
+        annotatedCode: `package main
+
+import "fmt"
+
+type CartItem struct {
+	Price        float64
+	DiscountRate float64
+}
+
+func isFree(item CartItem) bool {
+	// ❌ ISSUE: this arithmetic on float64 does not produce an EXACT zero
+	// even when the math says it should. 49.99 * 1.0 might evaluate to
+	// 49.989999999999995 or similar due to binary floating-point representation,
+	// making (Price - Price*Rate) a tiny nonzero residual like 7.1e-15.
+	finalPrice := item.Price - (item.Price * item.DiscountRate)
+
+	// ❌ CRITICAL: == on a computed float is almost never the right check.
+	// finalPrice is "essentially zero" but not EXACTLY 0.0 in IEEE-754.
+	// This returns false, and the customer is charged $0.0000000000000071.
+	// ✅ FIX: use a tolerance: math.Abs(finalPrice) < epsilon
+	// ✅ BETTER FIX: don't use floats for money at all — use integer cents.
+	return finalPrice == 0.0
+}
+
+func percentageRemaining(price, paid float64) float64 {
+	return (price - paid) / price * 100
+}
+
+func main() {
+	item := CartItem{Price: 49.99, DiscountRate: 1.0}
+	fmt.Println("is free:", isFree(item)) // false — should logically be true
+
+	price := 19.99
+	paid := 19.99
+	remaining := percentageRemaining(price, paid)
+	// ❌ ISSUE: (price - paid) should be exactly 0, but subtraction of two
+	// equal-looking floats CAN still yield a nonzero result depending on
+	// how each was originally computed/stored — the == check is fragile.
+	fmt.Println("fully paid:", remaining == 0.0)
+}`,
+        fixedCode: `package main
+
+import (
+	"fmt"
+	"math"
+)
+
+// epsilon is the tolerance for "close enough to equal" in float comparisons.
+// Choosing the right epsilon depends on the magnitude and precision of your
+// values — for currency, prefer integer cents and avoid this entirely.
+const epsilon = 1e-9
+
+func almostEqual(a, b float64) bool {
+	return math.Abs(a-b) < epsilon
+}
+
+type CartItem struct {
+	Price        float64
+	DiscountRate float64
+}
+
+func isFree(item CartItem) bool {
+	finalPrice := item.Price - (item.Price * item.DiscountRate)
+	// FIX: tolerance-based comparison absorbs floating-point representation noise.
+	return almostEqual(finalPrice, 0.0)
+}
+
+func percentageRemaining(price, paid float64) float64 {
+	if price == 0 {
+		return 0 // guard against division by zero
+	}
+	return (price - paid) / price * 100
+}
+
+func main() {
+	item := CartItem{Price: 49.99, DiscountRate: 1.0}
+	fmt.Println("is free:", isFree(item)) // true — correctly detects "essentially zero"
+
+	price := 19.99
+	paid := 19.99
+	remaining := percentageRemaining(price, paid)
+	fmt.Println("fully paid:", almostEqual(remaining, 0.0))
+}
+
+// BEST FIX for money specifically: don't use floats at all.
+// type Money int64 // cents — integer equality is exact and safe:
+//   isFree := finalPriceCents == 0   // always correct, no epsilon needed
+// See the "Currency Stored as Floating Point" problem for the full pattern.`,
+        keyTakeaways: [
+          "Never compare computed float64 values with == — representation error makes exact equality unreliable",
+          "Use an epsilon-based tolerance check: math.Abs(a - b) < epsilon",
+          "Choosing epsilon requires understanding the magnitude and required precision of your values",
+          "For money specifically, the real fix is to avoid floats entirely — use integer cents",
+          "This bug class extends to any 'is this value zero/equal/done' check built on float arithmetic",
+        ],
+      },
+
+      {
+        id: "json-number-decoding",
+        title: "JSON Numeric Type Mismatch on Unmarshal",
+        difficulty: "Medium",
+        description:
+          "A webhook receiver decodes incoming JSON into a Go struct. A partner sends a quantity as a JSON string instead of a number, and the entire webhook payload is rejected — handle flexible numeric encodings gracefully.",
+        category: "Type Errors",
+        buggyCode: `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+type WebhookPayload struct {
+	OrderID  int     \`json:"order_id"\`
+	Quantity int     \`json:"quantity"\`
+	Price    float64 \`json:"price"\`
+	Status   string  \`json:"status"\`
+}
+
+func webhookHandler(w http.ResponseWriter, r *http.Request) {
+	var payload WebhookPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		// Every malformed-type payload from any partner ends up here
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	fmt.Fprintf(w, "processed order %d, qty %d\\n", payload.OrderID, payload.Quantity)
+}
+
+// Example payloads received from different partner integrations:
+//
+// Partner A sends:  {"order_id": 1001, "quantity": 5,   "price": 9.99,  "status": "paid"}
+// Partner B sends:  {"order_id": 1002, "quantity": "5", "price": "9.99","status": "paid"}
+//                                       ^^^^^^^^^^^^             ^^^^^^^^
+//                          numbers sent as JSON strings — common in legacy/PHP systems
+//
+// Partner B's payload fails to decode entirely:
+// "json: cannot unmarshal string into Go struct field WebhookPayload.quantity of type int"
+
+func main() {
+	http.HandleFunc("/webhook", webhookHandler)
+	http.ListenAndServe(":8080", nil)
+}`,
+        issues: [
+          {
+            severity: "Critical",
+            title: "Strict struct typing rejects semantically-valid payloads with different JSON encodings",
+            description:
+              "encoding/json performs strict type checking: a JSON string \"5\" cannot decode into a Go int field, even though \"5\" unambiguously represents the integer 5. Partner B's entire webhook is rejected with a 400, even though the data is perfectly usable — just encoded differently (a very common real-world situation with legacy systems, PHP/JS clients that stringify numbers, etc.).",
+          },
+          {
+            severity: "High",
+            title: "One field's type mismatch fails the ENTIRE decode — no partial recovery",
+            description:
+              "json.Decode fails atomically: if any single field has a type mismatch, the whole struct fails to populate (in older Go versions) or only partially populates with an error (in others) — there's no clean way to process the 90% of the payload that IS well-typed while flagging just the problematic field.",
+          },
+          {
+            severity: "Medium",
+            title: "No custom UnmarshalJSON to normalize flexible encodings",
+            description:
+              "The idiomatic Go fix is a custom type with UnmarshalJSON that accepts both number and string JSON representations and normalizes them internally — isolating the messiness of 'numbers as strings' to one well-tested location instead of leaking it through the whole codebase.",
+          },
+        ],
+        annotatedCode: `package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+)
+
+type WebhookPayload struct {
+	OrderID int \`json:"order_id"\`
+	// ❌ ISSUE: declared as int, but encoding/json requires the JSON value
+	// to be a JSON *number* to decode into an int. If the partner sends
+	// "quantity": "5" (a JSON string), decoding fails with:
+	//   "json: cannot unmarshal string into Go struct field ...quantity of type int"
+	// ✅ FIX: use a custom type with UnmarshalJSON that accepts both
+	// number and string representations and normalizes to int internally.
+	Quantity int \`json:"quantity"\`
+
+	// ❌ ISSUE: same problem for float64 — "price": "9.99" (string) fails
+	// to decode into a float64 field.
+	Price  float64 \`json:"price"\`
+	Status string  \`json:"status"\`
+}
+
+func webhookHandler(w http.ResponseWriter, r *http.Request) {
+	var payload WebhookPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		// ❌ ISSUE: ANY type mismatch on ANY field — even one that doesn't
+		// matter for this particular operation — rejects the entire webhook.
+		// Partner B's orders never get processed; their integration appears
+		// broken from their side, but the data was perfectly usable.
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	fmt.Fprintf(w, "processed order %d, qty %d\\n", payload.OrderID, payload.Quantity)
+}`,
+        fixedCode: `package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+)
+
+// FlexInt decodes from either a JSON number (5) or a JSON string ("5"),
+// normalizing both into a plain int. Isolates the messiness of
+// "numbers sometimes arrive as strings" to a single, well-tested type.
+type FlexInt int
+
+func (f *FlexInt) UnmarshalJSON(data []byte) error {
+	data = bytes.Trim(data, \`"\`) // strip quotes if it was a JSON string
+	if len(data) == 0 || string(data) == "null" {
+		*f = 0
+		return nil
+	}
+	n, err := strconv.Atoi(string(data))
+	if err != nil {
+		return fmt.Errorf("FlexInt: cannot parse %q as integer: %w", data, err)
+	}
+	*f = FlexInt(n)
+	return nil
+}
+
+// FlexFloat does the same for floating-point fields.
+type FlexFloat float64
+
+func (f *FlexFloat) UnmarshalJSON(data []byte) error {
+	data = bytes.Trim(data, \`"\`)
+	if len(data) == 0 || string(data) == "null" {
+		*f = 0
+		return nil
+	}
+	v, err := strconv.ParseFloat(string(data), 64)
+	if err != nil {
+		return fmt.Errorf("FlexFloat: cannot parse %q as float: %w", data, err)
+	}
+	*f = FlexFloat(v)
+	return nil
+}
+
+type WebhookPayload struct {
+	OrderID  FlexInt   \`json:"order_id"\`
+	Quantity FlexInt   \`json:"quantity"\`
+	Price    FlexFloat \`json:"price"\`
+	Status   string    \`json:"status"\`
+}
+
+func webhookHandler(w http.ResponseWriter, r *http.Request) {
+	var payload WebhookPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Both {"quantity": 5} and {"quantity": "5"} now decode identically.
+	fmt.Fprintf(w, "processed order %d, qty %d\\n", int(payload.OrderID), int(payload.Quantity))
+}
+
+func main() {
+	http.HandleFunc("/webhook", webhookHandler)
+	http.ListenAndServe(":8080", nil)
+}`,
+        keyTakeaways: [
+          "encoding/json enforces strict type matching — JSON string \"5\" will NOT decode into a Go int field",
+          "Implement UnmarshalJSON on a custom type to normalize multiple valid JSON encodings into one Go type",
+          "Isolate 'messy real-world data' handling into small, well-tested types rather than scattering string/number checks across business logic",
+          "One malformed field shouldn't necessarily reject an entire payload — design for graceful degradation where the business allows it",
+          "Always test decoders against the ACTUAL payloads partners send in production, not just your idealized schema",
+        ],
+      },
+    ],
+  },
 ];
