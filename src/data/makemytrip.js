@@ -49,14 +49,12 @@ export const MAKEMYTRIP_HLD = {
   phases: [
     {
       id: "search",
-      title: "Phase 1: Search & Aggregation",
-      concepts: [
-        "Multi-source Fan-out",
-        "Fare Cache",
-        "Result Normalization",
-        "Thundering Herd on Sale Launch",
-      ],
-      details: `
+      label: "Phase 1",
+      title: "Search & Aggregation",
+      sections: [
+        {
+          title: "Deep Dive — Concepts & Internals",
+          content: `
 SEARCH AGGREGATION FLOW
 ───────────────────────
 User searches BOM→DEL 15 Jun 2P1C
@@ -105,17 +103,17 @@ Solution:
   3. Jittered TTL: base 15min ± random 0–3min to spread expirations
   4. Auto-scale Search workers from 50 → 500 pods at 11:45 AM via KEDA
 `,
+        },
+      ],
     },
     {
       id: "booking",
-      title: "Phase 2: Booking Saga & PNR Management",
-      concepts: [
-        "Distributed Saga",
-        "Fare Lock (Hold)",
-        "PNR State Machine",
-        "Idempotency",
-      ],
-      details: `
+      label: "Phase 2",
+      title: "Booking Saga & PNR Management",
+      sections: [
+        {
+          title: "Deep Dive — Concepts & Internals",
+          content: `
 BOOKING FLOW CHALLENGE
 ──────────────────────
 Flight booking touches 4 external systems:
@@ -184,17 +182,17 @@ Booking Svc stores: {idemKey → {status, result}} in Redis (24hr TTL)
 Duplicate request within 24hr → return stored result, no re-execution
 Prevents double-booking on client retry after network timeout
 `,
+        },
+      ],
     },
     {
       id: "pricing",
-      title: "Phase 3: Dynamic Pricing & Inventory",
-      concepts: [
-        "Yield Management",
-        "Markup Engine",
-        "Fare Prediction",
-        "Price Alerts",
-      ],
-      details: `
+      label: "Phase 3",
+      title: "Dynamic Pricing & Inventory",
+      sections: [
+        {
+          title: "Deep Dive — Concepts & Internals",
+          content: `
 PRICING LAYERS
 ───────────────
 Displayed price = Supplier base fare
@@ -242,17 +240,17 @@ Real-time seat availability is critical:
   Stored in Redis sorted set: AVAIL:{flightKey} → seats_left
   TTL = 20 min; on expiry → sync job refreshes from supplier
 `,
+        },
+      ],
     },
     {
       id: "cancellation",
-      title: "Phase 4: Cancellation, Refunds & Scale",
-      concepts: [
-        "Cancellation Policy Engine",
-        "Refund Saga",
-        "Peak Scale",
-        "Observability",
-      ],
-      details: `
+      label: "Phase 4",
+      title: "Cancellation, Refunds & Scale",
+      sections: [
+        {
+          title: "Deep Dive — Concepts & Internals",
+          content: `
 CANCELLATION POLICY ENGINE
 ───────────────────────────
 Policy varies by: airline × fare family × hours before departure
@@ -307,6 +305,8 @@ SLOs:
   Booking success:     99.95% (21 min downtime/month)
   Payment success:     99.99% (4 min downtime/month)
 `,
+        },
+      ],
     },
   ],
 };
