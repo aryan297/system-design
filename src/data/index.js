@@ -18,6 +18,7 @@ import { DYNAMODB_HLD, DYNAMODB_LLD, DYNAMODB_QNA } from "./dynamodb";
 import { CLAUDECODE_HLD, CLAUDECODE_LLD, CLAUDECODE_QNA } from "./claudecode";
 import { NPCI_HLD, NPCI_LLD, NPCI_QNA } from "./npci";
 import { MAKEMYTRIP_HLD, MAKEMYTRIP_LLD, MAKEMYTRIP_QNA } from "./makemytrip";
+import { DISTRICT_HLD, DISTRICT_LLD, DISTRICT_QNA } from "./district";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -140,6 +141,12 @@ const REGISTRY = {
     hld: MAKEMYTRIP_HLD,
     lld: MAKEMYTRIP_LLD,
     qna: MAKEMYTRIP_QNA,
+  },
+  district: {
+    meta: { icon: "🏘️", color: "#16A34A" },
+    hld: DISTRICT_HLD,
+    lld: DISTRICT_LLD,
+    qna: DISTRICT_QNA,
   },
 };
 

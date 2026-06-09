@@ -139,4 +139,11 @@ export const SYSTEMS = [
     description: "Online travel agency — 100+ airline GDS connections, booking saga, dynamic pricing, refund engine",
     color: "#E03A3C",
   },
+  {
+    id: "district",
+    name: "District",
+    icon: "🏘️",
+    description: "Hyperlocal community platform — address-verified neighbours, locality feed, safety alerts, local business discovery",
+    color: "#16A34A",
+  },
 ];
