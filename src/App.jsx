@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import PWABadge from "./components/PWABadge";
+import Analytics from "./components/Analytics";
 import Home from "./pages/Home";
 import SystemHLD from "./pages/SystemHLD";
 import SystemLLD from "./pages/SystemLLD";
@@ -33,6 +34,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <PWABadge />
+      <Analytics />
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Home />} />

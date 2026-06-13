@@ -16,7 +16,9 @@ PayPal's stack is largely Java-based microservices on their own infrastructure (
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                   API GATEWAY / CDN (Akamai)                        │
+│       SERVICE MESH — Envoy sidecar attached to every service        │
 │         Auth · Rate Limiting · DDoS Protection · Routing            │
+│    mTLS · Load Balancing · Retries · Circuit Breaking · Tracing     │
 └──┬──────────────┬──────────────┬─────────────────┬─────────────────┘
    │              │              │                 │
    ▼              ▼              ▼                 ▼
@@ -108,6 +110,63 @@ MICRO-DEPOSIT VERIFICATION:
   User confirms the amounts in PayPal app → bank account verified
   Without verification: can only receive, not send via ACH`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before designing Payment Service, Fraud & Risk Service, and the Data Layer, pin down the numbers — they decide whether you're building a connection pool or a fleet.
+
+ASSUMPTIONS:
+  • $1.5T/year payment volume, 250 TPS average, 2,500+ TPS at peak (10x)
+  • 430M active accounts, 45M merchant accounts
+  • Fraud check budget: < 500ms synchronous (blocks payment confirmation), ML inference < 20ms
+  • New-seller fund hold: 21 days; full chargeback dispute window: 180 days
+  • Chargeback rate ~0.1% of transactions, average chargeback ~$150
+  • Webhook delivery: ~50M events/day, retries up to 8 attempts over 3 days
+
+1. AVERAGE TRANSACTION SIZE:
+   $1.5T ÷ (250 TPS × 86,400s/day × 365 days) = $1.5e12 ÷ 7.88e9 ≈ $190/transaction
+   → Each transaction writes 2 ledger_entries rows (DEBIT buyer, CREDIT merchant)
+   → 250 TPS avg = 500 ledger inserts/sec avg, 5,000/sec at peak
+   → This is the real write-throughput number for the ledger_entries table on Oracle RAC,
+     not the "250 TPS" headline figure
+
+2. FRAUD & RISK SERVICE CONCURRENCY:
+   2,500 TPS peak × 500ms synchronous fraud-check budget ≈ 1,250 requests in flight at any instant
+   → Sizes the GPU-backed inference fleet: if each GPU node handles ~50 concurrent
+     < 20ms inferences, peak needs ~25 nodes warm and ready — not auto-scaled from zero,
+     because the fraud check sits on the critical path of every checkout
+
+3. ESCROW SIZED BY THE 21-DAY HOLD:
+   Assume ~5% of 45M merchants (2.25M) are "new sellers" under the 21-day hold,
+   each processing a modest ~$200/day average
+   → 2.25M × $200/day × 21 days ≈ $9.45B sitting in held wallet balances at any moment
+   → This is real money the Wallet Service must track correctly in ledger_entries
+     (entry_type covers it, but "available_balance" must exclude it) — a balance-sheet
+     liability, not a throughput number
+
+4. OPEN DISPUTES — A BACKLOG, NOT A RATE:
+   0.1% chargeback rate × 7.88B transactions/year ≈ 7.88M chargebacks/year ≈ 21,600/day
+   ≈ 0.25/sec average — trivially small as a rate
+   → But each dispute sits open for up to ~15 days while evidence is compiled
+   → 21,600/day × 15 days ≈ 324,000 open disputes resident in the disputes table
+     at any given time → THIS is what sizes the Dispute & Resolution Service's
+     database and its automated evidence-compilation worker pool, not the 0.25/sec
+
+5. WEBHOOK BACKLOG DURING A MERCHANT OUTAGE:
+   50M events/day ÷ 86,400s ≈ 580 webhook deliveries/sec average
+   → If a large merchant's endpoint is down for the full 3-day retry window,
+     580/sec × up to 259,200s of retries could mean millions of PENDING rows
+     accumulating in webhook_deliveries for that merchant alone
+   → The (status, next_retry_at) partial index isn't an optimization — it's what
+     keeps that table queryable when one merchant's outage fills it with backlog
+
+INTERVIEW PUNCH LINE:
+"$1.5T/year sounds abstract until you turn it into five numbers: 5,000 ledger writes/sec
+at peak (Data Layer), ~1,250 fraud-check requests in flight at peak (Fraud & Risk Service),
+~$9.45B permanently parked in escrow (Wallet Service balance sheet), ~324,000 open disputes
+resident at any time (Dispute & Resolution Service), and a webhook_deliveries table that can
+swell by millions of rows during a single merchant's multi-day outage. None of these numbers
+are 'the TPS' — they're the actual capacity planning inputs for each box in the diagram."`,
+        },
       ],
     },
     {
@@ -184,6 +243,80 @@ RESERVE ACCOUNTS:
   Merchants with elevated chargeback risk: PayPal holds 10–15% of monthly volume in reserve
   Reserve released after 180-day chargeback window closes with clean record
   High-risk merchants: indefinite reserve (travel, subscriptions, digital goods)`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `PayPal runs thousands of Java microservices across two active-active data centers. A service mesh moves cross-cutting concerns — retries, mTLS, circuit breaking, canary routing — out of application code and into a uniform sidecar layer.
+
+WHY A MESH FITS PAYPAL'S FLEET:
+  Payment Service → Fraud & Risk Service is the highest-stakes, tightest-budget sync hop
+  in the entire system: every one of the 250–2,500 TPS checkout requests blocks on it,
+  with a < 500ms total / < 20ms inference budget.
+
+  Fraud & Risk Service already does staged model rollouts (5% → 25% → 100% traffic) —
+  a mesh-level canary via VirtualService formalizes this instead of bespoke
+  service-discovery logic baked into the fraud client.
+
+  Dispute & Resolution Service needs scoped read access to Fraud & Risk's
+  social-graph/risk-score endpoint (to re-score disputed transactions) but should
+  NEVER be able to call Payment Service's capture endpoints directly — blast-radius
+  separation matters when a service handles refund-adjacent logic.
+
+  Active-active DCs (Arizona/Nevada): the mesh's mTLS and service discovery underpin
+  calls that may cross DC boundaries during failover, without each service needing
+  its own cross-DC TLS and routing logic.
+
+DATA PLANE:
+  Envoy sidecar injected alongside: Payment Service, Checkout Service,
+  Fraud & Risk Service, Dispute & Resolution Service, Wallet & Funding Service,
+  Merchant Service, Webhook Service — every service reachable from API GATEWAY / CDN.
+  Each sidecar handles: mTLS, load balancing, retries, circuit breaking, and emits
+  trace spans for every call.
+
+CONTROL PLANE (Istio):
+  Pushes routing rules, mTLS certs, and canary weights to all sidecars across
+  both DCs. Aggregates telemetry centrally — request volume, latency percentiles,
+  error rates per service pair.
+
+WHAT THIS BUYS PAYPAL SPECIFICALLY:
+  • Circuit breaking on Fraud & Risk Service: if p99 latency exceeds the 500ms budget
+    or error rate spikes, Envoy ejects the unhealthy instance from the load-balancing
+    pool. Payment Service's fraud-check call fails fast to a defined fallback
+    (e.g., default to step-up authentication / REVIEW) instead of hanging the
+    checkout flow until a client-side timeout fires.
+  • Load balancing (LEAST_REQUEST) across Fraud & Risk's GPU-backed inference fleet —
+    important because GPU inference time varies with batch size and model version.
+  • Canary VirtualService for Fraud & Risk Service: formalizes the existing
+    5% → 25% → 100% staged model rollout with header- or weight-based routing,
+    instead of a bespoke feature-flag check inside the fraud client.
+  • AuthorizationPolicy: Dispute & Resolution Service may call
+    fraud-service's /internal/risk/score (read-only re-scoring) but is denied
+    from calling payment-service's /v2/checkout/orders/*/capture.
+  • mTLS on every hop — account data, device fingerprints, and KYB business details
+    never cross the network in plaintext, across either DC.
+  • Distributed tracing ties Checkout → Payment → Fraud → Ledger into one trace,
+    which is exactly what's needed to debug the < 3s checkout latency budget.
+
+DIAGRAM:
+  The SERVICE MESH band inside the API GATEWAY / CDN box covers Payment Service,
+  Checkout Service, Dispute & Resolution, and Fraud & Risk Service — the four
+  services fanning out directly beneath the gateway.
+
+TRADE-OFFS:
+  Oracle RAC (Data Layer) is NOT in the mesh — it's reached via JDBC connection
+  pools, not HTTP/gRPC. Connection-level circuit breaking (HikariCB-style pools)
+  handles DB failure modes; the mesh's outlier detection doesn't apply there.
+
+  External calls — card networks (Visa/Mastercard/ACH), OFAC sanctions screening,
+  carrier tracking APIs (FedEx/UPS), and merchant webhook endpoints — stay OUTSIDE
+  the mesh. These are systems PayPal doesn't operate; their circuit breakers live
+  in per-integration client code, same as before.
+
+  Sidecar latency (~1–2ms) eats into the fraud check's 500ms budget — acceptable
+  here, unlike a sub-50ms hop. The bigger risk is the control plane itself: during
+  a DC failover (Arizona ↔ Nevada), a control-plane partition must not strand
+  sidecars without routing config — they cache last-known-good config and fail
+  open, because financial transactions cannot simply stop.`,
         },
       ],
     },
@@ -1056,6 +1189,176 @@ Settlement payout (daily):
   If net_settlement < 0 (too many chargebacks): debit merchant's bank account
   Settlement file: NACHA ACH file generated → sent to Federal Reserve morning batch`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar config for circuit breaking the fraud-check hop, canary fraud-model rollouts, and zero-trust mTLS between Payment, Checkout, Fraud, and Dispute services",
+      api: `# DestinationRule — circuit breaker + LB for Fraud & Risk Service
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fraud-service-circuit-breaker
+  namespace: prod
+spec:
+  host: fraud-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1000
+      http:
+        http1MaxPendingRequests: 500
+        maxRequestsPerConnection: 10
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+
+---
+# VirtualService — canary rollout for new fraud-model versions
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: fraud-service-canary
+  namespace: prod
+spec:
+  hosts:
+    - fraud-service.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-fraud-model-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: fraud-service.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: fraud-service.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: fraud-service.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 400ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — fraud-service: only payment-service and dispute-service may call risk scoring
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: fraud-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: fraud-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/payment-service"]
+      to:
+        - operation:
+            paths: ["/internal/risk/score"]
+            methods: ["POST"]
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/dispute-service"]
+      to:
+        - operation:
+            paths: ["/internal/risk/score"]
+            methods: ["POST"]
+
+---
+# AuthorizationPolicy — payment-service: only checkout-service may call order capture
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service-capture-restricted
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/checkout-service"]
+      to:
+        - operation:
+            paths: ["/v2/checkout/orders/*/capture"]
+            methods: ["POST"]
+
+---
+# PeerAuthentication — mTLS required for every workload in the mesh
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope:
+  In mesh: payment-service, checkout-service, fraud-service, dispute-service,
+  wallet-service, merchant-service, webhook-service — every workload reachable
+  from API GATEWAY / CDN, across both Arizona and Nevada clusters.
+  Out of mesh: Oracle RAC (Data Layer) — JDBC connection pools, not HTTP/gRPC;
+  card networks, OFAC screening, carrier APIs, and merchant webhook endpoints —
+  external systems PayPal doesn't operate.
+
+Circuit breaking — fraud-service:
+  Every checkout (250 TPS avg, 2,500 TPS peak) blocks on a < 500ms fraud-check
+  call. outlierDetection (consecutive5xxErrors: 5 / interval: 10s) ejects a
+  GPU inference node once it starts timing out or 5xx-ing, before its slowness
+  drags down the shared p99. connectionPool is sized for the ~1,250 concurrent
+  in-flight requests expected at peak (2,500 TPS × 500ms budget) — maxConnections:
+  1000 leaves headroom without overloading a GPU-bound fleet that can't simply
+  scale connections past what the model server can serve.
+
+Load balancing:
+  LEAST_REQUEST across fraud-service replicas matters because GPU inference
+  time is NOT uniform — batch size and model version create variance that
+  round-robin would distribute unevenly, leaving some GPUs idle while others
+  queue.
+
+Canary rollout — fraud model versions:
+  fraudService's internals describe staged rollout: 5% → 25% → 100% traffic
+  for a new model, gated on AUC / chargeback rate / false-decline rate. The
+  VirtualService formalizes the first step (5% via weighted routing, or 100%
+  via the x-fraud-model-canary header for synthetic test traffic) — promoting
+  to 25%/100% is a weight change, not a code deploy.
+
+AuthorizationPolicy — blast-radius separation:
+  dispute-service is allowed to call fraud-service's /internal/risk/score
+  (re-scoring a disputed transaction's original risk signals) but is explicitly
+  NOT authorized to call payment-service's capture endpoint — only
+  checkout-service can trigger a capture. This means a bug or compromise in
+  the dispute-handling code path cannot be used to move money.
+
+mTLS across active-active DCs:
+  PeerAuthentication STRICT mode means account data, device fingerprints, and
+  KYB business details are encrypted on every hop — including calls that cross
+  the Arizona ↔ Nevada boundary during a DC failover, without each service
+  needing its own cross-DC TLS configuration.
+
+Control-plane-down failure mode:
+  Sidecars cache the last-known-good DestinationRule/VirtualService/
+  AuthorizationPolicy config and continue enforcing it if the control plane
+  is unreachable (e.g., during a DC failover). They fail OPEN on routing —
+  traffic keeps flowing on cached config — because halting payment traffic
+  while the control plane reconnects is not an acceptable trade-off for a
+  system processing $47K/second.`,
+    },
   ],
 };
 
@@ -1431,6 +1734,109 @@ LICENSING COMPLIANCE:
       "How do you handle a sanctions list update that matches 1,000 existing PayPal accounts — all must be frozen simultaneously?",
       "A customer moves from the US to the EU. How do you migrate their data to comply with GDPR residency rules?",
       "How do you design the system to add a new country (with unique regulatory requirements) without a full rewrite?",
+    ],
+  },
+  {
+    id: "pq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["PayPal", "Stripe", "Adyen"],
+    question: "PayPal processes $1.5T/year. Walk through the back-of-the-envelope math — what does that actually mean for the Fraud Service, the ledger, and the dispute system?",
+    answer: `The $1.5T/year headline is useless on its own — turn it into per-component numbers.
+
+ASSUMPTIONS:
+  $1.5T/year, 250 TPS average, 2,500+ TPS peak (10x)
+  430M accounts, 45M merchants
+  Fraud check: < 500ms synchronous budget, < 20ms ML inference
+  New-seller hold: 21 days; chargeback rate ~0.1%, avg chargeback ~$150
+
+LEDGER WRITE THROUGHPUT:
+  $1.5T ÷ (250 TPS × 86,400s × 365d) ≈ $190/transaction average
+  Every transaction = 2 ledger_entries rows (DEBIT + CREDIT)
+  → 500 ledger inserts/sec average, 5,000/sec at peak — this is the real
+    write-throughput number for Oracle RAC, not "250 TPS"
+
+FRAUD SERVICE CONCURRENCY:
+  2,500 TPS peak × 500ms fraud-check budget ≈ 1,250 requests in flight at once
+  → Sizes the GPU-backed inference fleet as a fixed warm pool, not
+    autoscaled-from-zero, because it's on the synchronous checkout path
+
+ESCROW SIZE (21-DAY HOLD):
+  ~5% of 45M merchants (2.25M "new sellers") × ~$200/day × 21 days ≈ $9.45B
+  → A balance-sheet liability the Wallet Service must track in
+    ledger_entries — not a throughput number at all
+
+OPEN DISPUTES BACKLOG:
+  0.1% × 7.88B transactions/year ≈ 21,600 chargebacks/day ≈ 0.25/sec average
+  → But each stays open ~15 days → ~324,000 disputes resident in the
+    disputes table at any time — sizes the DB and evidence-compilation
+    worker pool, not the per-second rate
+
+PUNCH LINE:
+"5,000 ledger writes/sec at peak, ~1,250 in-flight fraud checks, ~$9.45B
+permanently in escrow, and ~324,000 open disputes resident at any time —
+four very different numbers hiding inside one $1.5T/year headline, each
+sizing a different box in the diagram."`,
+    followups: [
+      "If the average transaction size doubled overnight (e.g., PayPal wins a large B2B segment), which of these five numbers changes and which stays the same?",
+      "How would you validate the '~5% of merchants are new sellers under hold' assumption against real data before using it for capacity planning?",
+      "The dispute backlog estimate assumes a flat 15-day average resolution time — how would seasonal disputes (post-holiday returns) break that assumption?",
+    ],
+  },
+  {
+    id: "pq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["PayPal", "Stripe", "Adyen"],
+    question: "PayPal runs thousands of Java microservices across active-active data centers. How would you use a service mesh, and what would you change in the diagram?",
+    answer: `A service mesh moves retries, mTLS, circuit breaking, and canary routing out of application code into a uniform Envoy sidecar layer — critical when the riskiest hop is also the most frequent one.
+
+WHY IT FITS HERE:
+  Payment Service → Fraud & Risk Service is the highest-stakes sync call in the
+  system: every one of the 250–2,500 TPS checkouts blocks on it within a
+  < 500ms budget. Fraud & Risk already does staged model rollouts (5% → 25% →
+  100%) — a mesh-level canary formalizes that instead of bespoke client logic.
+
+DATA PLANE:
+  Envoy sidecar on Payment, Checkout, Fraud & Risk, Dispute & Resolution,
+  Wallet, Merchant, and Webhook services — everything reachable from the
+  API GATEWAY / CDN. Control plane (Istio) pushes routing/mTLS/canary config
+  to sidecars across both Arizona and Nevada clusters.
+
+WHAT IT BUYS:
+  • Circuit breaking on fraud-service: outlierDetection ejects a slow GPU
+    inference node before it drags down the shared p99 — Payment Service's
+    fraud check fails fast to a defined fallback (step-up auth) instead of
+    hanging the checkout flow.
+  • LEAST_REQUEST load balancing across the GPU fleet, where inference time
+    varies by batch size and model version.
+  • Canary VirtualService for fraud-model rollouts — weighted routing or a
+    header (x-fraud-model-canary) replaces the staged-rollout feature flag.
+  • AuthorizationPolicy: dispute-service may call fraud-service's
+    /internal/risk/score (re-scoring disputed transactions) but is denied
+    from calling payment-service's capture endpoint — only checkout-service
+    can trigger a capture.
+  • mTLS (PeerAuthentication STRICT) on every hop, including cross-DC calls
+    during failover.
+
+DIAGRAM CHANGE:
+  Add a SERVICE MESH band inside the API GATEWAY / CDN box, covering Payment
+  Service, Checkout Service, Dispute & Resolution, and Fraud & Risk Service —
+  the four services fanning out beneath the gateway.
+
+TRADE-OFFS:
+  Oracle RAC stays OUT of the mesh (JDBC pools, not HTTP) — connection-level
+  circuit breakers handle that. External calls (card networks, OFAC, carrier
+  APIs, merchant webhooks) also stay outside — PayPal doesn't operate those
+  endpoints. Sidecar latency (~1-2ms) is acceptable inside the 500ms fraud
+  budget. The control plane must fail OPEN during a DC failover — sidecars
+  run on cached config rather than blocking payment traffic.`,
+    followups: [
+      "How would AuthorizationPolicy need to change if PayPal added a new internal service that needs read access to both payment-service and fraud-service?",
+      "The fraud-model canary is traffic-split at the mesh level — how do you correlate a canary version's chargeback outcomes, which arrive weeks later, back to the specific requests it scored?",
+      "During an Arizona-to-Nevada failover, sidecars are running on cached config — what specific Istio config change (e.g., a new DestinationRule) would NOT take effect until the control plane reconnects, and is that acceptable?",
     ],
   },
 ];

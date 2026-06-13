@@ -16,7 +16,9 @@ Revolut's architecture is event-driven microservices on Kubernetes, with a doubl
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                   API GATEWAY (Kong)                                │
+│       SERVICE MESH — Envoy sidecar attached to every service        │
 │         Auth (JWT) · Rate Limiting · Routing · TLS                  │
+│    mTLS · Load Balancing · Retries · Circuit Breaking · Tracing     │
 └──┬──────────────┬──────────────┬─────────────────┬─────────────────┘
    │              │              │                 │
    ▼              ▼              ▼                 ▼
@@ -113,6 +115,65 @@ FAIR USAGE LIMITS (Free plan):
   Premium: unlimited at interbank rate
   Tracked: Redis counter per user per month, resets on 1st of month`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before sizing the Ledger Service, Redis balance cache, and FX/Fraud services, turn "45M customers, 500M transactions/day" into per-component numbers.
+
+ASSUMPTIONS:
+  • 45M customers, 500M+ transactions/day (estimated)
+  • 30+ currencies supported; every transaction = 2 ledger entries (double-entry)
+  • Card auth budget: < 100ms total, fraud rules engine: < 10ms
+  • FX rate refresh: every 250ms during market hours
+  • Uptime target: 99.99% (< 53 minutes downtime/year)
+  • Free plan FX limit: £1,000/month, tracked via Redis counter per user
+
+1. LEDGER WRITE THROUGHPUT:
+   500M transactions/day ÷ 86,400s ≈ 5,787 TPS average
+   Double-entry → 2 ledger_entries rows per transaction
+   → ~11,570 ledger_entries inserts/sec average
+   → This is the number that drives the Stage 3 sharding decision (rq8):
+     a single PostgreSQL primary cannot sustain ~11.5K inserts/sec indefinitely,
+     hence shard-by-user_id + Saga for cross-shard transfers
+
+2. BALANCE CACHE SIZE:
+   45M customers × ~3 active currency pockets each × 16 bytes/balance ≈ 2.16 GB
+   → Comfortably fits a Redis Cluster (matches rq8's "100M users × 3 currencies
+     × 16 bytes ≈ 5GB" reasoning, scaled down to current size)
+   → Confirms balance:{account_id} can stay an in-memory cache, not a
+     sharded data store, even at 45M customers
+
+3. FX RATE-SERVING LOAD:
+   ~100 actively-quoted currency pairs (out of 30×29/2 ≈ 435 possible),
+   refreshed every 250ms → 100 ÷ 0.25s = 400 rate writes/sec into Redis
+   → The READ load is the real driver: every GET /fx/rate, every cross-currency
+     P2P transfer, and every inline FX conversion during card authorization
+     hits this cache — FX Service must be read-optimized, not write-optimized
+
+4. CARD AUTHORIZATION CONCURRENCY AT PEAK:
+   Assume peak card-auth traffic ≈ 5,000 TPS (commute/lunch peak)
+   5,000 TPS × 100ms budget ≈ 500 authorization pipelines in flight at any instant
+   → Every step (card lookup, fraud rules, balance check, limits check) must be
+     a Redis read — at 500 concurrent pipelines × 4 Redis reads each, that's
+     ~2,000 concurrent Redis ops, which is why step 1-4 specifically avoid
+     PostgreSQL on the hot path
+
+5. FRAUD VELOCITY COUNTER LOAD:
+   5,787 TPS average, each transaction triggers ZADD writes to 2-3 velocity
+   windows (1min / 1h / 24h) → ~14,000-17,000 Redis ZADD ops/sec average,
+   entirely separate from the ledger and balance-cache traffic
+   → This is why the < 10ms fraud rules-engine budget assumes Redis sorted
+     sets, not a database query — at this op rate, anything else would blow
+     the budget on its own
+
+INTERVIEW PUNCH LINE:
+"500M transactions/day becomes five different numbers: ~11,570 ledger writes/sec
+(why the ledger shards), ~2.16GB of balance cache (why Redis Cluster is enough),
+~400 FX rate writes/sec but a much larger read fan-out (why FX Service is
+read-optimized), ~500 concurrent card-auth pipelines at peak (why every
+authorization step is a Redis read), and ~15K velocity ZADD ops/sec (why the
+fraud rules engine can hit its 10ms budget at all). Same load, five different
+capacity-planning answers."`,
+        },
       ],
     },
     {
@@ -189,6 +250,80 @@ DECLINE CODES:
   54: Expired card
   59: Suspected fraud (generic, not shown as "fraud" to avoid tipping off fraudster)
   57: Merchant not permitted (gambling on basic plan, etc.)`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `Revolut's event-driven microservices already lean on Kafka for async communication, but the synchronous calls — Card Auth → Fraud rules, Payment → Ledger, Payment/Card Auth → FX — are where a service mesh earns its place.
+
+WHY A MESH FITS REVOLUT'S FLEET:
+  Card Authorization Service → Fraud Service (rules engine) is the tightest hop
+  in the system: < 10ms inside an overall < 100ms Mastercard-facing budget,
+  on every single card tap.
+
+  Payment Service → Ledger Service is the single most important internal call —
+  every P2P transfer, bank transfer, and FX exchange ends with a ledger write.
+  Phase 6 calls Ledger Service "the one single point of failure we accept" —
+  the mesh can't change that, but it can make every OTHER hop more resilient
+  so failures don't cascade INTO the ledger unnecessarily.
+
+  Fraud Service's async ML model already does canary deploys (5% traffic,
+  per the fraud-detection Q&A) — a mesh-level VirtualService formalizes this
+  instead of a bespoke feature flag in the model-serving client.
+
+  FX Service is called by both Payment Service (FX exchange) and Card
+  Authorization Service (inline conversion during auth) — both need consistent
+  load balancing across FX Service's rate-serving replicas.
+
+DATA PLANE:
+  Envoy sidecar on Account Service, Payment Service, Card Authorization
+  Service, FX Service, Fraud Service, and Ledger Service — every service
+  inside and beneath the API GATEWAY's fan-out.
+
+CONTROL PLANE (Istio, multi-region):
+  Matches Revolut's active-active regions (EU primary, US, Singapore, UK).
+  Routing rules and mTLS certs are pushed to sidecars in all four regions —
+  but the mesh does NOT override Ledger Service's single-writer invariant
+  (phase 6): ledger writes still route to the primary region regardless of
+  which region the request entered through.
+
+WHAT THIS BUYS REVOLUT SPECIFICALLY:
+  • Circuit breaking on Fraud Service's rules-engine endpoint: a tight
+    outlierDetection window ejects a replica the moment its p99 creeps
+    toward the 10ms budget, before it can blow the card auth's 100ms total.
+  • LEAST_REQUEST load balancing across Ledger Service write replicas and
+    FX Service's rate-serving replicas — both are called by multiple
+    upstream services and need even distribution.
+  • Canary VirtualService for Fraud Service's async ML model — formalizes
+    the existing 5% → full staged rollout with weighted routing.
+  • AuthorizationPolicy: only Payment Service and FX Service may call
+    Ledger Service's /internal/ledger/entries. Card Authorization Service
+    never calls Ledger Service directly in its synchronous path (it only
+    touches Redis) — the mesh enforces this as policy, not just convention.
+  • mTLS on every hop across all four regions — account data, KYC details,
+    and balances never cross the network in plaintext.
+  • Distributed tracing across Account → Payment → Fraud → Ledger, useful
+    for debugging both the < 100ms auth path and Saga-based cross-shard
+    transfers.
+
+DIAGRAM:
+  Ties to the SERVICE MESH band already shown inside the API GATEWAY (Kong)
+  box, covering Account, Payment, FX, and Fraud & Risk Service — plus the
+  Ledger Service beneath them, which also runs an Envoy sidecar even though
+  it isn't part of the gateway's direct fan-out.
+
+TRADE-OFFS:
+  The < 10ms Fraud Service hop is genuinely tight — sidecar latency (~1-2ms)
+  is a meaningful fraction of that budget, the same tension NPCI's Fraud
+  Engine faces. Revolut can choose to keep the sidecar (and budget for it
+  explicitly in the 100ms total) or run that one hop without injection.
+
+  Redis Cluster and PostgreSQL are NOT in the mesh — different protocol,
+  handled by client-side connection pools and Redis Cluster's own
+  topology-aware routing.
+
+  Control plane must survive a region failover: sidecars cache last-known
+  config and fail open, because halting card authorizations while the
+  control plane reconnects would violate the 99.99% uptime target.`,
         },
       ],
     },
@@ -948,6 +1083,174 @@ Spending limits by KYC tier:
   Tier 2 (document verified): £5,000/day, £25,000/month
   Tier 3 (enhanced due diligence): custom limits for high-value customers`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar config for circuit breaking the < 10ms fraud-rules hop, load balancing Ledger and FX Service, and canary rollout of the fraud ML model",
+      api: `# DestinationRule — circuit breaker + LB for Fraud Service rules engine
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fraud-service-circuit-breaker
+  namespace: prod
+spec:
+  host: fraud-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 2000
+      http:
+        http1MaxPendingRequests: 1000
+        maxRequestsPerConnection: 20
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+
+---
+# DestinationRule — load balancing for Ledger Service (every payment ends here)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: ledger-service-lb
+  namespace: prod
+spec:
+  host: ledger-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 5000
+      http:
+        http1MaxPendingRequests: 2000
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary rollout for new fraud ML model versions
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: fraud-service-canary
+  namespace: prod
+spec:
+  hosts:
+    - fraud-service.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-fraud-model-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: fraud-service.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: fraud-service.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: fraud-service.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 8ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — ledger-service: only Payment Service and FX Service may write entries
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: ledger-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: ledger-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/payment-service"]
+      to:
+        - operation:
+            paths: ["/internal/ledger/entries"]
+            methods: ["POST"]
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/fx-service"]
+      to:
+        - operation:
+            paths: ["/internal/ledger/entries"]
+            methods: ["POST"]
+
+---
+# PeerAuthentication — mTLS required for every workload in the mesh
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope:
+  In mesh: account-service, payment-service, card-auth-service, fx-service,
+  fraud-service, ledger-service — across all four regions (EU primary, US,
+  Singapore, UK).
+  Out of mesh: Redis Cluster and PostgreSQL — different protocol, handled by
+  client-side connection pools and Redis Cluster's topology-aware routing.
+
+Circuit breaking — fraud-service:
+  The rules engine has a < 10ms budget inside the card-auth's < 100ms total.
+  outlierDetection uses a tighter window than the typical 10s/30s default —
+  interval: 5s / baseEjectionTime: 15s — ejecting a degrading replica fast
+  enough that it can't eat into the 10ms budget across many requests before
+  removal. connectionPool (maxConnections: 2000) is sized against the ~500
+  concurrent card-auth pipelines expected at peak (each pipeline makes one
+  fraud-rules call).
+
+Load balancing — ledger-service:
+  Every payment, FX exchange, and P2P transfer ends with a write to
+  ledger-service — at ~11,570 ledger_entries inserts/sec average (from the
+  back-of-envelope estimation), even distribution across replicas via
+  LEAST_REQUEST avoids hot-replica skew that would otherwise show up as
+  tail latency on the ledger write, the one hop phase 6 says cannot fail.
+
+Canary rollout — fraud ML model:
+  The fraud-detection Q&A describes a 5% canary → full rollout for new
+  model versions. The VirtualService formalizes the 5% step as a weighted
+  route (and the x-fraud-model-canary header for synthetic test traffic) —
+  promoting to 100% is a weight change, not a redeploy.
+
+AuthorizationPolicy — enforcing the Redis-fast-path invariant:
+  card-auth-service's synchronous path (Step 1-5 in its internals) never
+  touches ledger-service directly — it works entirely against Redis-cached
+  balances and writes a hold, not a ledger entry. The AuthorizationPolicy
+  makes this explicit: only payment-service and fx-service are permitted
+  to call /internal/ledger/entries. If a future change accidentally added
+  a direct ledger call from card-auth-service, the mesh would reject it
+  rather than silently allowing a new write path to the most sensitive
+  service in the system.
+
+mTLS across four regions:
+  PeerAuthentication STRICT means account data, KYC details, and balances
+  are encrypted on every hop, including cross-region calls — without each
+  service managing its own cross-region TLS configuration.
+
+Control-plane-down failure mode:
+  Sidecars cache the last-known-good DestinationRule/VirtualService/
+  AuthorizationPolicy config and continue enforcing it if the control plane
+  is unreachable during a region failover. They fail OPEN on routing —
+  halting card authorizations while the control plane reconnects would
+  violate the 99.99% uptime target (< 53 min/year).`,
+    },
   ],
 };
 
@@ -1322,6 +1625,113 @@ CACHING STRATEGY AT SCALE:
       "How do you migrate from a single-shard to multi-shard ledger without downtime?",
       "How do you handle account statement generation for a user with 10,000 transactions/year?",
       "At 100M customers, how do you ensure nightly reconciliation completes in time?",
+    ],
+  },
+  {
+    id: "rq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Revolut", "Monzo", "Wise"],
+    question: "Revolut has 45M customers and 500M+ transactions/day. Walk through the back-of-the-envelope math — what does that mean for the ledger, the balance cache, and the fraud rules engine?",
+    answer: `"500M transactions/day" is a headline. The capacity-planning numbers live one level down.
+
+ASSUMPTIONS:
+  45M customers, 500M+ transactions/day, 30+ currencies
+  Double-entry → 2 ledger entries per transaction
+  Card auth budget < 100ms, fraud rules engine < 10ms
+
+LEDGER WRITE THROUGHPUT:
+  500M ÷ 86,400s ≈ 5,787 TPS average
+  × 2 (double-entry) ≈ 11,570 ledger_entries inserts/sec average
+  → This is the number that forces Stage 3 sharding (shard by user_id +
+    Saga for cross-shard transfers) — a single PostgreSQL primary can't
+    sustain ~11.5K inserts/sec forever
+
+BALANCE CACHE SIZE:
+  45M customers × ~3 active currency pockets × 16 bytes ≈ 2.16GB
+  → Fits comfortably in a Redis Cluster — confirms balance:{account_id}
+    stays an in-memory cache even at this scale
+
+CARD AUTH CONCURRENCY AT PEAK:
+  ~5,000 TPS peak × 100ms budget ≈ 500 authorization pipelines in flight
+  → Each pipeline does ~4 Redis reads (card lookup, fraud rules, balance,
+    limits) → ~2,000 concurrent Redis ops — this is why none of those
+    steps can touch PostgreSQL
+
+FRAUD VELOCITY COUNTER LOAD:
+  5,787 TPS average × 2-3 velocity windows (1min/1h/24h) per transaction
+  ≈ 14,000-17,000 Redis ZADD ops/sec average
+  → Entirely separate from ledger writes and balance cache reads — this
+    is the load the < 10ms fraud rules budget has to absorb
+
+PUNCH LINE:
+"One number — 500M/day — becomes four sizing decisions: ~11,570 ledger
+writes/sec (why the ledger shards), ~2.16GB balance cache (why Redis
+Cluster is enough), ~500 concurrent card-auth pipelines (why every auth
+step is a Redis read, never Postgres), and ~15K velocity ZADD ops/sec
+(why the fraud rules engine needs Redis sorted sets to hit 10ms)."`,
+    followups: [
+      "If Revolut's transaction volume doubled in a year, which of these four numbers would break first?",
+      "How would you validate the '~3 active currency pockets per user' assumption with real usage data?",
+      "The estimate assumes 2-3 velocity windows per transaction — how would adding a 7-day window change the Redis sizing?",
+    ],
+  },
+  {
+    id: "rq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Revolut", "Monzo", "Stripe"],
+    question: "Revolut's services already use Kafka for async events. Where does a service mesh fit for the synchronous calls, and what would you change in the diagram?",
+    answer: `A service mesh handles the synchronous hops Kafka doesn't — Card Auth → Fraud, Payment → Ledger, and FX lookups — moving retries, mTLS, and circuit breaking into a uniform Envoy sidecar layer.
+
+WHY IT FITS HERE:
+  Card Authorization Service → Fraud Service (rules engine) has a < 10ms
+  budget inside the overall < 100ms card-auth SLA — the tightest hop in
+  the system, on every card tap.
+  Payment Service → Ledger Service is the single most important internal
+  call: every payment ends with a ledger write, and phase 6 calls Ledger
+  Service "the one single point of failure we accept" — the mesh makes
+  every OTHER hop more resilient so failures don't cascade into it.
+  Fraud Service's async ML model already does 5% canary rollouts — a
+  mesh VirtualService formalizes this.
+
+DATA PLANE:
+  Envoy sidecar on Account, Payment, Card Authorization, FX, Fraud, and
+  Ledger services — across all four active-active regions (EU, US,
+  Singapore, UK).
+
+WHAT IT BUYS:
+  • Circuit breaking on fraud-service with a tight outlierDetection window
+    (interval: 5s / baseEjectionTime: 15s) — ejects a degrading replica
+    before it eats into the 10ms budget.
+  • LEAST_REQUEST load balancing on ledger-service (~11,570 writes/sec
+    average) and fx-service's rate-serving replicas.
+  • Canary VirtualService for the fraud ML model — formalizes the
+    existing 5% → 100% staged rollout.
+  • AuthorizationPolicy: only payment-service and fx-service can call
+    ledger-service's /internal/ledger/entries — card-auth-service's
+    synchronous path is Redis-only and the mesh enforces that as policy.
+  • mTLS (PeerAuthentication STRICT) across all four regions.
+
+DIAGRAM CHANGE:
+  The SERVICE MESH band already shown inside the API GATEWAY (Kong) box
+  covers Account, Payment, FX, and Fraud & Risk Service — extend sidecar
+  injection to Ledger Service beneath them too, since it's the
+  highest-volume internal call target.
+
+TRADE-OFFS:
+  The < 10ms fraud-rules hop is genuinely tight — sidecar latency (~1-2ms)
+  is a real fraction of that budget, same tension as NPCI's Fraud Engine.
+  Redis Cluster and PostgreSQL stay out of the mesh (different protocol).
+  The mesh does NOT change Ledger Service's single-writer invariant —
+  writes still route to the primary region. Control plane must fail open
+  during a region failover to protect the 99.99% uptime target.`,
+    followups: [
+      "If the mesh's circuit breaker ejects the only healthy fraud-service replica during a regional incident, what should card-auth-service do?",
+      "How would you extend the AuthorizationPolicy if a new 'Scheduled Payments' service needed to write to the ledger?",
+      "The fraud-service canary is traffic-split at the mesh level — how do you correlate a canary version's outcomes (which may surface as chargebacks weeks later) back to the specific requests it scored?",
     ],
   },
 ];

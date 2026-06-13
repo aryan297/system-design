@@ -27,7 +27,9 @@ Other hard problems: hyperlocal search (relevant restaurants within delivery rad
                            ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                  API GATEWAY (Kong / AWS ALB)                           │
+│         SERVICE MESH — Envoy sidecar attached to every service          │
 │     Auth (JWT/OTP) · Rate Limiting · Geo-routing · WebSocket Upgrade    │
+│      mTLS · Load Balancing · Retries · Circuit Breaking · Tracing       │
 └───┬──────────┬───────────┬──────────────┬────────────────┬──────────────┘
     │          │           │              │                │
     ▼          ▼           ▼              ▼                ▼
@@ -122,6 +124,64 @@ INTELLIGENT MENU CURATION:
   Popular items section: top 5 ordered items from that restaurant in your area
   Trending dishes: items frequently ordered together (frequently bought together graph)
   Previously ordered: if you ordered from this restaurant before, your past items shown first`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before designing the dispatch and tracking pipelines in later phases, it helps to derive the actual request rates these systems must sustain — both on an average day and during the 7-9 PM dinner rush.
+
+ASSUMPTIONS:
+  100M monthly active users, 3M+ orders/day average (5M+ on peak days)
+  Dinner rush (7-9 PM) generates ~5x the off-peak instantaneous order rate
+  350K delivery partners, GPS ping every 5 seconds while on a delivery
+  350K restaurants, heartbeat every 60 seconds
+  Avg total delivery cycle (assignment → delivered) ≈ 30 minutes (1,800s)
+  ~3 search queries per placed order (browsing before deciding)
+
+THE FIVE DERIVATIONS:
+
+1. Order placement rate:
+   3,000,000 orders/day ÷ 86,400s ≈ 34.7 orders/sec average
+   At 5x dinner-rush rate ≈ 173.5 orders/sec
+   → Sizes Order Service's Postgres write throughput — and lines up with
+   the "170 writes/sec at peak" figure used for database write-pressure planning.
+
+2. Concurrent active deliveries — Little's Law:
+   concurrent_orders = arrival_rate × time_in_system
+   Average: 34.7 × 1,800s ≈ 62,460 orders simultaneously "in flight"
+   At 5x dinner peak: 173.5 × 1,800s ≈ 312,300 — against a fleet of only
+   350K delivery partners!
+   → This is the real reason "partner slots" (guaranteed-supply incentive
+   contracts) and surge pricing exist: at dinner peak, nearly the ENTIRE
+   partner fleet needs to be simultaneously engaged just to keep up.
+
+3. GPS ping ingestion at peak:
+   ~312,300 partners actively delivering ÷ 5s ping interval ≈ 62,460 pings/sec
+   → This is remarkably close to the documented "70K writes/second" figure
+   for Cassandra (350K partners × 12 pings/min), confirming that figure
+   already assumes near-total fleet utilisation at peak — exactly the
+   scenario derivation #2 predicts.
+
+4. Customer WebSocket fanout:
+   Assume ~60% of customers with an active order keep the tracking screen open
+   312,300 × 0.6 ≈ 187,400 concurrent WebSocket connections at peak
+   Each receiving a push every 5s → ~37,480 messages/sec
+   → Sizes the WebSocket server fleet and the number of Redis pub/sub
+   channels (order:{order_id}:location) active simultaneously.
+
+5. Search query load:
+   3M orders/day × ~3 searches/order ≈ 9M searches/day ≈ 104 QPS average
+   At 5x dinner peak ≈ 520 QPS
+   → Comfortably inside the <50ms total query budget (geo-filter + text
+   match + availability filter + ranking) described in the search architecture.
+
+INTERVIEW PUNCH LINE:
+  "The single most useful number here is #2 — at dinner-rush peak, Little's
+  Law says ~312K of Zomato's 350K delivery partners need to be simultaneously
+  mid-delivery just to clear the order backlog. That's not a side detail —
+  it's WHY partner-slot incentive contracts and zone-based surge pricing are
+  load-bearing parts of the design, not just nice-to-have UX features. And it
+  cross-checks: derivation #3 reproduces the documented 70K writes/sec
+  Cassandra figure almost exactly, starting from the order-rate headline alone."`,
         },
       ],
     },
@@ -338,6 +398,82 @@ CANCELLATION NOTIFICATIONS:
   Customer cancels after restaurant started cooking → restaurant notified immediately
   Reason shown: customer's cancellation reason (changed mind, wrong order, etc.)
   If auto-cancelled (restaurant didn't respond): restaurant gets low responsiveness mark`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `Zomato runs six core services behind the API Gateway: Order Service, Search Service, Dispatch Service, Restaurant Service, Tracking Service, and Payment Service. Each gets an Envoy sidecar, turning cross-service networking concerns (retries, mTLS, load balancing, circuit breaking) into infrastructure config instead of per-service code.
+
+WHY A MESH FITS HERE:
+  Restaurant Service has the highest fan-in — every search result, every
+  menu fetch, and the 3-minute order-acceptance flow all hit it.
+  Dispatch Service holds a 30-second in-flight partner-offer window — the
+  same "don't eject a replica mid-offer" shape seen in ride-hailing dispatch.
+  Tracking Service is stateful: GPS ingestion + WebSocket pushes every 5
+  seconds, the same shape as a live-location service.
+  Payment Service should only ever be called by Order Service — a clean
+  case for mesh-level access control, not just code review discipline.
+
+DATA PLANE: Envoy sidecar on all 6 services — Order, Search, Dispatch,
+Restaurant, Tracking, Payment. (Review Service stays out — it's an async,
+non-latency-critical write path.)
+
+CONTROL PLANE: Istio deployed PER METRO CLUSTER (West: Mumbai/Pune/
+Ahmedabad, North: Delhi-NCR, South: Bangalore/Chennai/Hyderabad, East:
+Kolkata, ...) — with 800+ cities, per-city control planes would be
+unmanageable, but a single global one would make Delhi's control plane
+issue take down Bangalore too. Metro clusters group nearby cities that
+already share delivery-partner and restaurant pools.
+
+WHAT THIS BUYS, CONCRETELY:
+
+1. Restaurant Service — TIGHT circuit breaking (outlierDetection,
+   interval: 5s, baseEjectionTime: 15s). With the highest fan-in of any
+   service, a single bad replica needs to be ejected fast — before Search
+   Service's <50ms budget or the order-acceptance flow's 3-minute window
+   start absorbing retries against it.
+
+2. Dispatch Service — LOAD BALANCING ONLY, explicitly NO outlierDetection.
+   Each replica holds in-flight 30-second partner-offer state; an
+   Envoy-triggered ejection would orphan that offer mid-flight. Same
+   pattern as the dispatch/matching services in the ride-hailing and
+   q-commerce designs in this series.
+
+3. Tracking Service — also LOAD BALANCING ONLY, no outlierDetection.
+   GPS ingestion (every 5s) and WebSocket pushes (every 5s) are
+   long-lived, stateful connections per active delivery — ejecting a
+   replica drops live tracking sessions for everyone connected to it.
+
+4. VirtualService canary on Dispatch Service — ships changes to the
+   partner-scoring formula (distance_score and reliability_score, where
+   reliability = 0.4×on_time_rate + 0.3×acceptance_rate + 0.3×rating) to
+   5% of assignment traffic via a header-matched subset before full rollout.
+
+5. AuthorizationPolicy restricting Payment Service's intent-creation and
+   charge/refund endpoints to Order Service's identity ONLY — independent
+   of application code, no other service can move money.
+
+6. mTLS (STRICT) + distributed tracing across all 6 services — every
+   internal hop, including the dispatch and tracking hot paths, is
+   encrypted and traced automatically.
+
+WHAT STAYS OUT:
+  Kafka (Event Bus), PostgreSQL, Redis, Elasticsearch, Cassandra, S3,
+  ClickHouse, and Review Service — none are mesh-manageable synchronous
+  hops on the order-placement or tracking critical paths.
+
+TRADE-OFFS:
+  Sidecar adds ~1-2ms per hop. Against the < 2s order-placement SLA this
+  is negligible — unlike some services in this series where the sidecar
+  tax eats a double-digit percentage of the budget, here it's noise.
+  Existing app-level circuit breakers ("if restaurant service has error
+  rate > 5% → circuit open → return cached menu") operate at a different
+  granularity than mesh-level outlierDetection: the app-level breaker
+  trips on whole-service error rate and falls back to a cached response;
+  the mesh-level breaker ejects a single bad REPLICA and transparently
+  retries against a healthy one. They're complementary, not redundant.
+  Control-plane-down means sidecars fail open on last-known config — at
+  metro-cluster granularity, this limits the blast radius of any single
+  control-plane incident to one region's cities.`,
         },
       ],
     },
@@ -942,6 +1078,196 @@ CREATE TABLE reviews (
   INDEX (customer_id, created_at DESC)
 );`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Sidecar Configuration",
+      description: "Per-metro-cluster Istio mesh: Restaurant Service circuit breaking, Dispatch/Tracking LB-only, partner-scoring canary, payment-access AuthorizationPolicy",
+      api: `# Istio configuration — applied per metro cluster (west-prod, north-prod, ...)
+
+# 1. Restaurant Service — tight circuit breaking.
+#    Highest fan-in of any service: every search result, menu fetch, and
+#    the 3-minute order-acceptance flow depends on it.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: restaurant-service-circuit-breaker
+  namespace: west-prod
+spec:
+  host: restaurant-service.west-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 10000
+      http:
+        http1MaxPendingRequests: 5000
+        maxRequestsPerConnection: 100
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# 2. Dispatch Service — load balancing ONLY, no outlier ejection.
+#    Each replica holds in-flight 30-second partner-offer state; ejecting
+#    a replica mid-offer would orphan it and force re-assignment.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: dispatch-service-lb
+  namespace: west-prod
+spec:
+  host: dispatch-service.west-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 3000
+      http:
+        http1MaxPendingRequests: 1500
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# 3. Tracking Service — load balancing ONLY, no outlier ejection.
+#    GPS ingestion and WebSocket pushes (every 5s) are stateful
+#    connections per active delivery; ejecting a replica drops live
+#    tracking sessions.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: tracking-service-lb
+  namespace: west-prod
+spec:
+  host: tracking-service.west-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 6000
+      http:
+        http1MaxPendingRequests: 3000
+        maxRequestsPerConnection: 200
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# 4. Canary new partner-scoring weights (distance_score vs reliability_score,
+#    where reliability = 0.4×on_time_rate + 0.3×acceptance_rate + 0.3×rating)
+#    against live acceptance-rate and on-time-delivery metrics.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: dispatch-service-canary
+  namespace: west-prod
+spec:
+  hosts:
+    - dispatch-service.west-prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-dispatch-scoring-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: dispatch-service.west-prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: dispatch-service.west-prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: dispatch-service.west-prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: 5xx,reset,connect-failure
+---
+# 5. Payment integrity — only Order Service may create payment intents
+#    or trigger charges/refunds.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service-access
+  namespace: west-prod
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/west-prod/sa/order-service"]
+      to:
+        - operation:
+            paths: ["/internal/payments/intent", "/internal/payments/charge", "/internal/payments/refund"]
+            methods: ["POST"]
+---
+# 6. mTLS within the metro cluster
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: west-prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope (6 services, matching the LLD components):
+  IN MESH:  Order Service, Search Service, Dispatch Service, Restaurant
+            Service, Tracking Service, Payment Service
+  OUT:      Review Service (async, non-latency-critical write path),
+            Kafka (Event Bus), PostgreSQL, Redis, Elasticsearch, Cassandra,
+            S3, ClickHouse — none are synchronous hops Envoy can apply L7
+            policy to.
+
+Restaurant Service circuit breaking — sized against fan-in:
+  From Back-of-the-Envelope Estimation: ~104 search QPS average (~520 QPS
+  at 5x dinner peak), each search hitting Restaurant Service's
+  availability/menu data, PLUS every order-acceptance call during the
+  3-minute restaurant-response window. outlierDetection (interval: 5s /
+  baseEjectionTime: 15s) ejects a single bad replica fast — before retries
+  against it eat into either the <50ms search budget or the 3-minute
+  acceptance SLA.
+  This is COMPLEMENTARY to the existing app-level breaker ("if restaurant
+  service has error rate > 5% → circuit open → return cached menu"): the
+  mesh layer handles per-replica health and transparent reroute; the app
+  layer handles whole-service exhaustion and falls back to a cached
+  response. Different granularities, same goal.
+
+Dispatch & Tracking — LB-only, the same reasoning as the dispatch and
+location services elsewhere in this series: both hold per-order or
+per-delivery STATE across multiple requests (a 30-second partner offer; a
+live GPS/WebSocket session). outlierDetection would eject a replica based
+on 5xx rate, but a replica mid-offer or mid-stream isn't "unhealthy" from
+the caller's perspective — ejecting it actively breaks an in-flight
+operation. LEAST_REQUEST spreads NEW offers/connections without disturbing
+active ones. Tracking Service's connection pool (maxConnections: 6000) is
+sized larger than Dispatch's, reflecting derivation #4's ~187,400
+concurrent WebSocket connections at peak spread across many replicas.
+
+Canary — tied to the two-stage scoring formula in the Dispatch Service LLD:
+  final_score = 0.4 × distance_score + 0.6 × reliability_score
+  reliability_score = 0.4×on_time_rate + 0.3×acceptance_rate + 0.3×rating
+  Re-weighting any of these five coefficients changes which partner gets
+  offered first — a high-risk change to ship blind. perTryTimeout: 10s
+  leaves headroom for one retry within the 30-second offer window.
+
+Payment AuthorizationPolicy:
+  Only Order Service's mesh identity can create payment intents or trigger
+  charges/refunds — independent of application code. This closes off an
+  entire class of "some other service accidentally calls the payment API"
+  bugs at the infrastructure layer.
+
+mTLS & control-plane topology:
+  Istio runs PER METRO CLUSTER (west-prod, north-prod, south-prod,
+  east-prod, ...), grouping the 800+ cities into a handful of regional
+  control planes — granular enough to contain a control-plane incident to
+  one region, coarse enough to be operable. Sidecars fail open on
+  last-known config if the local control plane drops, consistent with the
+  < 2s order-placement SLA having ample headroom for the ~1-2ms sidecar tax.`,
+    },
   ],
 };
 
@@ -1172,5 +1498,142 @@ CIRCUIT BREAKERS:
   If Elasticsearch is slow → return Redis-cached restaurant list for the user's zone
   If payment service is down → queue orders, retry every 5s, inform customer
   If dispatch service is slow → hold orders in FOOD_READY state with manual ops escalation`,
+  },
+  {
+    id: "zomq6",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Zomato", "Swiggy", "DoorDash"],
+    question: "Walk through the back-of-the-envelope math for Zomato's scale — how many delivery partners are actually active during dinner rush, and what does that tell you about the design?",
+    answer: `This is a Little's Law problem dressed up as a capacity question, and the answer ends up explaining why two specific design choices exist.
+
+ASSUMPTIONS:
+  100M MAU, 3M+ orders/day average (5M+ on peak days)
+  Dinner rush (7-9 PM) generates ~5x the off-peak instantaneous order rate
+  350K delivery partners, GPS ping every 5 seconds while on a delivery
+  Avg total delivery cycle (assignment → delivered) ≈ 30 minutes (1,800s)
+  ~3 search queries per placed order
+
+THE FIVE DERIVATIONS:
+
+1. Order placement rate:
+   3,000,000 ÷ 86,400s ≈ 34.7 orders/sec average
+   At 5x dinner rush ≈ 173.5 orders/sec
+   → Sizes Order Service's Postgres writes; matches the "170 writes/sec at
+   peak" figure used elsewhere for database write-pressure planning.
+
+2. Concurrent active deliveries (Little's Law) — the headline result:
+   concurrent = arrival_rate × time_in_system
+   Average: 34.7 × 1,800s ≈ 62,460 orders in flight
+   At 5x dinner peak: 173.5 × 1,800s ≈ 312,300 — against a total fleet of
+   only 350K delivery partners.
+   → At dinner peak, ~89% of the ENTIRE partner fleet needs to be
+   simultaneously mid-delivery. That's not a detail — it's the reason
+   "partner slots" (guaranteed-supply contracts for peak hours) and
+   zone-based surge pricing exist as core design elements, not optional polish.
+
+3. GPS ping ingestion at peak:
+   312,300 ÷ 5s ≈ 62,460 pings/sec
+   → Nearly identical to the documented "70K writes/second" Cassandra
+   figure (350K partners × 12/min) — that figure already assumes
+   near-total fleet utilisation, which derivation #2 shows is exactly
+   what happens at dinner peak.
+
+4. Customer WebSocket fanout:
+   ~60% of active-order customers keep tracking open: 312,300 × 0.6 ≈ 187,400
+   Each pushed every 5s → ~37,480 messages/sec
+   → Sizes the WebSocket server fleet and Redis pub/sub channel count.
+
+5. Search query load:
+   3M × 3 ÷ 86,400s ≈ 104 QPS average, ~520 QPS at 5x peak
+   → Comfortably inside the <50ms search latency budget.
+
+INTERVIEW PUNCH LINE:
+  "Derivation #2 is the one to lead with: at dinner-rush peak, ~89% of the
+  entire 350K-partner fleet is simultaneously mid-delivery. Once you see
+  that number, 'partner slots' and zone-based surge pricing stop looking
+  like UX features and start looking like load-bearing capacity planning —
+  without them, there's no way to clear the backlog. And derivation #3
+  shows the math is self-consistent: it reproduces the documented 70K
+  writes/sec Cassandra figure starting from nothing but the order-rate headline."`,
+    followups: [
+      "If the average delivery cycle dropped from 30 minutes to 22 minutes (faster dispatch + better routing), how would that change the concurrent-partner number — and would it actually relieve the dinner-rush crunch?",
+      "How would you validate the '~60% of customers keep tracking open' assumption from production data, and what would you do differently if it were actually 90%?",
+      "The 70K writes/sec Cassandra figure assumes near-total fleet utilisation — what happens to that pipeline during OFF-PEAK hours when utilisation is much lower? Is there a cost concern?",
+    ],
+  },
+  {
+    id: "zomq7",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Deep Dive",
+    asked_at: ["Zomato", "Swiggy", "Uber Eats"],
+    question: "Zomato already has app-level circuit breakers (e.g. 'if restaurant service error rate > 5%, return cached menu'). Would you put a service mesh on top, and what would it concretely change?",
+    answer: `Yes — and the key is that the mesh operates at a different granularity than the existing app-level breakers, not as a replacement for them.
+
+WHY A MESH FITS HERE:
+  Restaurant Service has the highest fan-in of any service — every search
+  result, menu fetch, and the 3-minute order-acceptance flow depends on it.
+  Dispatch Service holds a 30-second in-flight partner-offer window.
+  Tracking Service is stateful: GPS ingestion + WebSocket pushes every 5s.
+  Payment Service should only ever be called by Order Service.
+
+DATA PLANE: Envoy sidecar on 6 services — Order, Search, Dispatch,
+Restaurant, Tracking, Payment. Review Service stays out (async, not
+latency-critical).
+
+CONTROL PLANE: Istio PER METRO CLUSTER (West, North, South, East, ...) —
+with 800+ cities, per-city control planes don't scale, but a single global
+one makes one region's incident everyone's incident. Metro clusters group
+cities that already share delivery-partner and restaurant pools.
+
+WHAT THIS CONCRETELY CHANGES:
+
+1. Restaurant Service — TIGHT circuit breaking (outlierDetection,
+   interval: 5s, baseEjectionTime: 15s). A single bad replica gets ejected
+   in seconds, before its errors compound across search, menu fetch, and
+   acceptance flows simultaneously.
+
+2. Dispatch Service and Tracking Service — LOAD BALANCING ONLY, explicitly
+   NO outlierDetection. Both hold per-request state (a 30s offer; a live
+   GPS/WebSocket session) that ejection would orphan. LEAST_REQUEST
+   spreads new work without touching in-flight operations.
+
+3. VirtualService canary on Dispatch Service — ships changes to the
+   partner-scoring formula (0.4×distance_score + 0.6×reliability_score) to
+   5% of traffic via header-matched subsets, with perTryTimeout: 10s
+   leaving room for one retry inside the 30s offer window.
+
+4. AuthorizationPolicy on Payment Service — restricts intent-creation and
+   charge/refund endpoints to Order Service's mesh identity only,
+   independent of application code.
+
+5. mTLS (STRICT) + tracing across all 6 services automatically.
+
+HOW THIS RELATES TO THE EXISTING APP-LEVEL BREAKER:
+  "If restaurant service error rate > 5% → circuit open → return cached
+  menu" operates on WHOLE-SERVICE error rate and falls back to a cached
+  response — a business-logic decision about what to show the user.
+  The mesh-level outlierDetection operates on PER-REPLICA health and
+  transparently reroutes to a healthy replica — an infrastructure decision
+  the application never sees. These are complementary: the mesh layer
+  usually prevents the app-level breaker from ever tripping, by routing
+  around bad replicas before whole-service error rate climbs.
+
+WHAT STAYS OUT:
+  Kafka, PostgreSQL, Redis, Elasticsearch, Cassandra, S3, ClickHouse,
+  Review Service.
+
+TRADE-OFFS:
+  ~1-2ms sidecar tax per hop is negligible against the <2s order-placement
+  SLA. Control-plane-down means sidecars fail open on cached config — at
+  metro-cluster granularity, a control-plane incident is contained to one
+  region's cities, not all 800+.`,
+    followups: [
+      "Walk through what happens — at both the mesh layer and the app layer — when one Restaurant Service replica starts timing out during dinner rush.",
+      "Why explicitly exclude Review Service from the mesh? What would change if review submissions started showing up in production incident timelines?",
+      "If you were rolling this mesh out metro-cluster by metro-cluster, which one would you pick first, and what would you watch before expanding to the next?",
+    ],
   },
 ];

@@ -15,7 +15,9 @@ Three planes: Control (trip lifecycle, auth, billing), Real-Time (location track
                          ▼                    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │                    API GATEWAY  (Kong / Envoy)                       │
+│        SERVICE MESH — Envoy sidecar attached to every service        │
 │           Auth · Rate Limiting · Routing · Load Balancing            │
+│     mTLS · Load Balancing · Retries · Circuit Breaking · Tracing     │
 └──┬──────────────┬───────────────┬────────────────┬───────────────────┘
    │              │               │                │
    ▼              ▼               ▼                ▼
@@ -115,6 +117,60 @@ Uber's solution — Redis geospatial index:
    • Consumed by analytics (heatmaps, supply forecasting)
    • Consumed by fraud detection (impossible speed checks)`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, size the system. Five numbers explain almost every architectural choice on this diagram.
+
+ASSUMPTIONS:
+• 130M MAU, 25M+ trips/day
+• 5M active drivers at peak, each sending a location ping every 4s → 1.25M updates/sec
+• Match SLA < 30s; Dispatch Engine offers each driver a 15s window before moving to the next
+• Average trip duration ≈ 15 minutes
+• H3 resolution 8 → ~0.74 km² per hexagon; surge recomputed every 60s per hexagon
+• 70+ countries / 10,000+ cities, but only ~500 cities have meaningfully active demand at any given moment
+
+1. TRIP REQUEST RATE
+   25M trips/day ÷ 86,400s ≈ 289 trips/sec average
+   Peak hours / event surges run 10-50× average → ~2,900-14,500 trips/sec
+   → This is the write rate Trip Service's PostgreSQL (sharded by city) and the
+     Dispatch Engine's matching loop must sustain end-to-end.
+
+2. DISPATCH OFFER VOLUME
+   First-choice driver accepts roughly half the time → ~2 offers sent per trip on average
+   289 trips/sec × 2 ≈ 578 offers/sec average, ~29,000 offers/sec at peak
+   Each offer is a push notification with a 15s expiry
+   → Sizes Notification Service's push-delivery throughput (FCM/APNs) — it must
+     clear each batch of offers well inside the 15s window or matches start timing out.
+
+3. LOCATION INGEST → KAFKA PARTITIONING
+   1.25M updates/sec × ~100 bytes/update ≈ 125 MB/sec into topic driver-locations
+   At 50 partitions → 125MB/sec ÷ 50 ≈ 2.5 MB/sec/partition
+   → Comfortably inside a single broker's ~10MB/sec/partition ceiling, confirming
+     50 partitions leaves ~4× headroom before repartitioning is needed.
+
+4. CONCURRENT TRIPS — RESIDENT COUNT, NOT EVENT RATE
+   Average trip duration ≈ 15 min → concurrent in-flight trips ≈
+     25M/day × (15min ÷ 1440min) ≈ 260,000 trips active at any instant
+   Trip trajectories are persisted roughly every 30s (not every 4s — that
+     granularity is only for the live geo-index)
+   260,000 ÷ 30s ≈ 8,700 writes/sec to Cassandra's driver_location_history table
+   → Two orders of magnitude below the raw 1.25M/sec figure, because Cassandra
+     stores trip history, not live position — the Redis geo-index absorbs the rest.
+
+5. SURGE CALCULATOR LOAD
+   A mid-size city (~3,700 km²) at H3 res-8 (~0.74 km²/hex) ≈ 5,000 hexagons
+   Recomputing supply/demand every 60s = 2 Redis reads/hex ÷ 60s ≈ 167 ops/sec/city
+   Across ~500 cities with active demand → ~83,500 ops/sec globally
+   → Small enough to run as a dedicated background job fleet, fully decoupled
+     from the latency-critical Redis geo-index that GEORADIUS hits on every match.
+
+Interview punch line: "289 trips/sec average (up to 14,500 at peak) sizes Trip
+Service's sharded Postgres. ~578-29,000 offers/sec sizes push delivery within the
+15s offer window. 125MB/sec ÷ 50 partitions = 2.5MB/sec keeps Kafka comfortable.
+260,000 concurrent trips — not 1.25M raw pings — is what Cassandra actually writes.
+And the 83,500 ops/sec surge calculator runs as its own job fleet, never touching
+the geo-index Redis that the match path depends on."`,
+        },
       ],
     },
     {
@@ -172,6 +228,88 @@ Benefits:
 • Consistent cell sizes globally (vs lat/lng which vary by latitude)
 • Fast polygon lookup: "which hexagon is this coordinate in?" = O(1)
 • Hierarchical aggregation: resolution 8 → 7 → 6 for zooming out`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `The API Gateway secures and routes EDGE traffic (rider/driver apps → backend).
+But the diagram's real complexity is in the SERVICE-TO-SERVICE hops the gateway never sees —
+and those hops sit directly inside the <30s match SLA.
+
+WHY A MESH FITS HERE:
+• During one dispatch loop, the Dispatch Engine calls Maps/ETA Service for
+  road_eta_seconds for up to ~50 nearby candidate drivers — and the whole
+  scoring pass has to land well inside the 15s offer window. One slow or
+  unhealthy Maps/ETA replica can stall every in-flight match, not just one trip.
+• Trip Service → Payment Service (charge on COMPLETED), Dispatch Engine →
+  Notification Service (push offers), and Location Service's WebSocket fan-out
+  to 5M drivers are all internal calls with very different reliability needs.
+• Cell Architecture (see "Reliability & Scale") already isolates each city/region
+  into its own DB shard, Redis cluster, and Kafka cluster — the mesh should
+  mirror that boundary instead of cutting across it.
+
+DATA PLANE:
+Envoy sidecar attached to: Trip Service, Location Service, Matching Service
+(Dispatch Engine), Pricing Service, Payment Service, Notification Service,
+and Maps/ETA Service — 7 services, matching the diagram's fan-out.
+
+CONTROL PLANE:
+Istio, deployed PER CELL — the Mumbai cell runs its own istiod, the São Paulo
+cell runs its own, etc. A control-plane hiccup in one city can never affect
+dispatch in another. Sidecars cache the last-known config and fail open if
+their local control plane is briefly unreachable.
+
+WHAT THIS BUYS:
+1. Maps/ETA Service gets TIGHT circuit breaking (outlierDetection,
+   interval: 5s / baseEjectionTime: 15s). It's called up to 50× per dispatch
+   loop with a sub-100ms-per-call budget — eject a misbehaving replica fast,
+   recheck it often.
+2. Dispatch Engine gets LOAD BALANCING ONLY — no outlierDetection. Each
+   replica holds in-flight 15s offer state for active trips; an
+   Envoy-triggered ejection mid-loop would orphan those offers and force a
+   re-match. LEAST_REQUEST spreads new dispatch loops across healthy replicas
+   without touching ones mid-flight.
+3. A VirtualService canary on Dispatch Engine routes 5% of traffic (or
+   anything carrying an internal canary header) to a build running new
+   w1-w4 scoring weights — A/B-testing a scoring change against the live
+   match-rate / cancellation-rate metrics before a full rollout.
+4. An AuthorizationPolicy on Payment Service allows charge/refund calls
+   ONLY from Trip Service. Dispatch Engine, Location Service, and
+   Notification Service can never reach the payment path — even if a bug or
+   a compromised dependency tried, the mesh blocks it before it reaches code.
+5. A second AuthorizationPolicy formalizes CELL ISOLATION at the mesh layer:
+   Trip/Location/Dispatch/Pricing/Notification/Maps-ETA may only be called
+   from within their own cell namespace (or the edge gateway). Payment
+   Service is the one exception — driver payouts settle weekly across
+   whatever cells a driver operated in, so it's reachable cross-cell.
+6. mTLS + distributed tracing across every hop — when a match takes 28
+   seconds instead of 3, tracing shows whether the time went to GEORADIUS,
+   scoring, Maps/ETA, or the push to the driver's phone.
+
+DIAGRAM:
+The SERVICE MESH band sits inside API GATEWAY at the top — every box below
+it (Trip Service, Location Service, Matching Service, Pricing Service,
+Dispatch Engine, Payment Service, Maps/ETA, Notification Service) runs an
+Envoy sidecar. Redis (geo idx) and the DATA LAYER (PostgreSQL, Cassandra,
+Redis, S3, Kafka) are untouched — they're not HTTP/gRPC services the mesh
+can apply L7 policy to.
+
+TRADE-OFFS:
+• Redis geo-index (GEOADD/GEORADIUS) stays OUT of the mesh. Location Service
+  talks to it directly over a Redis client connection — at 1.25M updates/sec,
+  adding a sidecar hop to the system's single hottest path buys nothing.
+• PostgreSQL, Cassandra, Kafka, S3 — out, same reasoning as every service
+  in this series: not HTTP/gRPC, mesh policy doesn't apply.
+• Location Service's WebSocket connections (driver location streaming) get
+  LB-only with NO outlier ejection — exactly like Dispatch Engine. Ejecting
+  a replica would drop active WebSocket connections and force a chunk of the
+  5M-driver fleet to reconnect simultaneously.
+• Sidecar latency (~1-2ms/hop) is negligible against the 30s match SLA — but
+  the Maps/ETA breaker's 15s ejection window is deliberately SHORTER than the
+  SLA, so an eject-and-recover cycle can complete within a single dispatch
+  attempt rather than spanning two.
+• Control-plane-down fail-open is non-negotiable: with 1.25M location
+  updates/sec and a 99.99% availability target, sidecars must keep routing
+  on cached config even if istiod in a cell is temporarily unreachable.`,
         },
       ],
     },
@@ -863,6 +1001,210 @@ Refund flow:
   → Stripe refund API → UPDATE charges SET status='refunded'
   → Publish to payment-events for reconciliation`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Sidecar Configuration",
+      description: "Per-cell Istio mesh: circuit breaking, LB, canary scoring, payment blast-radius isolation, cell-boundary enforcement",
+      api: `# Istio configuration — applied per cell namespace (mumbai-prod, sao-paulo-prod, ...)
+
+# 1. Maps/ETA Service — tight circuit breaking.
+#    Called up to ~50x per dispatch loop (one road_eta_seconds lookup per
+#    candidate driver) with a sub-100ms-per-call budget. One bad replica
+#    can stall every in-flight match, so eject fast and recheck often.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: maps-eta-service-circuit-breaker
+  namespace: mumbai-prod
+spec:
+  host: maps-eta-service.mumbai-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 8000
+      http:
+        http1MaxPendingRequests: 4000
+        maxRequestsPerConnection: 100
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# 2. Dispatch Engine — load balancing ONLY, no outlier ejection.
+#    Each replica holds in-flight 15s offer state for active trips;
+#    an Envoy-triggered ejection mid-loop would orphan those offers
+#    and force a re-match.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: dispatch-engine-lb
+  namespace: mumbai-prod
+spec:
+  host: dispatch-engine.mumbai-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 3000
+      http:
+        http1MaxPendingRequests: 1500
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# 3. Canary new dispatch scoring weights (w1-w4) on 5% of traffic, or
+#    100% for requests carrying the internal canary header — lets the
+#    team A/B-test a scoring change against live match-rate /
+#    cancellation-rate before a full rollout.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: dispatch-engine-canary
+  namespace: mumbai-prod
+spec:
+  hosts:
+    - dispatch-engine.mumbai-prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-dispatch-scoring-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: dispatch-engine.mumbai-prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: dispatch-engine.mumbai-prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: dispatch-engine.mumbai-prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 2s
+        retryOn: 5xx,reset,connect-failure
+---
+# 4. Payment Service — only Trip Service may charge or refund. Dispatch
+#    Engine, Location Service, and Notification Service can never reach
+#    these endpoints, even if a bug or compromised dependency tried.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service-access
+  namespace: mumbai-prod
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/mumbai-prod/sa/trip-service"]
+      to:
+        - operation:
+            paths: ["/internal/payments/charge", "/internal/payments/refund"]
+            methods: ["POST"]
+---
+# 5. Cell isolation — formalizes "Cell Architecture: City-Level Isolation"
+#    at the mesh layer. Trip/Location/Dispatch/Pricing/Notification/
+#    Maps-ETA may only be reached from within their own cell namespace
+#    or from the edge gateway. Payment Service is the one cross-cell
+#    exception: weekly driver payouts settle across whatever cells a
+#    driver operated in during the pay period.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: cell-isolation-policy
+  namespace: mumbai-prod
+spec:
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            namespaces: ["mumbai-prod"]
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/edge/sa/api-gateway"
+              - "cluster.local/ns/global/sa/payment-service"
+---
+# 6. mTLS within every cell namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: mumbai-prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope (7 services, matching the diagram's fan-out):
+  IN MESH:  Trip Service, Location Service, Matching Service (Dispatch
+            Engine), Pricing Service, Payment Service, Notification
+            Service, Maps/ETA Service
+  OUT:      Redis (geo idx), PostgreSQL, Cassandra, Kafka, S3 — none of
+            these are HTTP/gRPC services Envoy can apply L7 policy to,
+            and the geo-index Redis in particular sits on the 1.25M
+            updates/sec hot path where a sidecar hop buys nothing.
+
+Maps/ETA circuit breaking — the math:
+  Average dispatch rate ≈ 289/sec, peak ≈ 14,500/sec (see Back-of-the-
+  Envelope Estimation). Each dispatch loop scores up to ~50 candidates,
+  each needing a road_eta_seconds lookup from Maps/ETA.
+  Worst case: 14,500/sec × 50 ≈ 725,000 ETA lookups/sec at extreme peak.
+  In practice candidate sets are usually far smaller (5km radius rarely
+  has 50 available drivers), but the SAME replica pool absorbs whatever
+  fan-out a given second produces. A 5xx-error spike on one replica
+  under that load can saturate it in well under 5s — hence
+  interval: 5s / baseEjectionTime: 15s, deliberately SHORTER than the
+  30s match SLA so an eject-and-recover cycle fits inside one attempt.
+
+Dispatch Engine — LB-only, the same reasoning as Stripe's Payment
+Orchestrator and TikTok's Live Streaming Service in this series:
+  Each replica is mid-flight on active dispatch loops holding 15s offer
+  state in Redis. outlierDetection would eject a replica based on 5xx
+  rate — but a replica serving slow Maps/ETA responses isn't "down", and
+  ejecting it mid-loop means the rider's match silently restarts. LB-only
+  (LEAST_REQUEST) spreads NEW dispatch loops across replicas without
+  touching ones already in flight.
+
+Canary — tied to the scoring function:
+  score = w1·(1/ETA) + w2·acceptance_rate + w3·rating + w4·accept_bonus
+  Changing w1-w4 changes which driver gets the offer first — a high-risk
+  change to ship blind. The canary routes a slice of dispatch traffic to
+  a build with new weights; match-rate and cancellation-rate are compared
+  against the 95% baseline before promoting v2 to 100%.
+
+Payment Service AuthorizationPolicy — blast radius:
+  Only Trip Service calls /internal/payments/charge and
+  /internal/payments/refund, and only on trip state COMPLETED. This is
+  enforced at the mesh layer, independent of application code — even a
+  bug in Dispatch Engine or Notification Service that constructs a
+  payment request can never reach Payment Service's listener.
+
+Cell isolation AuthorizationPolicy — formalizing an existing invariant:
+  "Reliability & Scale" already gives each city/region its own Postgres
+  shard, Redis cluster, and Kafka cluster — a Mumbai outage shouldn't
+  touch São Paulo. This policy makes that boundary explicit at L7: every
+  service in mumbai-prod only accepts traffic from mumbai-prod or the
+  edge gateway. Payment Service is the single exception, reachable
+  cross-cell, because its weekly payout batch reconciles a driver's
+  earnings across every cell they drove in that week.
+
+mTLS & control-plane topology:
+  Istio runs PER CELL — Mumbai's istiod is independent of São Paulo's, so
+  a control-plane issue in one city never propagates to dispatch in
+  another. PeerAuthentication STRICT enforces mTLS on every in-mesh hop
+  within a cell. At 99.99% availability with 1.25M location updates/sec
+  in flight, sidecars MUST fail open (cached last-known config) if their
+  local control plane briefly drops — matching is too time-sensitive to
+  block on a control-plane health check.`,
+    },
   ],
 };
 
@@ -1313,6 +1655,100 @@ ACTIONS (graduated response):
       "How do you avoid false positives that punish legitimate drivers?",
       "How would you design the human review queue for flagged accounts?",
       "GPS signals are unreliable in tunnels — how do you distinguish tunnel gaps from fraud?",
+    ],
+  },
+  {
+    id: "uq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Uber", "Lyft", "Grab"],
+    question: "Walk through the back-of-the-envelope math for Uber — trip rate, dispatch volume, location ingest, and surge calculation. What does each number actually size?",
+    answer: `Five derivations, each tying a number to a box on the diagram.
+
+ASSUMPTIONS: 130M MAU, 25M+ trips/day, 5M active drivers at peak (1 location
+ping every 4s → 1.25M updates/sec), <30s match SLA with a 15s offer window,
+average trip ≈ 15 min, H3 res-8 (~0.74 km²/hex) with surge recomputed every 60s.
+
+1. TRIP REQUEST RATE
+   25M ÷ 86,400s ≈ 289 trips/sec average, ~2,900-14,500/sec at peak
+   → sizes Trip Service's sharded Postgres write path and the rate the
+     Dispatch Engine's matching loop must sustain.
+
+2. DISPATCH OFFER VOLUME
+   ~2 offers/trip on average → 578/sec average, ~29,000/sec at peak, each
+   with a 15s expiry → sizes Notification Service's push throughput.
+
+3. LOCATION INGEST → KAFKA
+   1.25M/sec × ~100 bytes ≈ 125MB/sec ÷ 50 partitions ≈ 2.5MB/sec/partition
+   → ~4× headroom under a broker's ~10MB/sec/partition ceiling.
+
+4. CONCURRENT TRIPS (resident count, not event rate)
+   15min avg trip ÷ 1440min × 25M/day ≈ 260,000 trips active at once.
+   Trajectories persist every 30s → 260,000 ÷ 30 ≈ 8,700 writes/sec to
+   Cassandra — two orders of magnitude below the raw 1.25M/sec figure.
+
+5. SURGE CALCULATOR LOAD
+   ~5,000 hexes/city × 2 Redis reads ÷ 60s ≈ 167 ops/sec/city, ×~500
+   active cities ≈ 83,500 ops/sec — small enough to run as its own job
+   fleet, decoupled from the latency-critical geo-index Redis.
+
+The punch line: the number everyone reaches for first (1.25M updates/sec)
+sizes nothing directly except the Kafka partition count — Cassandra,
+Postgres, push delivery, and the surge job fleet are all sized by
+*derived* numbers (concurrency, offer volume, hex count), not the raw
+ingest rate.`,
+    followups: [
+      "Why is the concurrent-trips number (260,000) the right one for sizing Cassandra, instead of the raw 1.25M location-updates/sec figure?",
+      "A championship final doubles demand in one city for two hours — which of these five numbers breaks first, and what's the mitigation?",
+      "If drivers sent location updates every 1 second instead of every 4, which numbers change and which stay the same?",
+    ],
+  },
+  {
+    id: "uq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Uber", "Lyft", "DoorDash"],
+    question: "Uber already has Kong/Envoy at the API Gateway and Cell Architecture for city-level isolation. Why add a service mesh, and what would you configure with it?",
+    answer: `The gateway secures EDGE traffic; the mesh secures and tunes the
+SERVICE-TO-SERVICE hops behind it — and those hops sit inside the <30s
+match SLA.
+
+DATA PLANE: Envoy sidecar on Trip Service, Location Service, Matching
+Service (Dispatch Engine), Pricing Service, Payment Service, Notification
+Service, and Maps/ETA Service — 7 services.
+
+CONTROL PLANE: Istio deployed PER CELL, mirroring the existing city-level
+DB/Redis/Kafka isolation — Mumbai's istiod is independent of São Paulo's.
+
+WHAT IT BUYS:
+1. Maps/ETA Service — TIGHT circuit breaking (interval: 5s,
+   baseEjectionTime: 15s). Called up to 50× per dispatch loop with a
+   sub-100ms budget; one bad replica can stall every in-flight match.
+2. Dispatch Engine — LB-only, NO outlier ejection. Replicas hold
+   in-flight 15s offer state; ejecting one mid-loop would orphan active
+   offers and force a re-match.
+3. VirtualService canary on Dispatch Engine — A/B-test new w1-w4 scoring
+   weights against live match-rate / cancellation-rate before full rollout.
+4. AuthorizationPolicy on Payment Service — only Trip Service may call
+   /internal/payments/charge or /refund. Dispatch Engine, Location Service,
+   and Notification Service are mesh-blocked from the payment path entirely.
+5. A second AuthorizationPolicy formalizes CELL ISOLATION at L7: every
+   service only accepts traffic from its own cell namespace or the edge
+   gateway — except Payment Service, which is reachable cross-cell because
+   weekly driver payouts settle across every cell a driver drove in.
+
+TRADE-OFFS: Redis geo-index, Postgres, Cassandra, Kafka, and S3 stay OUT —
+not HTTP/gRPC, and the geo-index sits on the 1.25M-updates/sec hot path
+where a sidecar hop helps nothing. Location Service's WebSocket connections
+get the same LB-only treatment as Dispatch Engine, for the same reason
+(ejection would drop live connections). Sidecars must fail open on
+control-plane loss — matching can't block on an istiod health check.`,
+    followups: [
+      "Why does Dispatch Engine get LB-only with no outlier ejection, while Maps/ETA Service gets tight circuit breaking — what's the underlying distinction?",
+      "The cell-isolation policy makes Payment Service the one cross-cell exception — what would break if you removed that exception and made it cell-scoped too?",
+      "An in-flight 15s dispatch offer is active when the cell's istiod goes down for 30 seconds — what happens to it, and why?",
     ],
   },
 ];

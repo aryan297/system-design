@@ -23,17 +23,20 @@ Key technical problems:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │              API GATEWAY  (Kong / AWS ALB + WAF)                        │
 │   JWT Auth · Rate Limit · Geo-IP Header Injection · TLS Termination     │
-└──┬─────────┬──────────┬──────────┬───────────┬──────────┬──────────────┘
-   │         │          │          │           │          │
-   ▼         ▼          ▼          ▼           ▼          ▼
-┌───────┐ ┌──────┐ ┌────────┐ ┌───────┐ ┌──────────┐ ┌──────────────┐
-│ Auth  │ │ Feed │ │  Post  │ │ Event │ │  Alert   │ │  Discovery   │
-│Service│ │Engine│ │Service │ │Service│ │ Service  │ │   Service    │
-└───┬───┘ └──┬───┘ └───┬────┘ └───┬───┘ └────┬─────┘ └──────┬───────┘
-    │        │          │          │           │               │
-    └────────┴──────────┴──────────┴───────────┴───────────────┘
-                                   │
-                                   ▼
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              MICROSERVICES                              │
+│         SERVICE MESH — Envoy sidecar attached to every service          │
+│  ┌───────┐ ┌──────┐ ┌────────┐ ┌───────┐ ┌──────────┐ ┌──────────────┐  │
+│  │ Auth  │ │ Feed │ │  Post  │ │ Event │ │  Alert   │ │  Discovery   │  │
+│  │Service│ │Engine│ │Service │ │Service│ │ Service  │ │   Service    │  │
+│  └───────┘ └──────┘ └────────┘ └───────┘ └──────────┘ └──────────────┘  │
+│      mTLS · Load Balancing · Retries · Circuit Breaking · Tracing       │
+└──────────────────────────┬──────────────────────────────────────────────┘
+                           │
+                           ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                       EVENT BUS (Kafka)                                 │
 │  post.created · alert.triggered · user.verified · reaction.added       │
@@ -139,6 +142,58 @@ BOUNDARY UPDATES:
   PostGIS allows polygon modification — spatial index rebuilds incrementally
   Version-controlled with effective_date so historical queries remain correct`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, pin down scale with rough math — numbers
+aren't graded for precision, they're graded for whether they
+justify the design decisions that follow.
+
+ASSUMPTIONS:
+• Verified users: 5M, DAU/MAU ≈ 42% → ~2.1M DAU
+• Neighbourhoods: 50K polygons → avg ~100 residents each (5M ÷ 50K)
+• Posts per day: 500K, default scope = NEIGHBOURHOOD (push fan-out)
+• Each DAU opens the app ~6×/day → 1 feed read per open
+• Safety alert radius: 2 km; dense urban locality ≈ 5,000 residents/km²
+• Local businesses: 2M+ across the same 50K neighbourhoods
+
+1. Feed read QPS — justifies Redis-backed feed lists + p99 < 300ms
+   2.1M DAU × 6 reads/day = 12.6M feed reads/day ≈ 145 req/sec avg
+   Peak (commute hours, ~4x) ≈ 580 req/sec
+   → LRANGE feed:{user_id} 0 49 must answer this comfortably — the
+     300ms budget is spent on post-hydration, not the list read
+
+2. Fan-out write volume — justifies the Supernode pull-model threshold
+   500K posts/day × 100 avg residents/neighbourhood = 50M LPUSH/day
+   50M ÷ 86,400s ≈ 580 writes/sec avg, peak (~5x) ≈ 2,900 writes/sec
+   → fine for one Feed Fanout Consumer group — but in a 25K+ resident
+     "Supernode" locality, ONE post = 25K+ writes, which is exactly
+     why that locality flips to the shared pull-list model
+
+3. Feed memory footprint — justifies Redis Cluster + 7-day TTL
+   5M users × 1,000 post IDs × 8 bytes ≈ 40 GB steady state
+   LTRIM to 200 during incident spikes → drops to ~8 GB
+   → only ~2.1M DAU keep "warm" feeds (7-day TTL evicts the rest),
+     so a modest Redis Cluster in the DATA LAYER absorbs this easily
+
+4. Safety alert fan-out — justifies the < 5 s delivery SLA
+   Dense locality: 5,000 residents/km² × π × (2 km)² ≈ 63,000 residents
+   GEORADIUS returns 63K user_ids in < 100ms → chunked into 500/batch
+   = 126 batches; at ~50-batch concurrency ≈ 3 parallel waves ≈ 1 s
+   → leaves 4 of the 5 SLA seconds for token lookups + FCM/APNs RTT,
+     which is why Alert Service fans out in parallel batches, not serial
+
+5. Business search index — justifies per-city Elasticsearch sharding
+   2M businesses ÷ 50K neighbourhoods ≈ 40 businesses/neighbourhood avg
+   2M docs × ~1.5 KB/doc (name + service_zones + rating summary) ≈ 3 GB
+   → fits comfortably on a single shard per major city; sharding by
+     city (not globally) keeps "plumber near me" queries fast and local
+
+Interview punch line: every number maps to a box — 2.1M DAU → Feed
+Engine + Redis, 50M fan-out writes/day → Feed Fanout Consumer and the
+Supernode threshold, 63K-user alert radius → Alert Service's batched
+FCM fan-out, 3 GB per-city index → sharded Elasticsearch. State the
+number, then name the component it justifies.`,
+        },
       ],
     },
     {
@@ -183,6 +238,66 @@ ENGAGEMENT SCORING:
 WRITE AMPLIFICATION GUARD:
   If post creator's neighbourhood has > 100K users → use pull model instead of push
   "Supernode" localities: pre-computed neighbourhood timeline, users pull from shared list`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `A service mesh moves cross-cutting networking concerns OUT of
+application code and INTO a sidecar proxy (Envoy) deployed next
+to every service instance. All traffic in/out of a service passes
+through its sidecar first.
+
+WHY A MESH FITS DISTRICT'S FLEET:
+• Six core services (Auth, Feed Engine, Post, Event, Alert,
+  Discovery) plus Location Service all call each other
+  synchronously — e.g. Alert Service and Discovery Service both
+  call Location Service for polygon/geo-radius lookups
+• Feed Engine's ranking formula (recency × engagement_score ×
+  distance_decay) is tuned constantly — needs safe canary rollout
+• Location Service holds address-verification state — needs
+  zero-trust access control, not just network firewalls
+
+1. Data plane — one Envoy sidecar per service instance
+   • iptables transparently redirects all in/out traffic through it
+   • Applies load balancing, retries, timeouts, circuit breaking
+   • Wraps every call in mTLS — zero-trust between services
+   • Emits identical metrics, logs, traces for every service
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Pushes routing rules + policy to every sidecar centrally
+   • "Feed Engine v2 ranking gets 5% canary traffic"
+   • "Retry Location Service 3x with 50ms timeout on 503"
+   • "Only Alert, Post, Discovery may call Location Service" — one
+     AuthorizationPolicy, enforced at every sidecar
+
+WHAT THIS BUYS DISTRICT SPECIFICALLY:
+• Safe ranking experiments — Feed Engine's engagement_score formula
+  can be A/B tested via a weighted canary subset (95/5) without a
+  redeploy, and rolled back instantly if engagement drops
+• Circuit breaking on Location Service — if PostGIS polygon lookups
+  slow down during a civic-incident spike, outlierDetection ejects
+  unhealthy pods so Alert/Discovery fail fast and fall back to
+  cached neighbourhood membership instead of queuing
+• Zero-trust for address data — PeerAuthentication STRICT + an
+  AuthorizationPolicy mean even a compromised pod cannot reach the
+  Location Service unless it presents a valid mesh identity
+• End-to-end tracing — a single "create civic-issue post" request
+  spans Post Service → Location Service (geo-tag) → Event Bus →
+  Feed Fanout / Notif Worker / Search Indexer; Envoy gives one
+  trace ID across every hop
+
+DIAGRAM: the "SERVICE MESH" band wrapping the MICROSERVICES box
+represents this — Auth, Feed Engine, Post Service, Event Service,
+Alert Service, and Discovery Service each have an Envoy sidecar,
+with mTLS / load balancing / retries / circuit breaking / tracing
+applied uniformly across all of them.
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — negligible against the 300ms feed
+  p99 and 5s alert-delivery SLA budgets
+• The control plane becomes a new critical dependency, though
+  sidecars cache last-known config if it goes down
+• Kafka-based async paths (post.created, alert.triggered) bypass
+  the mesh entirely — it only governs synchronous service calls`,
         },
         {
           title: "Post Types & Media Pipeline",
@@ -676,6 +791,124 @@ TABLE business_reviews (
   UNIQUE (business_id, reviewer_id)  -- one review per user per business
 );`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar traffic policy: mTLS, circuit breaking, retries, and canary routing between District's core services",
+      api: `# DestinationRule — circuit-break Location Service under load
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: location-service
+spec:
+  host: location-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp: { maxConnections: 200 }
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 20
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — retries + canary for Feed Engine ranking v2
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: feed-engine
+spec:
+  hosts: ["feed-engine.prod.svc.cluster.local"]
+  http:
+    - match: [{ headers: { x-ranking-canary: { exact: "true" } } }]
+      route:
+        - destination: { host: feed-engine.prod.svc.cluster.local, subset: v2 }
+    - route:
+        - destination: { host: feed-engine.prod.svc.cluster.local, subset: v1 }
+          weight: 95
+        - destination: { host: feed-engine.prod.svc.cluster.local, subset: v2 }
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 100ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — only these services may call Location Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: location-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels: { app: location-service }
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/alert-service"
+              - "cluster.local/ns/prod/sa/post-service"
+              - "cluster.local/ns/prod/sa/discovery-service"
+
+---
+# PeerAuthentication — mesh-wide mTLS
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls: { mode: STRICT }`,
+      internals: `Sidecar injection:
+• Every pod (Auth, Feed Engine, Post, Event, Alert, Discovery,
+  Location Service) gets an Envoy sidecar auto-injected via a
+  Kubernetes mutating webhook — zero application code change
+• Sidecar intercepts traffic via iptables rules in the pod's
+  network namespace
+
+Circuit breaking on Location Service:
+• During a civic-incident spike, Alert and Discovery Service both
+  hammer Location Service's PostGIS polygon queries
+• outlierDetection ejects pods returning >= 5 consecutive 5xx in
+  10s for 30s, with at most 50% of the fleet ejected at once
+• Callers (Alert/Discovery) get fast failures instead of queued
+  timeouts, and fall back to cached neighbourhood membership
+
+Canary rollout — Feed Engine ranking v2:
+1. Deploy feed-engine:v2 alongside v1 (same Kubernetes Service)
+2. Internal testers send x-ranking-canary: true header → routed
+   straight to v2 for manual QA
+3. VirtualService then routes 5% of real traffic to v2
+4. Watch engagement_score distribution + feed p99 latency in
+   Prometheus/Grafana
+5. Shift weight 5% → 25% → 100%, or roll back to 0% by editing
+   one resource — no redeploy either way
+
+mTLS + AuthorizationPolicy for address data:
+• PeerAuthentication STRICT rejects any plaintext traffic between
+  meshed pods — Location Service only accepts mTLS connections
+• AuthorizationPolicy further restricts WHO can call it: only
+  alert-service, post-service, and discovery-service service
+  accounts are allowed — Feed Engine and Auth Service are denied
+  even though they're on the same mesh
+• This enforces "verified address data is need-to-know" at the
+  network layer, on top of the application-level hashing already
+  used for postal verification
+
+Failure mode — control plane down:
+• Sidecars cache the LAST KNOWN DestinationRule/VirtualService/
+  AuthorizationPolicy and keep enforcing it
+• New pods can't fetch sidecar config until the control plane
+  recovers, but existing traffic (including the alert-fanout path)
+  is unaffected — data plane is decoupled from control plane`,
+    },
   ],
 };
 
@@ -929,5 +1162,126 @@ LOAD SHEDDING:
     → only fan-out new posts + safety alerts
   Resume engagement fan-out when lag < 30s
   Users won't notice reaction counts are briefly stale; they will notice missing posts`,
+  },
+  {
+    id: "dq6",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["District", "Nextdoor", "Hyperlocal Startups"],
+    question: "Before drawing any boxes, walk me through a back-of-the-envelope estimation for District — feed reads, fan-out writes, and alert delivery.",
+    answer: `This is the "size the system before you design it" step — every
+number should map to a component in the architecture.
+
+STATE YOUR ASSUMPTIONS FIRST:
+• 5M verified users, DAU/MAU ≈ 42% → ~2.1M DAU
+• 50K neighbourhoods → avg ~100 residents each (5M ÷ 50K)
+• 500K posts/day, default scope = NEIGHBOURHOOD
+• Each DAU opens the app ~6×/day
+• Safety alert radius 2km, dense locality ≈ 5,000 residents/km²
+
+1. Feed read QPS:
+   2.1M DAU × 6 reads/day = 12.6M reads/day ≈ 145 req/sec avg
+   Peak (commute hours, ~4x) ≈ 580 req/sec
+   → this is what the Redis feed:{user_id} lists must sustain at
+     p99 < 300ms; the budget is mostly spent on post-hydration
+
+2. Fan-out write volume:
+   500K posts/day × 100 avg residents = 50M LPUSH/day ≈ 580/sec avg,
+   ~2,900/sec peak (5x)
+   → fine for one Feed Fanout Consumer group, but a 25K+ resident
+     "Supernode" locality turns ONE post into 25K+ writes — that's
+     the trigger for the pull-model fallback
+
+3. Feed memory:
+   5M users × 1,000 post IDs × 8 bytes ≈ 40 GB steady state
+   LTRIM to 200 during spikes → ~8 GB
+   → 7-day TTL means only ~2.1M DAU keep "warm" feeds, so a modest
+     Redis Cluster covers the DATA LAYER comfortably
+
+4. Safety alert fan-out:
+   5,000 residents/km² × π × (2km)² ≈ 63,000 residents in radius
+   GEORADIUS in < 100ms → 63K ÷ 500/batch = 126 batches
+   126 batches at ~50-batch concurrency ≈ 3 waves ≈ 1 second
+   → leaves 4 of the 5-second SLA for token lookups + FCM/APNs RTT
+
+5. Business search index:
+   2M businesses ÷ 50K neighbourhoods ≈ 40/neighbourhood avg
+   2M docs × ~1.5 KB ≈ 3 GB
+   → fits one Elasticsearch shard per major city; sharding by city
+     keeps "near me" queries fast
+
+Tie it together: 2.1M DAU drives Feed Engine + Redis sizing, 50M
+fan-out writes/day justifies the Supernode threshold, 63K-user
+alert radius justifies batched parallel FCM fan-out, and 3 GB
+per-city index justifies city-sharded Elasticsearch. Always close
+by pointing back at the diagram.`,
+    followups: [
+      "How would these numbers change for a city with very dense vertical housing — say 50,000 residents in one 1km² locality?",
+      "If posts/day grew 10x overnight due to a viral feature, which number breaks first and what's the mitigation?",
+      "How do you estimate the Kafka throughput needed for the event bus given these numbers?",
+    ],
+  },
+  {
+    id: "dq7",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["District", "Nextdoor", "Stripe"],
+    question: "District has six core microservices that all call each other — Auth, Feed Engine, Post, Event, Alert, Discovery — plus a Location Service holding sensitive address data. How would you manage cross-service reliability and security at this scale without each team reinventing retries, circuit breakers, and access control?",
+    answer: `Push these cross-cutting concerns into a service mesh — an Envoy
+sidecar deployed next to every service instance, with a central
+control plane (Istio/Consul/AWS App Mesh) pushing policy to all of them.
+
+WHY THIS FITS DISTRICT:
+• All six services plus Location Service call each other
+  synchronously — Alert and Discovery both hit Location Service for
+  polygon/geo-radius lookups
+• Feed Engine's ranking formula changes often — needs safe canary
+  rollout without redeploying
+• Location Service holds address-verification state — needs
+  zero-trust access control, not just a firewall rule
+
+1. DATA PLANE — Envoy sidecar per pod:
+   • iptables transparently redirects in/out traffic through it
+   • Load balancing (LEAST_REQUEST), retries, timeouts, circuit
+     breaking, mTLS — all applied uniformly, zero app code change
+   • Emits identical metrics/logs/traces for every service
+
+2. CONTROL PLANE — Istio pushes policy centrally:
+   • "Feed Engine v2 ranking gets 5% canary traffic"
+   • "Retry Location Service 3x with 50ms timeout on 503"
+   • "Only Alert, Post, Discovery may call Location Service"
+
+WHAT THIS BUYS:
+• Circuit breaking — if Location Service's PostGIS queries slow
+  down during a civic-incident spike, outlierDetection ejects
+  unhealthy pods after 5 consecutive 5xx errors in 10s; Alert and
+  Discovery fail fast and fall back to cached neighbourhood data
+  instead of queuing
+• Canary ranking experiments — deploy feed-engine:v2 alongside v1,
+  route 5% of traffic via VirtualService weights, watch
+  engagement_score + p99 latency, then shift to 25% → 100% or roll
+  back — all by editing one resource, no redeploy
+• Zero-trust for address data — PeerAuthentication STRICT enforces
+  mTLS everywhere, and an AuthorizationPolicy on Location Service
+  allows only alert-service, post-service, and discovery-service
+  principals — even a compromised Feed Engine pod can't reach it
+• End-to-end tracing — one trace ID follows a "create civic-issue
+  post" request across Post → Location Service → Event Bus → Feed
+  Fanout / Notif Worker / Search Indexer
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — negligible vs the 300ms feed p99
+  and 5s alert SLA
+• Control plane becomes a new critical dependency, though sidecars
+  cache last-known config if it's down
+• Kafka-based async paths (post.created, alert.triggered) bypass
+  the mesh — it only governs synchronous calls`,
+    followups: [
+      "How would you roll the mesh out incrementally across six services without a big-bang migration?",
+      "What happens to in-flight requests if the Location Service pod gets ejected by outlierDetection mid-request?",
+      "How would you extend mTLS and AuthorizationPolicy to cover the Cassandra/PostGIS data stores themselves, not just the services?",
+    ],
   },
 ];

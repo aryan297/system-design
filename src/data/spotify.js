@@ -16,7 +16,9 @@ Key architectural bets: event-driven microservices (hundreds of services, all co
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                   API GATEWAY (Apollo / Envoy)                      │
+│       SERVICE MESH — Envoy sidecar attached to every service        │
 │         Auth · Rate Limiting · Routing · Protocol Translation       │
+│    mTLS · Load Balancing · Retries · Circuit Breaking · Tracing     │
 └──┬──────────────┬──────────────┬─────────────────┬─────────────────┘
    │              │              │                 │
    ▼              ▼              ▼                 ▼
@@ -98,6 +100,63 @@ OFFLINE MODE (Premium only):
 • Encrypted with device-specific key (DRM — prevents file sharing)
 • On playback: decrypt in-memory, stream to audio output
 • Key stored in Spotify's license server — if subscription lapses, keys revoked`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before sizing Track Service, the royalty pipeline, the Audio CDN, and the Recommendation Engine, turn "30B streams/day, 600M users" into per-component numbers.
+
+ASSUMPTIONS:
+  • 600M MAU, 30B+ streams/day, 100M tracks in catalog
+  • Each track ≈ 50MB across 5 quality variants (24/96/160/320 kbps + FLAC)
+  • Royalty rule: > 30s play, 1 count per user per track per 24h
+  • Discover Weekly: 600M playlists generated Friday night → Sunday midnight (~36h)
+  • CDN hit rate: 95%+ (top 1% of tracks = 90%+ of streams)
+
+1. STREAM-EVENT THROUGHPUT (Royalty Pipeline):
+   30B streams/day ÷ 86,400s ≈ 347,000 stream-events/sec average
+   → This is the sustained throughput the royalty-events Kafka topic and
+     the Stream Count Service's exactly-once producer must handle —
+     not a peak number, the AVERAGE, because streaming load is fairly
+     constant across a 24h global user base
+
+2. EGRESS BANDWIDTH (Audio CDN vs Origin):
+   30B streams/day × ~4 min × 320 kbps ≈ 115 PB/day (from the storage Q&A)
+   115 PB/day × 8 bits ÷ 86,400s ≈ 10.6 Tbps average egress
+   At 95% CDN hit rate: origin (GCS) serves only the remaining 5%
+   → ~530 Gbps average hitting GCS — still enormous, which is why "top 1M
+     tracks permanently cached at all major PoPs" isn't an optimization,
+     it's the only way origin survives
+
+3. DISCOVER WEEKLY COMPUTE BUDGET:
+   600M users ÷ (36 hours × 3600s) ≈ 4,630 users/sec must be processed
+   On a 200-node Spark cluster: ~23 users/sec/node
+   → Each user requires an ANN lookup over 100M track embeddings (ScaNN/Faiss)
+   → This is the number that justifies pre-computing and caching embeddings
+     in Bigtable rather than computing them on the fly — at 23 ANN queries/sec
+     per node sustained for 36 hours, the index must be resident in memory
+
+4. ROYALTY DEDUP STATE SIZE (Flink):
+   24h dedup window × 347,000 events/sec × 86,400s ≈ 30B stream_event_ids
+   in keyed state at any time, ~36 bytes each (UUID + timestamp)
+   → ≈ 1TB of Flink keyed state (RocksDB backend) — this is what sizes the
+     Flink cluster's local disk per task manager, not the event rate itself
+
+5. CDN PRE-CACHE FOOTPRINT:
+   Top 1M tracks (1% of catalog, 90%+ of streams) × 50MB (5 quality variants)
+   ≈ 50TB of "hot" catalog
+   Permanently replicated across 200+ CDN PoPs → 50TB × 200 ≈ 10PB of
+   redundant storage just for the always-cached top 1%
+   → This 10PB is the real cost of "sub-250ms playback start globally" —
+     it's a storage bill, not a compute one
+
+INTERVIEW PUNCH LINE:
+"30B streams/day decomposes into five very different numbers: ~347K
+stream-events/sec sustained on the royalty Kafka topic, ~10.6 Tbps average
+egress (with ~530 Gbps still hitting GCS origin even at 95% CDN hit rate),
+~4,630 users/sec of ANN lookups for Discover Weekly, ~1TB of Flink keyed
+state for 24h royalty dedup, and ~10PB of redundant CDN storage for the
+top 1% of the catalog. Each number sizes a completely different box in
+the diagram — none of them is 'the streams/day number' directly."`,
         },
       ],
     },
@@ -432,6 +491,78 @@ SLO TARGETS:
   Discover Weekly generation: all 600M playlists by Monday 00:00 UTC
   Royalty accuracy: zero missed streams (exactly-once guaranteed)
   API availability: 99.95% per month`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `The "CIRCUIT BREAKER PATTERN" above describes the BEHAVIOR Spotify wants.
+A service mesh is HOW 800+ services get that behavior without every team
+hand-rolling retry/circuit-breaker logic in 6 different languages.
+
+WHY A MESH FITS:
+  Track Service is called on every playback start — ~347,000 times/sec
+  (30B streams/day ÷ 86,400s). If Track Service degrades, every caller
+  needs the SAME circuit-breaking behavior, instantly, without a redeploy.
+  Hand-rolled circuit breakers drift: the Android client's threshold won't
+  match the internal Playlist Service's threshold. A mesh makes it one
+  config, enforced identically everywhere.
+
+DATA PLANE:
+  Envoy sidecar injected next to Track Service, Metadata Service,
+  Search Service, and Recommendation Engine — the four services the
+  API Gateway fans out to. Every call between them, and every call
+  from the gateway to them, passes through Envoy.
+
+CONTROL PLANE:
+  Istio control plane (Pilot) pushes config to all sidecars:
+    • outlierDetection rules → THIS is the circuit breaker described above,
+      now declarative instead of per-service application code
+    • Load balancing policy across each service's replica pool
+    • mTLS certificates, rotated automatically
+    • Canary routing rules for gradual model/code rollouts
+
+WHAT THIS BUYS SPOTIFY:
+  1. Track Service circuit breaking — at 347K req/sec, a single bad
+     replica (e.g., one with a corrupt CDN-URL cache) gets ejected by
+     outlierDetection in seconds, before it can sour playback-start p99
+  2. Recommendation Engine load balancing — Radio's real-time path
+     (<100ms ANN query) gets LEAST_REQUEST routing across ScaNN/Faiss
+     replicas, so a slow replica doesn't drag down the SLO
+  3. Canary rollouts for ranking/recommendation models — the weekly
+     ALS retrain or a new search-ranking model ships to 5% of traffic
+     via VirtualService weight, exactly like the ML-model canaries used
+     elsewhere, before a full rollout
+  4. Catalog write integrity — AuthorizationPolicy ensures only the
+     Ingestion pipeline can call Metadata Service's internal catalog-write
+     endpoints; Track/Search/Recommendation get read-only access. Licensing
+     data (available_markets) is contractually sensitive — accidental writes
+     from the wrong service is a legal problem, not just a bug
+  5. Tracing — a single playback request crossing API Gateway → Track
+     Service → Metadata Service gets one trace ID, making the <250ms
+     p99 budget debuggable hop-by-hop
+
+DIAGRAM:
+  The SERVICE MESH band inside API GATEWAY (Apollo / Envoy) represents
+  this sidecar layer extending down into Track Service, Metadata Service,
+  Search Service, and Recommendation Engine.
+
+TRADE-OFFS:
+  • Kafka (~trillion events/day) is OUTSIDE the mesh — its security model
+    is SASL/ACLs, and the mesh governs synchronous request/response calls,
+    not the async event bus that is Spotify's "central nervous system"
+  • GCS (audio storage) and the Audio CDN are OUTSIDE the mesh — signed
+    URLs and CDN-edge auth handle access control there; mTLS between
+    Kubernetes pods doesn't apply to object storage
+  • The royalty pipeline's exactly-once guarantee comes from Flink keyed
+    state + idempotent Kafka producers — NOT from mesh retries. A retried
+    mesh call must still hit an idempotent endpoint, or "zero missed
+    streams" becomes "occasionally double-counted streams"
+  • Sidecar adds ~1-2ms per hop — negligible against the 250ms playback
+    budget, but it's one more reason the <100ms Radio path stays mostly
+    inside Recommendation Engine rather than fanning out further
+  • Control-plane-down fails OPEN (sidecars keep last-known config) —
+    consistent with the 99.95% availability target and the chaos-engineering
+    culture described below: a control-plane blip shouldn't take down
+    playback for 600M users`,
         },
         {
           title: "Global Deployment — Serving 180+ Countries",
@@ -941,6 +1072,185 @@ Refresh token rotation:
   Refresh tokens stored in Redis (SET with TTL = 90 days)
   On refresh: lookup old token → if not found (revoked/expired) → re-auth required`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Sidecar Proxy Configuration (Istio)",
+      description: "Circuit breaking, load balancing, canary rollouts, and zero-trust policy for the API Gateway's four core services",
+      api: `# DestinationRule — circuit breaker for Track Service
+# Track Service handles ~347,000 playback requests/sec (30B streams/day)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: track-service-circuit-breaker
+  namespace: prod
+spec:
+  host: track-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 10000
+      http:
+        http1MaxPendingRequests: 5000
+        maxRequestsPerConnection: 100
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+---
+# DestinationRule — pure load balancing for Recommendation Engine
+# Radio's real-time path needs <100ms ANN lookups across ScaNN/Faiss replicas
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: recommendation-engine-lb
+  namespace: prod
+spec:
+  host: recommendation-engine.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 2000
+      http:
+        http1MaxPendingRequests: 1000
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# VirtualService — canary rollout for Search Service ranking model
+# 5% of traffic gets the new ranking model before a full rollout
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: search-service-canary
+  namespace: prod
+spec:
+  hosts:
+    - search-service.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-search-ranking-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 200ms
+        retryOn: 5xx,reset,connect-failure
+---
+# AuthorizationPolicy — only Ingestion can write to the catalog
+# Track/Search/Recommendation get read-only access to Metadata Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: metadata-service-catalog-write-restricted
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: metadata-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/ingestion-service"]
+      to:
+        - operation:
+            paths: ["/internal/catalog/*"]
+            methods: ["POST", "PUT", "DELETE"]
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/prod/sa/track-service
+              - cluster.local/ns/prod/sa/search-service
+              - cluster.local/ns/prod/sa/recommendation-engine
+      to:
+        - operation:
+            paths: ["/api/v1/catalog/*"]
+            methods: ["GET"]
+---
+# PeerAuthentication — mTLS required cluster-wide
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope:
+  IN the mesh: Track Service, Metadata Service, Search Service,
+    Recommendation Engine, Playlist Service, User & Auth Service,
+    Stream Count Service — every service reachable from API GATEWAY
+    or from each other
+  OUT of the mesh: GCS (Audio Storage), Audio CDN (Akamai/Cloudfront),
+    Kafka, PostgreSQL, Cassandra, Redis, Bigtable, BigQuery
+    Rationale: a mesh governs synchronous service-to-service HTTP/gRPC
+    calls between Kubernetes pods. Object storage, CDN edges, and Kafka
+    have their own access-control models (signed URLs, SASL/ACLs) — mTLS
+    between pods doesn't apply
+
+Circuit breaking — Track Service (the 347K req/sec problem):
+  30B streams/day ÷ 86,400s ≈ 347,000 playback requests/sec average
+  At this volume, ONE bad replica (stale CDN-URL cache, slow disk) can
+  start failing thousands of requests/sec before a human notices
+  outlierDetection: 5 consecutive 5xx in a 10s window → eject for 30s,
+  cap ejection at 50% of the pool (never eject the whole fleet at once)
+  This is the SAME pattern the "CIRCUIT BREAKER PATTERN" section describes
+  conceptually — the mesh makes it automatic and identical across all
+  ~347K req/sec, instead of N different client implementations
+
+Load balancing — Recommendation Engine (the <100ms Radio problem):
+  Radio's real-time path does an ANN lookup over 100M track embeddings
+  per request. If LB sends requests round-robin and one replica is mid
+  garbage-collection, that request blows the 100ms budget
+  LEAST_REQUEST routing sends new requests to the replica with the
+  fewest in-flight requests — avoids piling onto an already-slow replica.
+  No outlierDetection here on purpose: a slow ANN replica isn't "down",
+  ejecting it would just concentrate load on the remaining replicas
+
+Canary — Search Service ranking model:
+  Spotify retrains ranking/recommendation models continuously (the ALS
+  model retrains weekly per the Recommendations phase). A bad model
+  doesn't 500 — it returns WORSE rankings, which monitoring can't catch
+  in seconds. The VirtualService sends 5% of traffic to v2 by weight,
+  plus an explicit header (x-search-ranking-canary) for internal QA to
+  force-route to v2 for manual evaluation before the weight shifts
+
+AuthorizationPolicy — catalog write integrity:
+  available_markets and licensing metadata on Metadata Service are
+  contractually sensitive: a track marked available in a market it
+  isn't licensed for is a legal exposure, not just a data bug. The
+  Ingestion pipeline (Track Ingestion phase) is the ONLY service
+  permitted to write /internal/catalog/* — Track Service, Search
+  Service, and Recommendation Engine get read-only /api/v1/catalog/*.
+  This makes "only Ingestion writes the catalog" an enforced mesh rule,
+  not a convention four different teams have to remember
+
+mTLS and control-plane fail-open:
+  PeerAuthentication STRICT means every hop — API Gateway to Track
+  Service, Track Service's calls during playback, Search Service to
+  Metadata Service — is encrypted and mutually authenticated, across
+  all 5 active/active regions (US-East, US-West, EU-West, EU-Central, APAC)
+  If the Istio control plane (Pilot) goes down, sidecars keep serving
+  with their last-known config (fail open) — consistent with the 99.95%
+  availability target. A control-plane blip must never become a playback
+  outage for 600M users`,
+    },
   ],
 };
 
@@ -1280,6 +1590,135 @@ PRE-RELEASE PREPARATION CHECKLIST:
       "Taylor Swift un-lists her entire back catalog again. How do you remove 400 tracks from CDN across 200+ PoPs?",
       "How would you handle exclusive release windows (e.g., first 24 hours on Spotify only)?",
       "What if the album was accidentally released 1 hour early? How do you roll it back?",
+    ],
+  },
+  {
+    id: "sq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Spotify", "Apple Music", "YouTube Music"],
+    question: "30 billion streams a day, 600 million users. Walk me through the back-of-the-envelope numbers — what does that mean for Track Service, the Audio CDN, and the royalty pipeline?",
+    answer: `30B/day is a vanity metric until you divide it by 86,400 seconds and
+multiply it by file sizes. Five numbers actually drive the architecture.
+
+ASSUMPTIONS:
+  • 600M MAU, 30B+ streams/day, 100M tracks (each ~50MB across 5 quality variants)
+  • Royalty rule: >30s play, exactly-once per user per track per 24h
+  • Discover Weekly: 600M playlists generated in a ~36h window (Fri night → Sun midnight)
+  • CDN hit rate 95%+ (top 1% of catalog = 90%+ of streams)
+
+1. STREAM-EVENT THROUGHPUT:
+   30B ÷ 86,400s ≈ 347,000 stream-events/sec average
+   → This is the SUSTAINED rate the royalty Kafka topic and Stream Count
+     Service's exactly-once producer run at, all day, every day — it's
+     not a peak, it's the baseline
+
+2. EGRESS BANDWIDTH:
+   30B streams × ~4 min × 320 kbps ≈ 115PB/day ≈ 10.6 Tbps average
+   At 95% CDN hit rate, ~530 Gbps still reaches GCS origin
+   → That origin number is why the top 1M tracks are PERMANENTLY cached
+     at all 200+ PoPs, not just popular-at-the-moment ones
+
+3. DISCOVER WEEKLY COMPUTE:
+   600M users ÷ 36h ≈ 4,630 users/sec needing an ANN lookup over 100M
+   track embeddings
+   → On a 200-node Spark cluster that's ~23 ANN queries/sec/node sustained
+     for a day and a half — embeddings must be precomputed and resident,
+     not computed per-request
+
+4. ROYALTY DEDUP STATE:
+   347K events/sec × 86,400s × ~36 bytes (UUID+ts) ≈ 1TB of Flink keyed
+   state for the 24h dedup window
+   → Sizes the RocksDB state backend per Flink task manager — a pure
+     throughput number wouldn't tell you this
+
+5. CDN PRE-CACHE FOOTPRINT:
+   1M "hot" tracks × 50MB × 200+ PoPs ≈ 10PB of redundant CDN storage
+   → The cost of sub-250ms playback start globally is a STORAGE bill,
+     not a compute one
+
+INTERVIEW PUNCH LINE:
+"30B streams/day isn't one number — it's ~347K events/sec on Kafka,
+~10.6 Tbps egress with ~530 Gbps still hitting GCS, ~4,630 users/sec of
+ANN lookups for Discover Weekly, ~1TB of Flink state for royalty dedup,
+and ~10PB of CDN pre-cache. Each one sizes a different box, and none of
+them is interchangeable with the others."`,
+    followups: [
+      "If Spotify added a new market and MAU jumped from 600M to 750M overnight, which of these five numbers breaks first?",
+      "The 95% CDN hit-rate assumption — what happens to origin bandwidth if it drops to 85% during a major outage?",
+      "How would you validate the '~23 ANN queries/sec/node' Discover Weekly estimate against real production metrics?",
+    ],
+  },
+  {
+    id: "sq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Spotify", "Netflix", "Uber"],
+    question: "Spotify's 'Circuit Breaker Pattern' section describes services calling each other directly with bespoke retry/circuit-breaker logic. How would a service mesh change this, and what would you NOT put in the mesh?",
+    answer: `The CIRCUIT BREAKER PATTERN section describes the desired BEHAVIOR.
+A service mesh is the infrastructure layer that gives every one of
+800+ services that behavior for free, consistently, without each team
+re-implementing it.
+
+WHY A MESH FITS HERE:
+  Track Service alone handles ~347,000 requests/sec (30B streams/day ÷
+  86,400s). A hand-rolled circuit breaker in the Android client and one
+  in the internal Playlist Service will drift — different thresholds,
+  different recovery windows. A mesh makes outlierDetection one config,
+  enforced identically on every caller's Envoy sidecar.
+
+DATA PLANE:
+  Envoy sidecars on Track Service, Metadata Service, Search Service, and
+  Recommendation Engine — the four services the API Gateway fans out to,
+  plus Playlist Service, User & Auth Service, and Stream Count Service.
+
+CONTROL PLANE:
+  Istio (Pilot) pushes outlierDetection, load-balancing policy, mTLS
+  certs, and canary VirtualService rules to every sidecar — across all
+  5 active/active regions (US-East, US-West, EU-West, EU-Central, APAC).
+
+WHAT THIS BUYS:
+  • Track Service circuit breaking: outlierDetection (5 consecutive 5xx
+    in 10s → eject 30s, cap 50% of pool) protects the <250ms p99 playback
+    SLO at 347K req/sec — this REPLACES the bespoke client-side breaker
+  • Recommendation Engine LB: LEAST_REQUEST across ScaNN/Faiss replicas
+    for Radio's <100ms ANN path — no outlierDetection, because a slow
+    replica isn't "down," ejecting it would overload the rest
+  • Search Service canary: new ranking models ship to 5% of traffic via
+    VirtualService weight before full rollout — catches "technically
+    200 OK but worse rankings" regressions that 5xx-based health checks miss
+  • AuthorizationPolicy: only the Ingestion pipeline can write to Metadata
+    Service's /internal/catalog/* — Track/Search/Recommendation get
+    read-only. Licensing data (available_markets) leaking to the wrong
+    write path is a legal problem, not just a bug
+  • Tracing: one trace ID across API Gateway → Track Service → Metadata
+    Service makes the 250ms playback budget debuggable hop-by-hop
+
+WHAT STAYS OUT OF THE MESH:
+  • Kafka (~trillion events/day) — its security model is SASL/ACLs, and
+    it's the async event bus, not a synchronous call the mesh governs
+  • GCS (Audio Storage) and the Audio CDN — signed URLs and CDN-edge auth
+    handle access control; pod-to-pod mTLS is meaningless for object storage
+  • PostgreSQL, Cassandra, Redis, Bigtable, BigQuery — direct driver
+    connections, not HTTP/gRPC services
+
+TRADE-OFFS:
+  • The royalty pipeline's "exactly-once" guarantee comes from Flink keyed
+    state + idempotent Kafka producers, NOT mesh retries — a mesh-retried
+    call must still land on an idempotent endpoint, or "zero missed
+    streams" silently becomes "occasionally double-counted streams"
+  • ~1-2ms sidecar latency per hop is negligible against 250ms, but is
+    one more reason Radio's <100ms path stays inside Recommendation
+    Engine rather than fanning out further
+  • Control-plane-down fails OPEN (sidecars keep last config) — matches
+    the 99.95% target and the chaos-engineering culture: a Pilot outage
+    must never become a playback outage for 600M users`,
+    followups: [
+      "Track Service's outlierDetection ejects up to 50% of replicas. During a regional failover, could that 50% cap itself cause a cascading overload on the surviving replicas?",
+      "How would you extend the AuthorizationPolicy if Spotify added a third-party podcast-ingestion partner that needs LIMITED catalog-write access?",
+      "The royalty pipeline's exactly-once guarantee predates the mesh. If you introduced mesh-level retries on the stream-event endpoint, what specific change would you need on the receiving side to keep 'zero missed streams' true?",
     ],
   },
 ];

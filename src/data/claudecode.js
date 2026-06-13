@@ -20,6 +20,7 @@ Three design pillars that make Claude Code different from a simple API wrapper:
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        CLAUDE CODE CLI PROCESS                          │
+│         SERVICE MESH — Envoy sidecar attached to every service          │
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
 │  │                    AGENTIC LOOP (core engine)                   │   │
@@ -46,6 +47,7 @@ Three design pillars that make Claude Code different from a simple API wrapper:
 │  │  Bash Tool  │  │  Read Tool │  │   Edit/Write  │  │  MCP Servers│  │
 │  │  (zsh/bash) │  │  (fs read) │  │   Tools       │  │  (external) │  │
 │  └─────────────┘  └────────────┘  └───────────────┘  └─────────────┘  │
+│      mTLS · Load Balancing · Retries · Circuit Breaking · Tracing       │
 └─────────────────────────────────────────────────────────────────────────┘
                                │
                                ▼ file I/O, shell exec
@@ -125,6 +127,75 @@ Why the structured tool API is better:
 4. Reliable parsing: no regex needed to extract tool calls from prose. The API returns structured JSON for tool_use blocks — zero parsing ambiguity.
 
 5. Token efficiency: tool schemas are cached by Anthropic's prompt cache layer. The 5,000-token tool schema block costs near-zero on repeated turns (cache hit rate > 99% within a session).`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before reasoning about the backend fleet that serves Claude Code,
+pin down the numbers for a SINGLE session — they determine how many
+sessions a host can run concurrently and where the bottlenecks sit.
+
+ASSUMPTIONS:
+• Context window: 200K tokens (fixed budget per session)
+• Compression triggers at ~80% of context → ~160K tokens usable before a
+  summarization pass is forced
+• A 20-tool-call session adds ~10K–50K tokens of history (stated range)
+• Agentic loop soft limit: ~50 tool calls per turn
+• Tool schema block: ~5,000 tokens, cached for a 5-minute TTL
+• Target tool-call round-trip (dispatch → permission check → execute →
+  inject result): budget ~200ms for local tools, excluding API latency
+• Streamed model output: ~40-80 tokens/sec per active session (typical
+  SSE token rate for this model class)
+
+1. Tokens consumed per loop iteration — justifies the compression trigger
+   ~50K tokens history (worst case) ÷ ~50 tool calls ≈ 1,000 tokens/call
+   At 1,000 tokens/iteration, reaching the 160K compression threshold
+   takes ≈ 160 iterations
+   → A single long-running task can blow through this in one sitting —
+     this is WHY the Context Builder / Compression stage exists, and why
+     it fires automatically rather than waiting for a hard error
+
+2. Streamed output time per turn — justifies SSE streaming, not polling
+   A typical multi-paragraph response (~1,500 tokens) ÷ 60 tokens/sec
+   ≈ 25 seconds of generation
+   → Without streaming, the terminal would freeze for ~25s; this is WHY
+     the Response Router streams text tokens to the terminal as SSE
+     events arrive, rather than waiting for message_stop
+
+3. Parallel tool dispatch — justifies the Tool Dispatcher's concurrency
+   5 file reads × 200ms sequential ≈ 1 second of pure dispatch latency
+   5 file reads dispatched in parallel ≈ 200ms (bounded by the slowest)
+   → A 5x latency reduction on multi-file tasks — this is WHY the Tool
+     Dispatcher executes all tool_use blocks in one response concurrently
+
+4. Concurrent sessions per backend instance — justifies the fleet sizing
+   Each active session holds ~160K tokens of context in memory plus an
+   open SSE connection to the Anthropic Claude API
+   At ~50-80 tokens/sec streamed per session, 1 model-serving connection
+   per session is the bottleneck, not local CPU
+   → A single API Gateway / inference-proxy instance can multiplex
+     hundreds of these long-lived SSE connections, but each one needs
+     its own connection to the Anthropic Claude API — this is WHY the
+     backend fleet fans out across an API Gateway to a pool of
+     model-serving / inference-proxy workers rather than one shared
+     connection
+
+5. MCP round-trip overhead — justifies keeping MCP out of the hot path
+   Built-in tool dispatch: ~0ms (in-process)
+   MCP tool dispatch: ~10ms (separate process, JSON-RPC over stdio/SSE)
+   Over a 50-call session where 10 calls are MCP tools: 10 × 10ms = 100ms
+   → Negligible compared to the ~25s/turn streaming time, which is WHY
+     MCP servers can run as separate sandboxed processes without a
+     noticeable UX cost — but it's also WHY MCP server health checks
+     matter at fleet scale (one slow MCP server stalls its 10ms budget
+     into seconds)
+
+Interview punch line: every number above maps to a piece of the
+backend fleet — 160K-token compression threshold → Context Builder,
+~25s streamed turns → SSE-based Response Router, 5x parallel dispatch
+→ Tool Dispatcher's concurrency model, hundreds of long-lived SSE
+connections per instance → API Gateway fan-out to the model-serving
+fleet, and MCP's 10ms tax → why tool-execution workers are isolated
+from the inference path. State the number, then name the component.`,
         },
       ],
     },
@@ -354,6 +425,68 @@ MCP vs built-in tools:
   Built-in tools (Bash, Read, Write, Edit) run in-process — zero latency, direct OS access.
   MCP tools run out-of-process — slight latency (~10ms), but can call any external service.
   Both look identical to Claude — same tool_use API, same result injection. Claude doesn't know which are built-in vs MCP.`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `Zoom out from a single CLI process to Anthropic's backend fleet
+that serves millions of concurrent Claude Code sessions. That fleet
+is a small set of service TYPES — API Gateway, model-serving /
+inference-proxy, sandboxed tool-execution workers, MCP-proxy — each
+running hundreds to thousands of instances. A service mesh puts an
+Envoy sidecar in front of every instance of every one of these.
+
+WHY A MESH FITS THIS FLEET SPECIFICALLY:
+• Service discovery → the control plane tracks every healthy
+  inference-proxy / sandbox-worker instance; the API Gateway's
+  sidecar resolves one without a discovery SDK in app code
+• Client-side load balancing → the sidecar picks the
+  least-loaded inference-proxy for each NEW session — important
+  because each session pins a long-lived SSE connection for its
+  whole turn, so round-robin would unevenly pack connections
+• Circuit breaking → if a sandbox-worker pool starts timing out
+  (e.g. a runaway Bash command), the sidecar ejects it from
+  rotation instead of routing more sessions onto it
+
+1. Data plane — Envoy sidecar per instance
+   • Every API Gateway, inference-proxy, sandbox-worker, and
+     MCP-proxy instance gets a sidecar
+   • LEAST_REQUEST load balancing for new sessions — matches the
+     long-lived, uneven-duration nature of streaming turns
+   • mTLS on every hop — sandbox-workers execute arbitrary
+     user-supplied shell commands and must be strongly isolated
+     from the inference-proxy and API Gateway fleets
+   • Uniform timeouts/retries — an MCP-proxy call budgeted at
+     ~10ms gets a hard timeout instead of stalling a session
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Tracks health of every inference-proxy and sandbox-worker
+   • Policy: "sandbox-workers reachable ONLY from API Gateway,
+     never directly from the internet or from each other"
+   • Canary: route 5% of new sessions to a new model-serving
+     version, watch error rate + latency, then shift to 100%
+
+WHAT THIS BUYS AT FLEET SCALE:
+• Zero-trust isolation between trust zones — sandbox-workers run
+  arbitrary commands; mesh policy + mTLS contain the blast radius
+• Session-aware routing for long-lived SSE connections
+• Canary model rollouts without redeploying the whole fleet
+
+DIAGRAM: the "SERVICE MESH" band over the CLAUDE CODE CLI PROCESS
+box is a per-process simplification of this idea — each of the four
+tool-handler boxes (Bash, Read, Edit/Write, MCP Servers) maps to a
+service TYPE in Anthropic's backend fleet, each with its own Envoy
+sidecar applying the mTLS / load balancing / retry / circuit
+breaking / tracing band shown.
+
+TRADE-OFFS:
+• ~1-2ms per hop — negligible against ~25s of streamed generation
+  time per turn
+• The mesh control plane is a critical dependency — if it's down,
+  sidecars enforce their LAST KNOWN routing rules; existing
+  sessions are unaffected but new instances can't register
+• The mesh secures the NETWORK path between services — sandbox
+  isolation itself still depends on OS-level sandboxing
+  (containers/VMs), which the mesh doesn't replace`,
         },
       ],
     },
@@ -629,7 +762,7 @@ anthropic-beta: prompt-caching-2024-07-31
         "hooks": [{
           "type": "command",
           // Non-zero exit blocks the tool call; stdout injected as context
-          "command": "echo \"$CLAUDE_TOOL_INPUT\" | python3 ./scripts/audit-bash.py"
+          "command": "echo \\"$CLAUDE_TOOL_INPUT\\" | python3 ./scripts/audit-bash.py"
         }]
       }
     ],
@@ -638,7 +771,7 @@ anthropic-beta: prompt-caching-2024-07-31
         "matcher": "Edit",
         "hooks": [{
           "type": "command",
-          "command": "npx prettier --write \"$CLAUDE_FILE_PATH\" 2>&1"
+          "command": "npx prettier --write \\"$CLAUDE_FILE_PATH\\" 2>&1"
         }]
       }
     ],
@@ -646,7 +779,7 @@ anthropic-beta: prompt-caching-2024-07-31
       {
         "hooks": [{
           "type": "command",
-          "command": "osascript -e 'display notification \"Claude Code finished\" with title \"Claude Code\"'"
+          "command": "osascript -e 'display notification \\"Claude Code finished\\" with title \\"Claude Code\\"'"
         }]
       }
     ]
@@ -921,6 +1054,105 @@ function estimateTokens(messages: Message[]): number {
     return { toolUseId: toolCall.id, output: "Unknown tool", isError: true }
   }`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar traffic policy for the backend fleet behind Claude Code: mTLS, circuit breaking, retries, and canary routing between the API Gateway, inference-proxy, sandbox-worker, and MCP-proxy services",
+      api: `# DestinationRule — circuit breaking + load balancing for the
+# inference-proxy fleet (the pool that holds the long-lived SSE
+# connection to the Anthropic Claude API per session)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: inference-proxy
+spec:
+  host: inference-proxy.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp: { maxConnections: 200 }
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 1   # one session per connection
+    outlierDetection:                  # ejects unhealthy sandbox-workers too
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST           # spreads long-lived SSE sessions evenly
+
+---
+# VirtualService — canary a new model-serving version to a slice
+# of new sessions before a full rollout
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: inference-proxy
+spec:
+  hosts: ["inference-proxy.prod.svc.cluster.local"]
+  http:
+    - match: [{ headers: { x-model-canary: { exact: "true" } } }]
+      route:
+        - destination: { host: inference-proxy.prod.svc.cluster.local, subset: v2 }
+    - route:
+        - destination: { host: inference-proxy.prod.svc.cluster.local, subset: v1 }
+          weight: 95
+        - destination: { host: inference-proxy.prod.svc.cluster.local, subset: v2 }
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 10ms           # matches the MCP-proxy round-trip budget
+        retryOn: 5xx,reset,connect-failure
+
+---
+# PeerAuthentication — STRICT mTLS, critical for isolating
+# sandbox-workers (arbitrary command execution) from the rest of the fleet
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls: { mode: STRICT }`,
+      internals: `Sidecar injection:
+• Every API Gateway, inference-proxy, sandbox-worker, and
+  MCP-proxy pod gets an Envoy sidecar auto-injected via a
+  Kubernetes mutating webhook — no change to the agentic-loop code
+• Sidecar intercepts traffic via iptables in the pod's network
+  namespace
+
+mTLS certificate flow:
+1. Mesh CA (Istio Citadel / SPIFFE) issues a short-lived X.509
+   cert to each sidecar on pod startup
+2. Certs auto-rotate ~every 24h, no downtime
+3. STRICT mode rejects plaintext — a compromised sandbox-worker
+   (running arbitrary user-supplied Bash) cannot plaintext-call
+   the API Gateway or inference-proxy fleet without a valid mesh
+   identity, which it never holds
+
+Circuit breaking (outlierDetection) for sandbox-workers:
+• A sandbox-worker stuck on a runaway command starts failing
+  health checks → outlierDetection ejects it from the
+  inference-proxy's routing table for baseEjectionTime (30s)
+• Without this, new sessions would keep getting routed to an
+  already-stuck worker, compounding the failure
+
+Canary rollout flow (new model-serving version):
+1. Deploy inference-proxy:v2 alongside v1 (same Service)
+2. VirtualService routes 5% of NEW sessions to v2 — in-flight
+   sessions on v1 are undisturbed (sessions are sticky per
+   connection, not re-routed mid-stream)
+3. Watch error rate + p99 time-to-first-token for v2
+4. Shift 5% → 25% → 100%, or roll back to 0% by editing one
+   resource — no redeploy of the agentic-loop fleet
+
+Failure mode — control plane down:
+• Sidecars cache the LAST KNOWN routing + mTLS config and keep
+  enforcing it — existing sessions keep streaming normally
+• New sandbox-worker or inference-proxy instances can't register
+  with the mesh until the control plane recovers, so the fleet
+  can't scale up (but doesn't scale down or drop traffic either)`,
+    },
   ],
 };
 
@@ -1157,5 +1389,129 @@ The API implementation: Anthropic's Messages API supports stream: true. The resp
 
 Streaming is not just UX — it's architecturally important for parallel tool dispatch: in a parallel tool call response, each tool_use block can be dispatched independently as soon as its content_block_stop arrives, without waiting for all other blocks.`,
     followups: ["How do you handle a streaming connection that drops mid-response?", "At what point in the stream can you start executing a tool call?"],
+  },
+  {
+    id: "cc-q11",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Round",
+    asked_at: ["Anthropic", "OpenAI", "Google DeepMind"],
+    question: "Before designing the backend fleet behind Claude Code, walk me through a back-of-the-envelope estimation for a single session.",
+    answer: `Size a single session first — the per-session numbers determine
+how the fleet behind it is shaped.
+
+ASSUMPTIONS:
+• Context window: 200K tokens per session
+• Compression triggers at ~80% → ~160K tokens usable before a
+  forced summarization pass
+• A 20-tool-call session adds ~10K-50K tokens of history
+• Agentic loop soft limit: ~50 tool calls per turn
+• Tool schema block: ~5,000 tokens, cached for a 5-minute TTL
+• Streamed output: ~40-80 tokens/sec per active session
+
+1. Tokens per loop iteration — justifies the compression trigger
+   ~50K tokens history (worst case) ÷ ~50 tool calls ≈ 1,000
+   tokens/call
+   → At 1,000 tokens/iteration, reaching the 160K threshold takes
+     ≈ 160 iterations — a single long task can hit this in one
+     sitting, which is why the Context Builder fires automatically
+
+2. Streamed time per turn — justifies SSE, not polling
+   ~1,500-token response ÷ 60 tokens/sec ≈ 25 seconds
+   → Without streaming the terminal would freeze for ~25s; this is
+     why the Response Router streams tokens as they arrive
+
+3. Parallel tool dispatch — justifies the dispatcher's concurrency
+   5 file reads × 200ms sequential ≈ 1s; in parallel ≈ 200ms
+   → A 5x latency win is why the Tool Dispatcher executes every
+     tool_use block in one response concurrently
+
+4. Concurrent sessions per backend instance — justifies fleet sizing
+   Each session holds ~160K tokens in memory plus one long-lived
+   SSE connection to the Claude API
+   → A single API Gateway / inference-proxy instance multiplexes
+     hundreds of sessions, but each needs its own upstream
+     connection — this is why the fleet fans out across an API
+     Gateway to a pool of inference-proxy workers
+
+5. MCP round-trip overhead — justifies isolating MCP from the hot path
+   Built-in tool dispatch ≈ 0ms; MCP dispatch ≈ 10ms
+   Over 50 calls with 10 MCP calls: 10 × 10ms = 100ms total
+   → Negligible against ~25s/turn, which is why MCP servers can run
+     as separate sandboxed processes — but it's also why one slow
+     MCP server's 10ms budget matters at fleet scale
+
+Interview punch line: 160K-token threshold → Context Builder, ~25s
+streamed turns → SSE Response Router, 5x parallel dispatch → Tool
+Dispatcher concurrency, hundreds of long-lived connections per
+instance → API Gateway fan-out to inference-proxy workers. State the
+number, then name the component.`,
+    followups: [
+      "How would these numbers change for a session running a long-lived background agent instead of an interactive CLI?",
+      "If 10x more users start running 50-tool-call sessions simultaneously, which number breaks first?",
+      "How do you estimate the memory footprint of the context window across thousands of concurrent sessions?",
+    ],
+  },
+  {
+    id: "cc-q12",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "System Design Round",
+    asked_at: ["Anthropic", "Google", "Amazon"],
+    question: "The backend fleet behind Claude Code has an API Gateway, an inference-proxy pool, sandboxed tool-execution workers, and MCP-proxy services. How would you put a service mesh between them?",
+    answer: `Each of these is a service TYPE with hundreds to thousands of
+instances. A service mesh puts an Envoy sidecar in front of every
+instance of every type.
+
+MAP THE RESPONSIBILITIES:
+• Service discovery → mesh control plane (Istio Pilot / Consul)
+  tracks every healthy inference-proxy / sandbox-worker instance;
+  the API Gateway's sidecar resolves one without a discovery SDK
+• Client-side load balancing → sidecar applies LEAST_REQUEST to
+  spread long-lived SSE sessions evenly across inference-proxy
+  instances — round-robin would unevenly pack connections
+• Circuit breaking → if a sandbox-worker pool starts timing out
+  (a runaway Bash command), outlierDetection ejects it from
+  rotation instead of routing more sessions onto it
+
+DATA PLANE + CONTROL PLANE:
+
+1. Data plane — Envoy sidecar per instance
+   • mTLS on every hop — sandbox-workers execute arbitrary
+     user-supplied shell commands and must be strongly isolated
+     from the inference-proxy and API Gateway fleets
+   • LEAST_REQUEST load balancing for new sessions
+   • Uniform timeouts — an MCP-proxy call budgeted at ~10ms gets a
+     hard timeout instead of stalling a session
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Policy: "sandbox-workers reachable ONLY from API Gateway,
+     never directly from the internet or from each other"
+   • Canary: route 5% of NEW sessions to a new model-serving
+     version, watch error rate + time-to-first-token, then shift
+     to 100%
+
+WHY THIS MATTERS AT FLEET SCALE:
+• Zero-trust isolation between trust zones — a compromised
+  sandbox-worker can't reach internal services without a valid
+  mesh identity it was never issued
+• Session-aware routing for long-lived SSE connections — sticky
+  per connection, not re-routed mid-stream
+• Canary model rollouts without redeploying the agentic-loop fleet
+
+TRADE-OFFS TO MENTION:
+• ~1-2ms per hop — negligible against ~25s of streamed generation
+  per turn
+• The mesh control plane is a critical dependency — if it's down,
+  sidecars enforce LAST KNOWN routing; existing sessions are
+  unaffected but new instances can't register
+• The mesh secures the NETWORK path between services — sandbox
+  isolation itself still depends on OS-level sandboxing
+  (containers/VMs), which the mesh doesn't replace`,
+    followups: [
+      "If the mesh control plane goes down mid-rollout, what happens to the canary's 5% traffic split?",
+      "How would you extend mTLS identity to distinguish 'this sandbox-worker is running session A's commands' from session B's?",
+      "Where does the mesh's responsibility end and the sandbox's OS-level isolation (containers/VMs) begin?",
+    ],
   },
 ];

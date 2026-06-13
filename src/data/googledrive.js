@@ -15,7 +15,9 @@ The core insight — files are broken into 256 KB chunks and content-addressed b
             ▼
 ┌───────────────────────────────────────────────────────────────────────┐
 │                         EDGE / API GATEWAY                            │
+│        SERVICE MESH — Envoy sidecar attached to every service         │
 │          Cloud Load Balancer  ·  TLS termination  ·  Auth (OAuth2)   │
+│     mTLS · Load Balancing · Retries · Circuit Breaking · Tracing      │
 └────┬──────────┬──────────┬──────────┬──────────┬────────────────────┘
      │          │          │          │          │
      ▼          ▼          ▼          ▼          ▼
@@ -117,6 +119,65 @@ Resumable uploads:
 • Upload Service tracks per-session "chunks received" state in Bigtable
 • This is why Drive reliably handles 5 TB uploads over flaky connections`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, pin down scale with rough math — numbers
+aren't graded for precision, they're graded for whether they
+justify the design decisions that follow.
+
+ASSUMPTIONS:
+• 1B total users, ~5 GB average used of the 15 GB free quota
+• Chunk size: 256 KB, content-addressed by SHA-256
+• Colossus bloom filter sized for ~100B unique chunks (existing
+  design constant from the dedup handshake)
+• ~2 PB/day requested upload throughput platform-wide
+• 200M DAU, each generates ~5 sync-relevant change events/day
+• Search index lag target: ~5 seconds
+
+1. Logical vs physical storage — justifies content-addressed dedup
+   1B users × 5 GB = 5 exabytes of "logical" storage if nothing
+   were deduplicated
+   5 EB ÷ 256 KB ≈ 20 trillion logical chunk references
+   → Colossus's bloom filter is sized for ~100B UNIQUE chunks —
+     implying a ~200x dedup ratio (20T references → 100B blobs)
+   → this 200x ratio is why "uploading a popular file transfers 0
+     bytes" is the dominant storage-saving mechanism, not a footnote
+
+2. Unique chunk storage — justifies Colossus capacity planning
+   100B unique chunks × 256 KB ≈ 25.6 PB of unique chunk data
+   × 3 (sync replicas) + erasure-coding overhead (~1.5x) ≈ ~115 PB
+   physical storage
+   → Colossus must hold ~115 PB while absorbing new unique chunks
+     at multi-PB/day — this is the number behind "Petabytes/day"
+
+3. Upload throughput vs dedup savings — justifies the checksum handshake
+   2 PB/day requested uploads, but only NEW unique chunks are
+   physically written
+   At ~200x dedup, actual NEW bytes written ≈ 2 PB ÷ 200 ≈ 10 TB/day
+   → this 200x reduction is why Upload Service runs the
+     POST /checksums handshake BEFORE any byte transfer — it saves
+     bandwidth, not just storage
+
+4. Sync fan-out QPS — justifies Pub/Sub + WebSocket push design
+   200M DAU × 5 events/day = 1B change events/day ≈ 11,600 events/sec
+   Each event fans out to ~3 devices/user (phone, laptop, tablet)
+   → ~35,000 WebSocket pushes/sec steady state, peak (~3x) ≈ 100K/sec
+   → justifies Pub/Sub (not DB polling) for the change log, and why
+     pushes carry only a "something changed" signal, not the payload
+
+5. Search index lag — justifies the async indexing pipeline
+   1B change events/day ≈ 11,600 events/sec must reach Elasticsearch
+   within the 5-second lag SLA
+   At ~1,000 docs/bulk-index request → ~12 bulk requests/sec
+   → comfortably horizontal-scalable with a small Search Indexer
+     consumer pool
+
+Interview punch line: every number maps to a box — 100B unique
+chunks → Colossus + bloom filter, ~115 PB → erasure-coded chunk
+store, 11,600 events/sec → Pub/Sub change log, ~35K pushes/sec →
+Notification Service / WebSocket fleet. State the number, then name
+the component it justifies.`,
+        },
       ],
     },
     {
@@ -197,6 +258,68 @@ Session state:
 • Stored in Bigtable: sessionId → {chunks received, total expected, expiry}
 • Sessions expire after 7 days of inactivity
 • Client can query "how many chunks received?" to resume after crash`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `A service mesh moves cross-cutting networking concerns OUT of
+application code and INTO a sidecar proxy (Envoy) deployed next
+to every service instance. All traffic in/out of a service passes
+through its sidecar first.
+
+WHY A MESH FITS DRIVE'S FLEET:
+• Five core services (Upload, Metadata, Sync, Search, Sharing &
+  Perms) sit behind the Edge/API Gateway and call each other —
+  e.g. every download/view request hits Sharing & Perms before
+  Metadata can return chunk URLs
+• Sharing & Perms is the hottest internal dependency in the system
+  — Spanner ACL lookups back EVERY file access across all 1B users
+• Search Service's BM25 ranking weights change often and need a
+  safe canary rollout, just like Feed/Recommendation rollouts
+  elsewhere
+
+1. Data plane — one Envoy sidecar per service instance
+   • iptables transparently redirects all in/out traffic through it
+   • Applies load balancing, retries, timeouts, circuit breaking
+   • Wraps every call in mTLS — zero-trust between services
+   • Emits identical metrics, logs, traces for every service
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Pushes routing rules + policy to every sidecar centrally
+   • "Retry Sharing & Perms 2x with 30ms timeout on 503"
+   • "Search ranking v2 gets 5% canary traffic"
+   • "Only Metadata, Search, Upload may call Sharing & Perms"
+
+WHAT THIS BUYS DRIVE SPECIFICALLY:
+• Circuit breaking on Sharing & Perms — if Spanner ACL queries slow
+  down under load, outlierDetection ejects unhealthy Perms pods
+  after 5 consecutive 5xx in 10s; callers fall back to the existing
+  5-minute Redis ACL cache instead of queuing on a slow dependency
+• Canary ranking rollouts — deploy search:v2 alongside v1, route a
+  5% weighted slice via VirtualService, watch click-through and p99
+  latency, then shift to 25% → 100% or roll back instantly
+• Zero-trust for ACL data — PeerAuthentication STRICT enforces mTLS
+  on every hop, and an AuthorizationPolicy on Sharing & Perms limits
+  callers to Metadata, Search, and Upload — even a compromised Sync
+  Engine pod can't query another user's permissions
+• End-to-end tracing — a single "open file" request spans Edge
+  Gateway → Metadata → Sharing & Perms → Colossus chunk URLs; Envoy
+  gives one trace ID across every hop, which is invaluable when p99
+  latency regresses
+
+DIAGRAM: the "SERVICE MESH" band inside the EDGE / API GATEWAY box
+represents this — every arrow from the gateway down to Upload,
+Metadata, Sync, Search, and Sharing & Perms passes through an Envoy
+sidecar, with mTLS / load balancing / retries / circuit breaking /
+tracing applied uniformly to all five.
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — negligible against the <1s sync
+  latency and 5s search-index lag budgets
+• Control plane becomes a new critical dependency, though sidecars
+  cache last-known config if it goes down
+• Pub/Sub-based async paths (change log, notifications) bypass the
+  mesh entirely — it only governs synchronous service-to-service
+  calls`,
         },
       ],
     },
@@ -747,6 +870,123 @@ Link token generation (anyoneWithLink):
   • Revoking "anyone with link" = delete shares row, rotate secret
   • Old tokens immediately invalid — no need to invalidate CDN (CDN auth check calls Drive)`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar traffic policy: mTLS, circuit breaking, retries, and canary routing between Drive's core services",
+      api: `# DestinationRule — circuit-break Sharing & Perms under load
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: permissions
+spec:
+  host: permissions.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp: { maxConnections: 500 }
+      http:
+        http1MaxPendingRequests: 200
+        maxRequestsPerConnection: 50
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — retries + canary for Search ranking v2
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: search
+spec:
+  hosts: ["search.prod.svc.cluster.local"]
+  http:
+    - match: [{ headers: { x-ranking-canary: { exact: "true" } } }]
+      route:
+        - destination: { host: search.prod.svc.cluster.local, subset: v2 }
+    - route:
+        - destination: { host: search.prod.svc.cluster.local, subset: v1 }
+          weight: 95
+        - destination: { host: search.prod.svc.cluster.local, subset: v2 }
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 100ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — only these services may call Sharing & Perms
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: permissions-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels: { app: permissions }
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/metadata"
+              - "cluster.local/ns/prod/sa/search"
+              - "cluster.local/ns/prod/sa/upload"
+
+---
+# PeerAuthentication — mesh-wide mTLS
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls: { mode: STRICT }`,
+      internals: `Sidecar injection:
+• Every pod (Upload, Metadata, Sync Engine, Search, Sharing &
+  Perms) gets an Envoy sidecar auto-injected via a Kubernetes
+  mutating webhook — zero application code change
+• Sidecar intercepts traffic via iptables rules in the pod's
+  network namespace
+
+Circuit breaking on Sharing & Perms (the hottest dependency):
+• Every download/view across 1B users calls Sharing & Perms before
+  Metadata returns chunk URLs
+• outlierDetection ejects pods returning >= 5 consecutive 5xx in
+  10s for 30s, with at most 50% of the fleet ejected at once
+• Callers (Metadata, Search, Upload) get fast failures instead of
+  queued timeouts, and fall back to the existing 5-minute Redis ACL
+  cache while Spanner recovers
+
+Canary rollout — Search ranking v2:
+1. Deploy search:v2 alongside v1 (same Kubernetes Service)
+2. Internal testers send x-ranking-canary: true header → routed
+   straight to v2 for manual QA
+3. VirtualService then routes 5% of real traffic to v2
+4. Watch click-through rate + p99 latency in Prometheus/Grafana
+5. Shift weight 5% → 25% → 100%, or roll back to 0% by editing one
+   resource — no redeploy either way
+
+mTLS + AuthorizationPolicy for ACL data:
+• PeerAuthentication STRICT rejects any plaintext traffic between
+  meshed pods — Sharing & Perms only accepts mTLS connections
+• AuthorizationPolicy further restricts WHO can call it: only
+  metadata, search, and upload service accounts are allowed — Sync
+  Engine is denied even though it's on the same mesh
+• This enforces "ACL data is need-to-know" at the network layer, on
+  top of the application-level Spanner row-level checks
+
+Failure mode — control plane down:
+• Sidecars cache the LAST KNOWN DestinationRule/VirtualService/
+  AuthorizationPolicy and keep enforcing it
+• New pods can't fetch sidecar config until the control plane
+  recovers, but existing traffic (including the permission-check
+  hot path) is unaffected — data plane is decoupled from control
+  plane by design`,
+    },
   ],
 };
 
@@ -915,5 +1155,78 @@ Revocation: delete the shares row and rotate the per-file secret key. Old tokens
 
 This avoids the need for a user account to access the file while still allowing instant revocation.`,
     followups: ["What prevents someone from brute-forcing the HMAC token?", "How would you add expiry to a shared link?"],
+  },
+  {
+    id: "gdrive-q11",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Google", "Dropbox", "Amazon"],
+    question: "Before drawing any boxes, walk me through a back-of-the-envelope estimation for Google Drive's scale.",
+    answer: `This is the "size the system before you design it" step — every number should map to a component in the architecture.
+
+STATE YOUR ASSUMPTIONS FIRST:
+• 1B total users, ~5 GB average used of the 15 GB free quota
+• Chunk size: 256 KB, content-addressed by SHA-256
+• Colossus bloom filter sized for ~100B unique chunks
+• ~2 PB/day requested upload throughput
+• 200M DAU, each generating ~5 sync-relevant change events/day
+
+1. Logical vs physical storage: 1B users × 5 GB = 5 exabytes of "logical" storage if nothing were deduplicated. At 256 KB/chunk that's ~20 trillion logical chunk references. Colossus's bloom filter is sized for only ~100B UNIQUE chunks — a ~200x dedup ratio. This is why "uploading a popular file transfers 0 bytes" is the dominant storage-saving mechanism, not a footnote.
+
+2. Unique chunk storage: 100B unique chunks × 256 KB ≈ 25.6 PB before replication. ×3 sync replicas + ~1.5x erasure-coding overhead ≈ ~115 PB physical. This is the number behind Colossus's "Petabytes/day" throughput requirement.
+
+3. Upload throughput vs dedup: 2 PB/day requested, but at ~200x dedup the actual NEW bytes written ≈ 10 TB/day. This 200x reduction is exactly why Upload Service runs the checksum handshake BEFORE any byte transfer.
+
+4. Sync fan-out: 200M DAU × 5 events/day = 1B events/day ≈ 11,600 events/sec. Fan out to ~3 devices/user ≈ 35,000 WebSocket pushes/sec steady state, peak ~100K/sec — this justifies Pub/Sub over DB polling for the change log.
+
+5. Search index lag: the same 11,600 events/sec must reach Elasticsearch within the 5-second lag SLA, at ~1,000 docs/bulk request → ~12 bulk requests/sec — comfortably scalable.
+
+Tie it together: 100B unique chunks → Colossus + bloom filter, ~115 PB → erasure-coded chunk store, 11,600 events/sec → Pub/Sub change log, ~35K pushes/sec → Notification Service. Always close by pointing back at the diagram.`,
+    followups: [
+      "How would these numbers change if Drive dropped the free 15 GB tier to 5 GB?",
+      "If the dedup ratio dropped from 200x to 50x overnight (e.g. more encrypted/unique content), which component breaks first?",
+      "How do you estimate the Pub/Sub partition count needed for the 1B events/day change log?",
+    ],
+  },
+  {
+    id: "gdrive-q12",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Google", "Dropbox", "Box"],
+    question: "Drive's Sharing & Perms service is called by Upload, Metadata, Sync, and Search on nearly every request — it's the hottest internal dependency in the system. How would you make calls to it resilient, and how would you control who can call it, without every team hand-rolling retries and ACL checks?",
+    answer: `Push these cross-cutting concerns into a service mesh — an Envoy sidecar deployed next to every service instance, with a central control plane (Istio/Consul/AWS App Mesh) pushing policy to all of them.
+
+WHY THIS FITS DRIVE:
+• Five core services (Upload, Metadata, Sync, Search, Sharing & Perms) sit behind the Edge/API Gateway and call each other constantly
+• Sharing & Perms backs every download/view across 1B users — a slow Spanner ACL query anywhere becomes a system-wide latency spike
+• Search's BM25 ranking weights change often and need safe canary rollout
+
+1. DATA PLANE — Envoy sidecar per pod:
+   • iptables transparently redirects in/out traffic through it
+   • Load balancing (LEAST_REQUEST), retries, timeouts, circuit breaking, mTLS — all uniform, zero app code change
+   • Emits identical metrics/logs/traces for every service
+
+2. CONTROL PLANE — Istio pushes policy centrally:
+   • "Retry Sharing & Perms 2x with 30ms timeout on 503"
+   • "Search ranking v2 gets 5% canary traffic"
+   • "Only Metadata, Search, Upload may call Sharing & Perms"
+
+WHAT THIS BUYS:
+• Circuit breaking — outlierDetection ejects unhealthy Sharing & Perms pods after 5 consecutive 5xx in 10s; callers fall back to the existing 5-minute Redis ACL cache instead of piling up requests on a struggling Spanner-backed service
+• Canary ranking rollouts — deploy search:v2 alongside v1, route a 5% weighted slice via VirtualService, watch click-through and p99 latency, then shift to 25% → 100% or roll back instantly
+• Zero-trust for ACL data — PeerAuthentication STRICT enforces mTLS everywhere, and an AuthorizationPolicy on Sharing & Perms allows only metadata, search, and upload principals — even a compromised Sync Engine pod can't query another user's permissions
+• End-to-end tracing — one trace ID follows an "open file" request across Edge Gateway → Metadata → Sharing & Perms → Colossus chunk URLs
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — negligible vs the <1s sync latency and 5s search-index lag budgets
+• Control plane becomes a new critical dependency, though sidecars cache last-known config if it's down
+• Pub/Sub-based async paths (change log, notifications) bypass the mesh — it only governs synchronous calls`,
+    followups: [
+      "How would you roll the mesh out incrementally across five services without a big-bang migration?",
+      "If outlierDetection ejects 50% of Sharing & Perms pods, what happens to the requests that were already in flight to those pods?",
+      "How would you extend this mTLS/AuthorizationPolicy model to cover Spanner and Colossus themselves, not just the services in front of them?",
+    ],
   },
 ];

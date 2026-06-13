@@ -27,8 +27,10 @@ Core engineering challenges: processing payments with exactly-once semantics (mo
                            ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   API GATEWAY (Edge — 200+ PoPs)                       │
+│         SERVICE MESH — Envoy sidecar attached to every service         │
 │    TLS Termination · Auth (API Key / Restricted Keys) · Rate Limiting  │
 │    Request Routing · Idempotency Key Dedup · Versioning (?api=2024-11) │
+│      mTLS · Load Balancing · Retries · Circuit Breaking · Tracing      │
 └───┬──────────┬───────────┬──────────────┬───────────────┬──────────────┘
     │          │           │              │               │
     ▼          ▼           ▼              ▼               ▼
@@ -119,6 +121,69 @@ STRIPE CHECKOUT (hosted page):
   Even simpler: merchant is completely out of PCI scope
   Trade-off: less customisation (though CSS Variables API allows visual theming)`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `"$1T/year, 500M+ API requests/day" sounds like one big number. It
+decomposes into five very different numbers, each sizing a different
+box in the diagram.
+
+ASSUMPTIONS:
+  • $1T+ payment volume/year, 500M+ API requests/day (all products)
+  • Average charge size ≈ $50 (blend of micro-SaaS subscriptions and B2B invoices)
+  • Idempotency keys: Redis, 24h TTL
+  • Webhook retry window: 72 hours
+  • Radar: <100ms total budget, 1000+ features per decision
+
+1. API REQUEST THROUGHPUT (Gateway + Idempotency Redis):
+   500M requests/day ÷ 86,400s ≈ 5,787 requests/sec average
+   With a 24h idempotency-key TTL, steady-state Redis holds roughly
+   one key per request seen in the last 24h:
+   5,787/sec × 86,400s ≈ 500M keys resident at any moment
+   → This is what sizes the idempotency-key Redis cluster — not the
+     request RATE, but the resident KEY COUNT from a full day's traffic
+
+2. PAYMENT VOLUME → CHARGE RATE (Payment Intents / Citus):
+   $1T/year ÷ 365 ÷ 86,400s ≈ $31,700/sec in payment volume
+   At ~$50/charge average: ≈ 634 charges/sec average, ~3,000+ TPS at
+   Black Friday peak (5x average)
+   → Sizes Payment Intents Service's distributed PostgreSQL (Citus)
+     write throughput and the Payment Orchestrator's routing-decision rate
+
+3. RADAR FEATURE STORE LOAD:
+   Every charge triggers Radar's feature extraction: 20+ Redis keys
+   pulled in one pipelined round trip
+   At 3,000+ TPS peak → ~3,000 pipelined RTTs/sec to Radar's feature
+   store — a SEPARATE Redis cluster from idempotency keys, tuned for
+   sub-5ms p99 (it's inside the 100ms Radar budget, not the 24h-TTL
+   dedup store)
+
+4. WEBHOOK DELIVERY BACKLOG (per-merchant, not global):
+   A mid-size platform processing 100 charges/sec generates ~100
+   webhook_events/sec. If THAT merchant's endpoint is down for the full
+   72h retry window:
+   100/sec × 259,200s ≈ 26M pending webhook_deliveries rows — for ONE
+   merchant
+   → With thousands of merchants experiencing partial outages at any
+     time, webhook_deliveries needs a (status, next_attempt_at) partial
+     index, or the delivery worker's query becomes a full table scan
+
+5. NETWORK TOKEN $ IMPACT (Card Networks):
+   ~2% of charge attempts fail on "card expired" before tokenization
+   On $1T/year, that's ~$20B/year in failed-then-retried volume
+   Network tokens (auto-updated on reissue) cut "card expired" declines
+   by ~30% → ~$6B/year in recovered approvals
+   → Ties the Card Networks box (Visa VTS / Mastercard MDES) directly
+     to revenue, not just reliability
+
+INTERVIEW PUNCH LINE:
+"$1T/year and 500M requests/day aren't the same number wearing different
+clothes. 5,787 req/sec sizes the idempotency Redis at ~500M resident keys;
+634-3,000 TPS sizes Payment Intents' Citus cluster; 3,000 pipelined RTTs/sec
+sizes Radar's SEPARATE feature-store Redis; 26M backlog rows is a PER-MERCHANT
+worst case that drives an index design, not a capacity number; and the
+$6B/year network-token recovery shows that a reliability feature (auto card
+updates) is also a revenue feature."`,
+        },
       ],
     },
     {
@@ -186,6 +251,71 @@ OUTBOX PATTERN for webhooks:
   Separate webhook worker reads webhook_events, delivers, marks delivered
   On delivery failure: exponential backoff retry up to 72 hours
   Webhook endpoint must be idempotent (Stripe can deliver same event multiple times)`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `The "acquirer health: circuit-break failing acquirers" line in Smart
+Routing is application-level logic the Payment Orchestrator already does
+for EXTERNAL acquirer calls. A service mesh adds the same protection for
+the INTERNAL hops — Charges API → Payment Intents → Payment Orchestrator
+→ Radar — without every team re-implementing it.
+
+WHY A MESH FITS:
+  Payment Intents → Radar is the tightest internal hop: Radar's whole
+  budget is 100ms (20ms features + 40ms ML + 10ms rules + 30ms decision).
+  At ~3,000 TPS peak, one slow Radar replica can blow that budget for
+  thousands of charges/sec before anyone notices.
+  Stripe also runs blue/green deploys (1% → 5% → 25% → 100%) — today
+  that's a deployment-pipeline concern; a mesh makes it a traffic-routing
+  primitive any service can use, including Radar's ML model versions.
+
+DATA PLANE:
+  Envoy sidecars on Charges API, Payment Intents Service, Stripe Connect,
+  Stripe Radar, Stripe Billing, Payment Orchestrator, and Vault.
+
+CONTROL PLANE:
+  Istio control plane, deployed per-region across the four active-active
+  regions (US-East, US-West, EU-West, AP-Southeast) — matching the
+  multi-region architecture in Phase 6.
+
+WHAT THIS BUYS:
+  1. Radar circuit breaking — tight outlierDetection (5s window) so a
+     degrading Radar replica is ejected fast enough to protect the 100ms
+     budget, mirroring the "Radar unavailable → allow with elevated risk
+     flag" graceful-degradation path, but catching it BEFORE a full outage
+  2. Payment Orchestrator load balancing — LEAST_REQUEST across replicas
+     handling 634-3,000+ TPS of routing decisions
+  3. Radar model canary — the existing blue/green percentages become a
+     VirtualService weight, with a header-based override so the fraud
+     team can force-route specific test traffic to a new model
+  4. Vault access control — AuthorizationPolicy enforces "only Payment
+     Intents Service and Tokenisation Service may call Vault" as a mesh
+     rule, layered ON TOP of (not instead of) Vault's network-isolated VPC.
+     Two independent enforcement points for the PCI DSS Level 1 boundary
+  5. mTLS + tracing — every hop encrypted across all 4 regions; a single
+     trace ID follows a charge from Charges API through Radar, useful for
+     explaining a specific decision during a dispute
+
+DIAGRAM:
+  The SERVICE MESH band inside API GATEWAY extends down through Charges
+  API, Payment Intents, Stripe Connect, Stripe Radar, Stripe Billing,
+  the Payment Orchestrator, and Vault.
+
+TRADE-OFFS:
+  • Card Networks (Visa/Mastercard) and Bank/ACH/SEPA rails are EXTERNAL —
+    OUT of the mesh. The Payment Orchestrator's acquirer-health scoring
+    stays as application logic; mesh circuit breaking is a complementary,
+    lower-level net for Stripe-internal hops, not a replacement for
+    acquirer routing intelligence
+  • PostgreSQL/Citus, Redis (both clusters), Kafka, S3, ClickHouse,
+    Elasticsearch — OUT of the mesh, direct driver connections
+  • Sidecar latency (~1-2ms) is real money inside a 100ms Radar budget —
+    it's why Radar's own feature-extraction stays as pipelined Redis
+    calls within ONE service, not further decomposed into more hops
+  • Six-nines (99.9999%) leaves ~31.5s of downtime per YEAR — the control
+    plane MUST fail open (sidecars keep last-known config); a control-plane
+    blip becoming a payment outage would burn the entire annual budget
+    in seconds`,
         },
       ],
     },
@@ -790,6 +920,172 @@ available_balance = SUM(net) WHERE available_on <= today AND type IN (charge, re
 pending_balance   = SUM(net) WHERE available_on > today
 // Updated in real-time via Kafka consumer on every balance_transaction event`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Sidecar Proxy Configuration (Istio)",
+      description: "Circuit breaking, load balancing, canary rollouts, and Vault access policy for Stripe's internal service-to-service calls",
+      api: `# DestinationRule — circuit breaker for Stripe Radar
+# Radar's whole decision budget is 100ms; a degrading replica must be
+# ejected fast enough that Payment Intents Service never sees it
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: radar-service-circuit-breaker
+  namespace: prod
+spec:
+  host: radar-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 5000
+      http:
+        http1MaxPendingRequests: 2000
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# DestinationRule — pure load balancing for Payment Orchestrator
+# 634-3,000+ TPS of acquirer-routing decisions, no outlier ejection
+# (acquirer-health scoring is handled at the application layer)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-orchestrator-lb
+  namespace: prod
+spec:
+  host: payment-orchestrator.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 3000
+      http:
+        http1MaxPendingRequests: 1500
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# VirtualService — canary rollout for Radar ML model versions
+# Formalizes the existing 1% -> 5% -> 25% -> 100% blue/green pattern
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: radar-service-canary
+  namespace: prod
+spec:
+  hosts:
+    - radar-service.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-radar-model-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: radar-service.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: radar-service.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: radar-service.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 40ms
+        retryOn: 5xx,reset,connect-failure
+---
+# AuthorizationPolicy — Vault access restricted to two services
+# Defense-in-depth: VPC network isolation (existing) + mesh-level AuthZ (new)
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: vault-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: vault-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - cluster.local/ns/prod/sa/payment-intents-service
+              - cluster.local/ns/prod/sa/tokenization-service
+      to:
+        - operation:
+            paths: ["/internal/vault/*"]
+            methods: ["GET", "POST"]
+---
+# PeerAuthentication — mTLS required cluster-wide, all 4 regions
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope:
+  IN the mesh: Charges API, Payment Intents Service, Stripe Connect,
+    Stripe Radar, Stripe Billing, Payment Orchestrator, Vault — every
+    service the API Gateway fans out to, plus Vault (deliberately
+    included so AuthorizationPolicy can restrict its callers)
+  OUT of the mesh: Card Networks (Visa/Mastercard), Bank/ACH/SEPA rails
+    (external partners — not Kubernetes services), PostgreSQL/Citus,
+    Redis (idempotency AND Radar feature-store clusters), Kafka, S3,
+    ClickHouse, Elasticsearch (direct driver connections)
+
+Circuit breaking — Radar (the 100ms problem):
+  Radar's budget is 20ms features + 40ms ML + 10ms rules + 30ms decision
+  = 100ms total. At ~3,000 TPS peak, outlierDetection with a 5s window
+  and 15s ejection (tighter than the standard 10s/30s) ejects a degrading
+  replica fast enough that Payment Intents Service's callers stay inside
+  budget. maxEjectionPercent: 50 ensures a bad deploy never takes out the
+  whole Radar fleet — the remaining 50% absorbs traffic while ejected
+  replicas recover or get rolled back
+
+Load balancing — Payment Orchestrator:
+  No outlierDetection here on purpose. The Payment Orchestrator's
+  "acquirer health: circuit-break failing acquirers" logic is APPLICATION
+  code — it scores 40+ acquiring banks on success rate, not HTTP 5xx
+  count. Mesh-level outlier detection on the Orchestrator itself would be
+  a second, conflicting circuit-breaking signal. LEAST_REQUEST LB is
+  enough: spread the 634-3,000+ TPS routing-decision load evenly
+
+Canary — Radar model versions:
+  Stripe already does blue/green (1% → 5% → 25% → 100%) for code deploys.
+  The VirtualService gives the SAME mechanism to ML model versions
+  specifically: x-radar-model-canary lets the fraud team force-route
+  test transactions to v2 for evaluation, while the 95/5 weight handles
+  the gradual production rollout. perTryTimeout: 40ms matches Radar's
+  ML-inference time budget exactly — a retry that can't complete within
+  40ms isn't worth attempting inside the 100ms total
+
+AuthorizationPolicy — Vault as defense-in-depth:
+  Vault already sits in a network-isolated VPC (PCI DSS control). Putting
+  Vault IN the mesh and adding an AuthorizationPolicy is a SECOND,
+  independent enforcement layer: even if a misconfigured security group
+  ever allowed an unexpected service into Vault's subnet, mTLS + the
+  AuthorizationPolicy's principal allowlist (Payment Intents Service and
+  Tokenisation Service only) would still block the call at L7
+
+mTLS and six-nines control-plane fail-open:
+  PeerAuthentication STRICT encrypts and mutually authenticates every
+  hop across all 4 active-active regions. 99.9999% availability = ~31.5s
+  of downtime per YEAR — if the Istio control plane (Pilot) goes down,
+  sidecars MUST keep serving with last-known config (fail open). A
+  control-plane blip becoming a payment-processing outage would consume
+  the entire annual error budget in seconds`,
+    },
   ],
 };
 
@@ -951,5 +1247,136 @@ WHAT CAUSES MOST OUTAGES:
   Database query performance regression (mitigated by query plan monitoring)
   Dependency failures (mitigated by circuit breakers + graceful degradation)
   DDoS (mitigated by rate limiting at edge + CDN scrubbing)`,
+  },
+  {
+    id: "sq5",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Stripe", "Adyen", "Square"],
+    question: "Stripe processes $1T+/year and 500M+ API requests/day. Break those numbers down — what do they actually drive in the architecture?",
+    answer: `$1T/year and 500M requests/day are two DIFFERENT numbers measuring
+different things — one is money, one is calls — and they decompose into
+five very different sizing problems.
+
+ASSUMPTIONS:
+  • $1T+ payment volume/year, 500M+ API requests/day
+  • Average charge ≈ $50 (blend of micro-SaaS and B2B invoices)
+  • Idempotency keys: Redis, 24h TTL. Webhook retry window: 72h
+  • Radar: <100ms total (20ms features + 40ms ML + 10ms rules + 30ms decision)
+
+1. API REQUESTS → IDEMPOTENCY REDIS SIZE:
+   500M/day ÷ 86,400s ≈ 5,787 req/sec average
+   With 24h TTL, steady state ≈ 5,787 × 86,400 ≈ 500M resident keys
+   → The REQUEST RATE sizes Gateway compute; the RESIDENT KEY COUNT
+     (a full day's worth) sizes the idempotency Redis cluster — two
+     different numbers from the same input
+
+2. PAYMENT VOLUME → CHARGE RATE:
+   $1T/year ÷ 365 ÷ 86,400s ≈ $31,700/sec
+   At ~$50/charge: ≈ 634 charges/sec average, ~3,000+ TPS at peak
+   → Sizes Payment Intents' Citus write throughput and the Payment
+     Orchestrator's routing-decision rate
+
+3. RADAR FEATURE STORE:
+   ~3,000 TPS peak × one pipelined batch of 20+ Redis reads ≈ 3,000
+   RTTs/sec to a SEPARATE Redis cluster (not the idempotency one),
+   tuned for sub-5ms p99 — it has to fit inside the 100ms total budget
+
+4. WEBHOOK BACKLOG (per-merchant worst case):
+   A merchant at 100 charges/sec, endpoint down for the full 72h window:
+   100 × 259,200s ≈ 26M pending webhook_deliveries rows for ONE merchant
+   → Drives a (status, next_attempt_at) partial index — this is an
+     INDEX DESIGN number, not a capacity number
+
+5. NETWORK TOKENS — RELIABILITY AS REVENUE:
+   ~2% "card expired" decline rate on $1T/year ≈ $20B/year at risk
+   Network tokens cut that ~30% → ~$6B/year recovered
+   → A reliability feature (auto-updating tokens) is also worth $6B/year
+
+PUNCH LINE:
+"Don't let '$1T and 500M requests/day' collapse into one estimate. They
+size five unrelated things: idempotency Redis (~500M keys), Citus write
+throughput (634-3,000 TPS), Radar's feature-store Redis (~3,000 RTTs/sec),
+a webhook index design (26M rows, per merchant), and — easy to forget —
+$6B/year of recovered revenue from network tokens."`,
+    followups: [
+      "If average charge size dropped from $50 to $5 (a shift toward micro-transactions), which of these five numbers changes the most, and what would you re-architect first?",
+      "The idempotency Redis holds ~500M keys at steady state with a 24h TTL. What happens to that number during a 3x Black-Friday traffic spike, and does the TTL need to change?",
+      "Walk through how you'd validate the '~3,000 RTTs/sec to Radar's feature store' estimate using production metrics, without access to Stripe's actual dashboards.",
+    ],
+  },
+  {
+    id: "sq6",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Stripe", "Adyen", "PayPal"],
+    question: "Stripe's Payment Orchestrator already does acquirer-level circuit breaking for external banks. Where does a service mesh fit in, and what would you explicitly keep OUT of it?",
+    answer: `The Orchestrator's acquirer circuit breaking is APPLICATION logic for
+EXTERNAL banks — it scores 40+ acquirers on approval rate, not HTTP
+status codes. A service mesh adds a different, complementary layer for
+Stripe's INTERNAL service-to-service calls.
+
+WHY A MESH FITS:
+  Payment Intents → Radar is the tightest internal hop — Radar's entire
+  budget is 100ms (20/40/10/30ms split across features/ML/rules/decision).
+  At ~3,000 TPS peak, ONE degrading Radar replica can blow that budget for
+  thousands of charges/sec. The existing graceful-degradation path ("Radar
+  unavailable → allow with elevated risk flag") is a LAST RESORT; a mesh
+  catches the degradation earlier via outlierDetection, before full Radar
+  unavailability.
+
+DATA PLANE:
+  Envoy sidecars on Charges API, Payment Intents Service, Stripe Connect,
+  Stripe Radar, Stripe Billing, Payment Orchestrator, and Vault.
+
+CONTROL PLANE:
+  Istio, deployed per-region across all 4 active-active regions
+  (US-East, US-West, EU-West, AP-Southeast).
+
+WHAT THIS BUYS:
+  1. Radar circuit breaking — tight 5s/15s outlierDetection window
+     (vs the standard 10s/30s) because the SLO is 100ms, not seconds.
+     maxEjectionPercent: 50 prevents one bad deploy from ejecting the
+     whole Radar fleet
+  2. Payment Orchestrator load balancing — LEAST_REQUEST for
+     634-3,000+ TPS of routing decisions. Deliberately NO outlierDetection
+     here — that would create a SECOND circuit breaker conflicting with
+     the Orchestrator's own acquirer-health scoring
+  3. Radar model canary — the existing blue/green (1%→5%→25%→100%)
+     becomes a VirtualService weight; perTryTimeout: 40ms matches Radar's
+     ML-inference budget exactly
+  4. Vault AuthorizationPolicy — only Payment Intents Service and
+     Tokenisation Service may call Vault, as a SECOND enforcement layer
+     on top of (not instead of) Vault's existing VPC network isolation
+  5. mTLS + tracing across all 4 regions — one trace ID follows a charge
+     end-to-end, useful when explaining a Radar decision during a dispute
+
+WHAT STAYS OUT:
+  • Card Networks (Visa/Mastercard) and Bank/ACH/SEPA — external
+    partners, not Kubernetes services. The Orchestrator's acquirer-health
+    scoring stays as application logic; mesh circuit breaking is a LOWER
+    layer for Stripe-internal hops, not a replacement
+  • PostgreSQL/Citus, both Redis clusters (idempotency + Radar features),
+    Kafka, S3, ClickHouse, Elasticsearch — direct driver connections, no
+    sidecar applies
+
+TRADE-OFFS:
+  • Sidecar adds ~1-2ms/hop — real money inside Radar's 100ms budget.
+    This is why Radar's feature extraction stays as ONE service doing
+    pipelined Redis calls, rather than being decomposed into more hops
+  • Six-nines (99.9999%) = ~31.5s downtime/YEAR. Control plane MUST fail
+    open (sidecars retain last-known config) — a Pilot blip becoming a
+    payment outage would burn the entire annual error budget in seconds
+  • Two circuit breakers with different signals (Orchestrator's
+    acquirer-health score vs mesh outlierDetection) must never be applied
+    to the SAME hop — that's why the mesh's outlierDetection targets
+    Radar (internal), not the Orchestrator's acquirer calls (external)`,
+    followups: [
+      "If you DID put outlierDetection on the Payment Orchestrator's calls to acquirers, what failure mode could that create alongside the existing acquirer-health scoring?",
+      "Radar's outlierDetection uses a 5s/15s window instead of the standard 10s/30s. What concretely goes wrong if you left it at 10s/30s given the 100ms SLO?",
+      "Vault has both VPC isolation AND an AuthorizationPolicy. Describe a concrete misconfiguration scenario where the second layer is the only thing that prevents a breach.",
+    ],
   },
 ];

@@ -16,7 +16,9 @@ Scale facts: 500 hours of video uploaded every minute, 1B+ hours watched daily, 
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                   API GATEWAY / CDN EDGE                            │
+│       SERVICE MESH — Envoy sidecar attached to every service        │
 │         Auth · Rate Limiting · Routing · TLS Termination           │
+│    mTLS · Load Balancing · Retries · Circuit Breaking · Tracing    │
 └──┬──────────────┬──────────────┬─────────────────┬─────────────────┘
    │              │              │                 │
    ▼              ▼              ▼                 ▼
@@ -115,6 +117,66 @@ CDN INTERACTION:
 • Every segment request = CDN hit (99%+ hit rate for popular videos)
 • Cache key: video_id + quality + segment_number
 • Cache miss → CDN fetches from origin GCS → caches for future viewers`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Five numbers, derived from the headline metrics, explain why almost every box on this diagram is shaped the way it is.
+
+ASSUMPTIONS:
+• 2.7B MAU, 1B+ hours watched/day, 500 hours uploaded/min (≈50 videos/min at 10min avg)
+• 800M videos in catalog, ~70% of watch time driven by the Recommendation Engine
+• Average watched video ≈ 10 minutes; "valid view" = 30s+ watched
+• 100+ CDN edge PoPs, ~10 Regional Edge Cache hubs
+• Transcode: 8 quality variants per upload, ~5 min per variant (per "Handling 500 Hours/Minute")
+
+1. CONCURRENT VIEWERS — LITTLE'S LAW, NOT THE RAW "1B HOURS/DAY"
+   1B hours/day ÷ 24h ≈ 41.7M concurrent viewers, on average, at any instant globally
+   → This is the number that sizes the CDN's simultaneous active-stream count —
+     and it fits comfortably inside the Redis/Memorystore "100M entries" L2 cache
+     (each concurrent viewer holds one video:meta entry, leaving headroom for the
+     long tail of recently-watched-but-paused videos too).
+
+2. SUSTAINED EGRESS BANDWIDTH
+   41.7M concurrent streams × ~3 Mbps blended bitrate (mix of 360p-1080p) ≈ 125 Tbps
+   sustained global egress, spread across ~10 Regional Edge Cache hubs ≈ ~12.5 Tbps/hub
+   → Explains why CDN topology has THREE tiers (Origin → Regional → PoP edge) —
+     no single tier could absorb 125 Tbps without the layer above fanning it out.
+
+3. TRANSCODE FLEET CONCURRENCY
+   500 hours/min ÷ 10min avg ≈ 50 uploads/min ≈ 0.83 uploads/sec
+   × 8 quality variants × ~300s (5min) per variant (Little's Law again)
+   ≈ 0.83 × 8 × 300 ≈ 2,000 concurrent transcode jobs at steady-state average
+   At the 3-5× peak multiplier already noted for upload traffic → 6,000-10,000
+   concurrent workers at peak
+   → This is the actual number behind "thousands of concurrent transcode
+     workers" — and why the fleet needs Kubernetes HPA, not a fixed pool.
+
+4. RECOMMENDATION-DRIVEN PLAYS/SEC
+   70% of 1B watch-hours/day ≈ 700M hours/day from recommendations
+   ÷ (10min ≈ 1/6 hour per video) ≈ 4.2B recommended plays/day ÷ 86,400s
+   ≈ ~48,600 plays/sec
+   Each play implies one prior Stage-2 ranking pass over ~500 candidates
+   → ~24.3M candidate-scores/sec sustained inference load
+   → This is why "<50ms for 500 candidates" is a hard capacity constraint on
+     the ranking model fleet, not just a UX target.
+
+5. VIEW-COUNT AGGREGATION — EVENT RATE vs WRITE RATE
+   ~48,600+ valid-view-events/sec hit Kafka's video-view-events topic
+   Flink's 60s tumbling window emits ONE (video_id, delta) per video that
+   received ≥1 view in that window — not one record per event.
+   Even if 50M of the 800M videos get watched in any given 60s window:
+     50M ÷ 60s ≈ 833,000 Bigtable increments/sec ÷ 100 shards ≈ 8,330
+     writes/sec per shard-group, across the ENTIRE catalog
+   → This is why 100 shards per video_id is enough: aggregate write volume
+     stays in the low thousands/sec/shard even at this scale.
+
+Interview punch line: "41.7M concurrent viewers — not 1B hours/day — sizes
+the CDN's simultaneous streams and fits inside Memorystore's 100M-entry
+cache. That implies ~125 Tbps egress, which is why the CDN has three tiers.
+~2,000-10,000 concurrent transcode jobs is why the fleet auto-scales.
+~24.3M candidate-scores/sec is why ranking has a hard <50ms budget. And
+even at 50M videos watched per minute, sharded Bigtable counters never see
+more than ~8,330 writes/sec/shard-group."`,
         },
       ],
     },
@@ -343,6 +405,87 @@ SEEK HANDLING:
   2. Player fetches segment N from CDN (may be cache miss if long seek)
   3. Player decodes and begins playback at offset within segment
   No server-side state needed — all math done client-side`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `The "Playback Session" flow above is three internal hops — Metadata Service
+(~5ms) → Auth Service (~10ms) → Playback Service (~20ms) — before a single
+byte reaches the CDN. That's 35ms of a <200ms p99 budget spent entirely on
+service-to-service calls the API Gateway doesn't see once a request is past it.
+
+WHY A MESH FITS HERE:
+• Metadata Service has the highest fan-in on the whole diagram: every
+  playback session, every search result, and every recommendation
+  candidate gets enriched from it, against a p99 < 100ms SLO.
+• Recommendation Engine's Stage 2 ranking scores ~500 candidates in
+  <50ms — compute-bound, not failure-bound. A replica running slow isn't
+  "down," it's just doing 500-candidate inference.
+• View Count Service and Comment Service sit on async/eventual-consistency
+  paths (60s aggregation windows, 60s like-counter flush) — they need
+  mTLS and tracing, but not aggressive circuit breaking.
+• Upload Service's "mark video PUBLISHED" transition (status: PROCESSING
+  → PUBLISHED, available_qualities: [...]) is what makes a video eligible
+  for search and recommendations — this transition should only ever be
+  triggered by the Transcode Orchestrator once ALL quality variants exist.
+
+DATA PLANE:
+Envoy sidecar attached to: Upload Service, Metadata Service, Search
+Service, Recommendation Engine (the diagram's 4-way fan-out), plus
+Playback Service, Comment Service, View Count Service, and the Transcode
+Orchestrator — 8 services.
+
+CONTROL PLANE:
+Istio, deployed per region (US, Europe, Asia-Pacific), matching the
+existing active/active regional deployment in "Global Availability &
+Disaster Recovery."
+
+WHAT THIS BUYS:
+1. Metadata Service gets TIGHT circuit breaking (outlierDetection,
+   interval: 5s / baseEjectionTime: 15s). With every playback, search, and
+   recommendation request depending on it and a p99 < 100ms SLO, a single
+   unhealthy replica needs to be ejected before it drags down the 35ms
+   internal slice of every playback session's 200ms budget.
+2. Recommendation Engine gets LOAD BALANCING ONLY — LEAST_REQUEST, no
+   outlierDetection. Its Stage 2 ranking pass is legitimately compute-heavy;
+   ejecting a replica because it's "slow" would just shift that same
+   500-candidate workload onto fewer, equally-busy replicas.
+3. A VirtualService canary on Recommendation Engine routes a slice of
+   homepage traffic to a build with a new multi-objective ranking target
+   (the watch-time → satisfaction-survey evolution described in "Engagement
+   Signals") — compare match-rate and session-retention against the 95%
+   baseline before full rollout.
+4. An AuthorizationPolicy on Metadata Service restricts the internal
+   status-transition endpoint (PROCESSING → PUBLISHED) to the Transcode
+   Orchestrator ONLY. No other service — not Upload Service itself after
+   the initial write, not Comment Service, nothing — can flip a video live
+   before all 8 quality variants are actually ready.
+5. mTLS + distributed tracing across all 8 services — when a playback
+   session takes 180ms instead of 35ms, tracing shows whether the time
+   went to Metadata, Auth, or Playback Service specifically.
+
+DIAGRAM:
+The SERVICE MESH band sits inside "API GATEWAY / CDN EDGE" at the top —
+Upload Service, Metadata Service, Search Service, and Recommendation Engine
+(shown) plus Playback Service, Comment Service, View Count Service, and
+Transcode Orchestrator (LLD-level, called internally) all run an Envoy
+sidecar. MySQL, Elasticsearch, Distributed Storage (GCS/Bigtable/Spanner/
+Redis), and the Google CDN Edge Network are untouched.
+
+TRADE-OFFS:
+• MySQL, Elasticsearch, GCS, Bigtable, Spanner, Memorystore/Redis, Pub/Sub
+  — out, same reasoning as every other file: not HTTP/gRPC, mesh policy
+  doesn't apply.
+• The Google CDN Edge Network is explicitly OUT and stays out — its access
+  control is the existing HMAC-signed-URL scheme, not mTLS. CDN PoPs are
+  Google-managed edge infrastructure, not workloads in the "prod" mesh
+  namespace.
+• Sidecar overhead matters more here than in most files: ~1-2ms/hop × 3
+  hops (Metadata → Auth → Playback) ≈ 3-6ms against a 35ms internal budget
+  is ~10-15% — worth tracking, even though the overall 200ms SLO has
+  headroom.
+• Control-plane-down fail-open: sidecars must keep routing on cached
+  config — playback's p99 < 2s SLO can't tolerate blocking on a control
+  plane health check.`,
         },
       ],
     },
@@ -916,6 +1059,181 @@ Creator Studio stats (more accurate, slower):
   Difference: creator analytics = true deduplicated count
              public view count = fast approximate count (may differ by ~1–2%)`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Sidecar Configuration",
+      description: "Per-region Istio mesh: Metadata circuit breaking, Recommendation LB, ranking canary, publish-integrity AuthorizationPolicy",
+      api: `# Istio configuration — applied per region (us-prod, eu-prod, apac-prod)
+
+# 1. Metadata Service — tight circuit breaking.
+#    Highest fan-in service on the diagram: every playback session, search
+#    result, and recommendation candidate enriches from it, against a
+#    p99 < 100ms SLO. One unhealthy replica must be ejected fast.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: metadata-service-circuit-breaker
+  namespace: us-prod
+spec:
+  host: metadata-service.us-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 10000
+      http:
+        http1MaxPendingRequests: 5000
+        maxRequestsPerConnection: 100
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# 2. Recommendation Engine — load balancing ONLY, no outlier ejection.
+#    Stage 2 ranking scores ~500 candidates in <50ms — compute-bound, not
+#    failure-bound. A "slow" replica is just doing the work; ejecting it
+#    would pile that same workload onto fewer replicas.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: recommendation-engine-lb
+  namespace: us-prod
+spec:
+  host: recommendation-engine.us-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 4000
+      http:
+        http1MaxPendingRequests: 2000
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# 3. Canary a new multi-objective ranking model (the watch-time →
+#    satisfaction-survey evolution from "Engagement Signals") on a slice
+#    of homepage traffic before full rollout.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: recommendation-engine-canary
+  namespace: us-prod
+spec:
+  hosts:
+    - recommendation-engine.us-prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-recommendation-model-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: recommendation-engine.us-prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: recommendation-engine.us-prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: recommendation-engine.us-prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 40ms
+        retryOn: 5xx,reset,connect-failure
+---
+# 4. Publish-integrity — only the Transcode Orchestrator may flip a video
+#    from PROCESSING to PUBLISHED. No other service (including Upload
+#    Service after its initial write) can make a video searchable or
+#    recommendable before all 8 quality variants exist.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: metadata-service-publish-restricted
+  namespace: us-prod
+spec:
+  selector:
+    matchLabels:
+      app: metadata-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/us-prod/sa/transcode-orchestrator"]
+      to:
+        - operation:
+            paths: ["/internal/videos/*/status"]
+            methods: ["PATCH"]
+---
+# 5. mTLS within the region
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: us-prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope (8 services, matching the diagram's fan-out plus
+internal-only components):
+  IN MESH:  Upload Service, Metadata Service, Search Service,
+            Recommendation Engine, Playback Service, Comment Service,
+            View Count Service, Transcode Orchestrator
+  OUT:      MySQL, Elasticsearch, GCS, Bigtable, Spanner, Memorystore/
+            Redis, Pub/Sub, Google CDN Edge Network — none are HTTP/gRPC
+            services Envoy can apply L7 policy to, and the CDN already has
+            its own access-control layer (HMAC-signed URLs).
+
+Metadata Service circuit breaking — the math:
+  From Back-of-the-Envelope Estimation: ~48,600 recommendation-driven
+  plays/sec, plus every search result and every Stage-1 candidate also
+  triggers a Metadata Service lookup for enrichment (title, thumbnail,
+  channel, stats). The realistic fan-in is several multiples of 48,600/sec.
+  Against a p99 < 100ms SLO, a replica returning 5xx under load needs to be
+  out of rotation within seconds — interval: 5s / baseEjectionTime: 15s —
+  or it eats into the 35ms (Metadata + Auth + Playback) slice of every
+  playback session's 200ms budget.
+
+Recommendation Engine — LB-only, the same reasoning as Stripe's Payment
+Orchestrator, TikTok's Live Streaming Service, and Uber's Dispatch Engine
+in this series: the thing that makes a replica "slow" (scoring 500
+candidates with a deep NN) is the NORMAL workload, not a failure signal.
+outlierDetection would eject healthy-but-busy replicas, concentrating the
+~24.3M candidate-scores/sec onto fewer machines — the opposite of what you
+want under load. LEAST_REQUEST spreads new requests toward whichever
+replica currently has the smallest queue.
+
+Canary — tied to the ranking objective's history:
+  "Engagement Signals" describes three eras of ranking target: clicks →
+  watch time → multi-objective (completion + satisfaction survey + churn
+  signals). Each future change to that objective function is exactly this
+  kind of risky, hard-to-predict-offline change — the canary routes a
+  slice of homepage traffic to the new model and compares match-rate,
+  session length, and "Not interested" rate against the 95% baseline
+  before promoting v2 to 100%. perTryTimeout: 40ms leaves ~10ms of headroom
+  inside the <50ms ranking budget for a single retry.
+
+Publish-integrity AuthorizationPolicy:
+  "Handling 500 Hours/Minute" describes the Transcode Orchestrator marking
+  a video PUBLISHED only once ALL quality-variant workers complete. This
+  policy makes that the ONLY way a video's status can become PUBLISHED at
+  the mesh layer — independent of application code. Without it, a bug in
+  any other in-mesh service that constructs the right PATCH request could
+  make a half-transcoded video appear in search and recommendations with
+  missing quality variants.
+
+mTLS & control-plane topology:
+  Istio runs per region (us-prod, eu-prod, apac-prod), mirroring the
+  existing active/active regional deployment — a control-plane issue in
+  one region never affects playback in another. PeerAuthentication STRICT
+  enforces mTLS on every in-mesh hop. With playback's p99 < 2s SLO,
+  sidecars MUST fail open on cached config if their local control plane
+  briefly drops — playback cannot block on an istiod health check.`,
+    },
   ],
 };
 
@@ -1274,6 +1592,111 @@ APPEALS:
       "How do you avoid false positives that remove legitimate educational or news content?",
       "How do you handle content that is legal in some countries but illegal in others?",
       "How would you design the reviewer's work queue to prioritize the most harmful content?",
+    ],
+  },
+  {
+    id: "yq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Google", "Netflix", "Meta"],
+    question: "Walk through the back-of-the-envelope math for YouTube — concurrent viewers, egress bandwidth, transcode fleet size, and recommendation load. What does each number actually size?",
+    answer: `Five derivations, each tying a number to a box on the diagram.
+
+ASSUMPTIONS: 2.7B MAU, 1B+ hours watched/day, 500 hours uploaded/min
+(≈50 videos/min at 10min avg), 800M videos in catalog, ~70% of watch time
+from the Recommendation Engine, ~10 Regional Edge Cache hubs, 8 quality
+variants per upload at ~5min/variant.
+
+1. CONCURRENT VIEWERS (Little's Law, not the raw "1B hours/day")
+   1B ÷ 24h ≈ 41.7M concurrent viewers globally, on average
+   → Sizes the CDN's simultaneous active-stream count, and fits inside
+     Memorystore's "100M entries" L2 metadata cache.
+
+2. SUSTAINED EGRESS BANDWIDTH
+   41.7M × ~3 Mbps blended bitrate ≈ 125 Tbps, ÷ ~10 regional hubs
+   ≈ ~12.5 Tbps/hub → explains the three-tier CDN topology (Origin →
+     Regional → PoP edge) — no single tier absorbs 125 Tbps alone.
+
+3. TRANSCODE FLEET CONCURRENCY
+   0.83 uploads/sec × 8 variants × 300s per variant ≈ 2,000 concurrent
+   transcode jobs at steady state, 6,000-10,000 at the documented 3-5×
+   peak → the actual number behind "thousands of concurrent workers" and
+   why the fleet needs Kubernetes HPA.
+
+4. RECOMMENDATION-DRIVEN PLAYS/SEC
+   70% × 1B hours/day ÷ (1/6 hour per video) ÷ 86,400s ≈ 48,600 plays/sec,
+   each implying a Stage-2 ranking pass over ~500 candidates → ~24.3M
+   candidate-scores/sec → makes "<50ms for 500 candidates" a hard capacity
+   constraint, not a UX nicety.
+
+5. VIEW-COUNT AGGREGATION — EVENT RATE vs WRITE RATE
+   ~48,600+ events/sec into Kafka, but Flink's 60s window emits ONE
+   (video_id, delta) per video watched in that window — even at 50M videos
+   touched per window, that's ≈8,330 writes/sec/shard-group across the
+   ENTIRE 800M-video catalog, not per video.
+
+The punch line: the headline number (1B hours/day) sizes nothing directly
+— every architectural choice traces back to a DERIVED number: concurrency
+(41.7M), bandwidth (125 Tbps), fleet concurrency (2,000-10,000), inference
+throughput (24.3M/sec), and aggregate write rate (8,330/sec/shard-group).`,
+    followups: [
+      "Why is 41.7M concurrent viewers the right number for sizing the Memorystore cache, instead of 2.7B MAU or 1B hours/day?",
+      "If average watched-video length dropped from 10 minutes to 1 minute (a Shorts-heavy mix), which of these five numbers change, and by how much?",
+      "The transcode fleet sizing assumes ~5 min/variant — what happens to fleet concurrency if a new codec (AV1) takes 3× longer to encode?",
+    ],
+  },
+  {
+    id: "yq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Google", "Netflix", "Uber"],
+    question: "The API Gateway already handles auth, rate limiting, and routing at the edge. Why add a service mesh behind it, and what would you actually configure?",
+    answer: `The gateway secures EDGE traffic; the mesh covers the SERVICE-TO-SERVICE
+hops behind it — and the "Playback Session" flow alone is 35ms of internal
+hops (Metadata ~5ms → Auth ~10ms → Playback ~20ms) inside a <200ms p99 budget.
+
+DATA PLANE: Envoy sidecar on Upload Service, Metadata Service, Search
+Service, Recommendation Engine (the diagram's 4-way fan-out), plus
+Playback Service, Comment Service, View Count Service, and the Transcode
+Orchestrator — 8 services.
+
+CONTROL PLANE: Istio, per region (US, Europe, Asia-Pacific), matching the
+existing active/active regional deployment.
+
+WHAT IT BUYS:
+1. Metadata Service — TIGHT circuit breaking (interval: 5s,
+   baseEjectionTime: 15s). It's the highest-fan-in service on the diagram
+   (every playback, search, and recommendation depends on it) with a
+   p99 < 100ms SLO — a bad replica must be ejected before it eats into the
+   35ms internal slice of the playback budget.
+2. Recommendation Engine — LB-only, NO outlier ejection. Stage 2 ranking
+   scoring ~500 candidates in <50ms is compute-bound; a "slow" replica is
+   just doing the work, and ejecting it would concentrate load further.
+3. VirtualService canary on Recommendation Engine — A/B-test the next
+   evolution of the ranking objective (clicks → watch time →
+   multi-objective satisfaction, per "Engagement Signals") against the
+   95% baseline.
+4. AuthorizationPolicy on Metadata Service — only the Transcode
+   Orchestrator may flip a video PROCESSING → PUBLISHED. No other service,
+   including Upload Service after its initial write, can make a
+   half-transcoded video appear in search or recommendations.
+5. mTLS + tracing across all 8 services — when a playback session takes
+   180ms instead of 35ms, tracing pinpoints whether it was Metadata, Auth,
+   or Playback Service.
+
+TRADE-OFFS: MySQL, Elasticsearch, GCS, Bigtable, Spanner, Memorystore,
+Pub/Sub, and the Google CDN Edge Network stay OUT — not HTTP/gRPC, and the
+CDN already has its own HMAC-signed-URL access control. Sidecar overhead
+(~1-2ms/hop × 3 hops ≈ 3-6ms) is ~10-15% of the 35ms internal budget —
+more material here than in most services, though still inside the overall
+200ms SLO. Control-plane-down fail-open is required: playback's p99 < 2s
+SLO can't block on an istiod health check.`,
+    followups: [
+      "Why does Recommendation Engine get LB-only with no outlier ejection, while Metadata Service gets tight circuit breaking — what's the underlying distinction?",
+      "The publish-integrity policy makes the Transcode Orchestrator the only service that can set status=PUBLISHED — what would break if a second service (say, a manual re-encode tool) also needed that ability?",
+      "Sidecar overhead is ~10-15% of the 35ms internal playback budget — at what point would that overhead become a reason NOT to mesh a particular hop?",
     ],
   },
 ];

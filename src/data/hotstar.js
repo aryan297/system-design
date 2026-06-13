@@ -53,14 +53,18 @@ Three hard problems that make IPL different from everything else:
 │  Android · iOS · Web · Smart TV · Jio STB · Airtel XStream             │
 │  Custom ABR player "Starburst" — bandwidth probing every 2s             │
 └─────────────────────────────────────────────────────────────────────────┘
-                     │
-          ┌──────────┴───────────┐
-          ▼                      ▼
-┌──────────────────┐   ┌────────────────────────────┐
-│  Auth Service    │   │  Engagement Services        │
-│  JWT + DRM       │   │  Live score · Poll · Chat   │
-│  Entitlement     │   │  Kafka + Redis Pub/Sub       │
-└──────────────────┘   └────────────────────────────┘`,
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           SUPPORTING SERVICES                           │
+│         SERVICE MESH — Envoy sidecar attached to every service          │
+│          ┌──────────────────┐   ┌────────────────────────────┐          │
+│          │  Auth Service    │   │  Engagement Services       │          │
+│          │  JWT + DRM       │   │  Live score · Poll · Chat  │          │
+│          │  Entitlement     │   │  Kafka + Redis Pub/Sub     │          │
+│          └──────────────────┘   └────────────────────────────┘          │
+│      mTLS · Load Balancing · Retries · Circuit Breaking · Tracing       │
+└─────────────────────────────────────────────────────────────────────────┘`,
 
   metrics: [
     { label: "Peak concurrent viewers (IPL 2023 final)", value: "32.5 million (world record)" },
@@ -123,6 +127,55 @@ Hotstar's approach: standard HLS for most users (10–30s latency, more stable),
 Latency vs stability tradeoff:
   Lower latency = smaller client buffer = more rebuffering on bad networks
   Hotstar picks 10s for most users (India's 4G has jitter) — better to be 10s late than to buffer every over.`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, size the problem — every number here should map directly to something in the diagram.
+
+ASSUMPTIONS:
+• 32.5M peak concurrent viewers (IPL 2023 final, world record)
+• 2-second HLS segments, 6 quality variants (360p → 4K) + audio-only fallback
+• Every client polls the manifest every 2 seconds and pulls 1 segment every 2 seconds
+• 8 major CDN PoPs in India (Multi-CDN: Akamai + Fastly + CloudFront)
+• ~10 Tbps peak bandwidth served across all CDN edges
+
+1. Manifest request rate: 32.5M viewers ÷ 2s ≈ 16.25M manifest requests/sec.
+   → With ±1s jitter spreading this over a 2-second window and a 2s CDN
+   TTL + active manifest push, this MUST be served almost entirely from
+   CDN edge cache — even 0.1% origin fallthrough is 16,250 req/sec hitting
+   the origin shield.
+
+2. Segment request rate: same math, ~16.25M segment requests/sec. Combined
+   with manifest polling, total CDN edge load ≈ 32.5M req/sec.
+   → Spread across 8 major PoPs ≈ 4M req/sec/PoP at peak — Mumbai (Jio
+   headquarters city, 8 Tbps capacity) absorbs a disproportionate share.
+
+3. Average bitrate per viewer: ~10 Tbps ÷ 32.5M viewers ≈ 308 kbps average
+   — below even the 360p tier (400 kbps).
+   → This is the single most revealing number in the whole estimate: it
+   confirms a large fraction of India's IPL audience is on 240p/360p or
+   audio-only. The 32 kbps audio-only mode isn't an edge case — it's load-
+   bearing for the average.
+
+4. Active CDN push volume: 6 quality variants × 1 push/2s × 3 CDNs = 9
+   push API calls/sec.
+   → 9 pushes/sec eliminate the 32.5M pulls/sec that would otherwise hit
+   origin on cache miss — a >3,000,000x leverage ratio, and the entire
+   justification for the active segment push pipeline.
+
+5. Origin shield load: with active push + request coalescing, origin sees
+   roughly 1 write per segment per quality variant regardless of viewer
+   count — 6 qualities ÷ 2s ≈ 3 req/sec for segments + ~0.5 req/sec for
+   manifest rewrites ≈ 3.5 req/sec total origin load.
+   → Versus the 32.5M req/sec that would hit origin without these
+   mitigations — roughly a 10-million-times reduction.
+
+Interview punch line: 16.25M manifest + segment requests/sec map onto the
+MULTI-CDN TIER's 8 PoPs; the 308 kbps average bitrate maps onto the ABR
+quality ladder (and explains why audio-only mode exists); the 9 push
+calls/sec map onto the active segment push pipeline; and the ~3.5 req/sec
+origin load is the number that proves the SEGMENT ORIGIN never sees the
+32M-viewer thundering herd at all.`,
         },
       ],
     },
@@ -318,6 +371,67 @@ Admission control (last resort):
   If all else fails: new session requests get a "wait and retry" response (HTTP 503 + Retry-After: 30)
   Existing sessions with valid JWTs are never dropped — only new logins are throttled
   A "virtual queue" page with real-time position display (seen during IPL ticket sales for Zomato/BookMyShow, same principle)`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `A service mesh moves cross-cutting networking concerns OUT of
+application code and INTO a sidecar proxy (Envoy) deployed next
+to every service instance. All traffic in/out of a service passes
+through its sidecar first.
+
+WHY A MESH FITS HOTSTAR'S FLEET — WITH A CAVEAT:
+Hotstar's architecture has two very different planes:
+• The VIDEO DELIVERY PATH (Ingest, Transcode Farm, Segment Origin,
+  Multi-CDN) is a media pipeline + CDN, not request/response
+  microservices — a mesh adds no value here and would add latency
+  to the most latency-sensitive path in the system
+• The SUPPORTING SERVICES plane (Auth Service, Engagement Services)
+  IS a classic microservices fleet that calls each other and gets
+  called by clients — THIS is where the mesh lives
+
+1. Data plane — Envoy sidecar attached to every Auth Service and
+   Engagement Service pod
+   • Applies retries, timeouts, circuit breaking, mTLS
+   • Emits uniform metrics/traces for both services
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Pushes policy centrally: "Auth Service p99 > 50ms → eject pod"
+   • "Engagement Service v2 gets 5% canary during a low-stakes
+     league match before the IPL final"
+   • "Only the API edge and Engagement Service may call Auth
+     Service's internal validation endpoint"
+
+WHAT THIS BUYS HOTSTAR SPECIFICALLY:
+• The circuit breakers from the priority hierarchy above — "Auth
+  p99 > 50ms → use cached JWT", "Score service error → hide widget"
+  — become outlierDetection policy at the mesh layer instead of
+  bespoke per-service code, applied uniformly and tunable centrally
+  during a live match without a redeploy
+• Canary rollouts for Auth Service changes (new token-validation
+  logic, signing-key rotation) tested at 5% traffic during a regular-
+  season match, weeks before the IPL final where a bug would be
+  catastrophic
+• mTLS between Auth Service and Engagement Services — subscription
+  tier and entitlement data encrypted in transit
+• AuthorizationPolicy restricts Auth Service's internal endpoints to
+  only the API edge and Engagement Services — zero-trust even inside
+  the "Supporting Services" plane
+• End-to-end tracing for "issue playback token" — from API edge →
+  Auth Service → Redis subscription cache → JWT signing
+
+DIAGRAM: the "SERVICE MESH" band inside the SUPPORTING SERVICES box
+represents this — only Auth Service and Engagement Services sit
+behind it. The Ingest/Transcode/Segment Origin/Multi-CDN path above
+is intentionally NOT part of the mesh.
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — negligible against Auth's 50ms p99
+  budget, but it's still a number that must be measured, not assumed
+• Control plane becomes a new dependency for Auth/Engagement (sidecars
+  cache last-known config if it goes down)
+• Discipline required to keep the video delivery path OUT of the
+  mesh — the moment someone "helpfully" injects a sidecar into the
+  transcode farm, IPL's tightest latency budget gets an unplanned tax`,
         },
         {
           title: "Adaptive Bitrate — Handling India's Network Diversity",
@@ -763,6 +877,146 @@ WS wss://engagement.hotstar.com/live/{matchId}/commentary
         if success: switch all future requests to fallback CDN
         persist CDN preference to localStorage (survives page reload)`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar proxy configuration for the Supporting Services plane: circuit breaking on Playback Auth, canary rollout for Engagement Service, mTLS and zero-trust access",
+      api: `# DestinationRule — circuit breaking for Playback Auth Service
+# Every player checks/refreshes its JWT against this service;
+# the priority hierarchy demands p99 < 50ms or fall back to cached JWT
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: playback-auth-circuit-breaker
+  namespace: supporting-services
+spec:
+  host: playback-auth.supporting-services.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 1000
+      http:
+        http1MaxPendingRequests: 500
+        maxRequestsPerConnection: 20
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary rollout for Engagement Service
+# New score/poll logic tested at low traffic during a regular-season
+# match, weeks before it has to survive the IPL final
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: engagement-service-canary
+  namespace: supporting-services
+spec:
+  hosts:
+    - engagement-service.supporting-services.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-engagement-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: engagement-service.supporting-services.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: engagement-service.supporting-services.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: engagement-service.supporting-services.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 1
+        perTryTimeout: 100ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — only the API edge and Engagement Service
+# may call Playback Auth's internal validation endpoints
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: playback-auth-access
+  namespace: supporting-services
+spec:
+  selector:
+    matchLabels:
+      app: playback-auth
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/edge/sa/api-gateway"
+              - "cluster.local/ns/supporting-services/sa/engagement-service"
+
+---
+# PeerAuthentication — mTLS enforced within the Supporting Services plane
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: supporting-services
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `WHERE THE MESH STOPS:
+Sidecars are injected ONLY into pods in the "supporting-services"
+namespace — Playback Auth and Engagement Service. The Ingest,
+Transcode Farm, Segment Origin, and CDN orchestrator run in a
+separate "media-pipeline" namespace with NO sidecar injection
+webhook enabled. This is a deliberate boundary: the video path's
+latency budget (sub-100ms per hop in places) can't absorb even the
+1-2ms a sidecar adds, and its traffic pattern (S3 writes, CDN push
+APIs) doesn't benefit from mesh features anyway.
+
+CIRCUIT BREAKING ON PLAYBACK AUTH (the hot path):
+Every player calls Playback Auth for a token every 15 minutes
+(32M viewers ÷ 900s ≈ 36,000 token requests/sec sustained). The
+graceful-degradation policy says "if Auth p99 > 50ms, use cached
+JWT for active sessions." outlierDetection implements the mechanical
+half of this: if Playback Auth pods start returning 5xx (e.g., Redis
+subscription cache miss storm), 5 consecutive errors in 10s ejects
+that pod for 30s, capped at 50% of the fleet. Combined with the
+app-level fallback (serve from cached JWT claims), this means a
+struggling Auth Service degrades gracefully instead of cascading
+into "every player thinks it's logged out."
+
+CANARY ROLLOUT FOR ENGAGEMENT SERVICE:
+New live-score or poll logic is deployed with 0% traffic (reachable
+only via the x-engagement-canary header), tested during a regular-
+season match at 5% live traffic, then ramped to 100% — all via
+control-plane config pushes with no redeploy. Crucially, because
+"video playback is NEVER affected by engagement service failures"
+(per the graceful degradation policy), a bad canary here degrades to
+"score widget hidden," never to "stream stops."
+
+mTLS + AUTHORIZATION POLICY:
+Subscription tier, entitlement, and JWT-claim data flowing between
+Playback Auth and Engagement Service is encrypted via STRICT mTLS.
+AuthorizationPolicy further restricts Playback Auth's internal
+endpoints to only the API edge and Engagement Service — a stray pod
+in another namespace cannot call Auth's validation endpoint even if
+it discovers the hostname.
+
+CONTROL-PLANE-DOWN FAILURE MODE:
+If istiod becomes unavailable mid-match, existing sidecars continue
+operating on cached config — circuit breaking and mTLS keep working
+for Auth and Engagement. This matters because a control-plane outage
+during the IPL final must NEVER be the reason 32M JWTs stop
+validating.`,
+    },
   ],
 };
 
@@ -979,5 +1233,117 @@ What IPL looks like:
 
 Pre-scaling solution: manually scale to peak capacity at T-4 hours. The cost of over-provisioning for 4 hours is negligible compared to the revenue and reputation damage of a broken match stream. Reserved instances reduce per-hour cost. Auto-scaling is used after the match to ramp DOWN over 30 minutes — which is exactly the gradual ramp-down auto-scaling handles well.`,
     followups: ["How would you automate the pre-scale playbook so SREs don't have to do it manually before every match?"],
+  },
+  {
+    id: "hs-q11",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Hotstar", "Netflix", "Amazon"],
+    question: "Before drawing any boxes, walk me through a back-of-the-envelope estimation for Hotstar's IPL traffic at peak.",
+    answer: `This is the "size the system before you design it" step — every number should map to a component in the architecture.
+
+STATE YOUR ASSUMPTIONS FIRST:
+• 32.5M peak concurrent viewers (IPL 2023 final, world record)
+• 2-second HLS segments, 6 quality variants (360p → 4K) + audio-only
+• Every client polls the manifest every 2s and pulls 1 segment every 2s
+• 8 major CDN PoPs in India across 3 CDNs (Akamai, Fastly, CloudFront)
+• ~10 Tbps peak bandwidth served across all CDN edges
+
+1. Manifest request rate: 32.5M ÷ 2s ≈ 16.25M manifest requests/sec. With
+   ±1s jitter spreading this over the 2-second window and a 2s CDN TTL
+   plus active manifest push, this MUST be served almost entirely from
+   CDN edge — even 0.1% origin fallthrough is 16,250 req/sec hitting the
+   origin shield.
+
+2. Segment request rate: same math gives another ~16.25M segment
+   requests/sec, for a combined ~32.5M req/sec CDN edge load. Spread
+   across 8 major PoPs ≈ 4M req/sec/PoP at peak, with Mumbai (8 Tbps
+   capacity, Jio's headquarters city) absorbing a disproportionate share.
+
+3. Average bitrate per viewer: ~10 Tbps ÷ 32.5M viewers ≈ 308 kbps —
+   below even the 360p tier (400 kbps). This is the most revealing
+   number: a large fraction of India's audience is on 240p/360p or
+   audio-only, which is why the 32 kbps audio-only mode is load-bearing,
+   not an edge case.
+
+4. Active CDN push volume: 6 quality variants × 1 push/2s × 3 CDNs = 9
+   push API calls/sec. Those 9 calls/sec eliminate the 32.5M pulls/sec
+   that would otherwise hit origin on cache miss — a >3,000,000x
+   leverage ratio.
+
+5. Origin shield load: with active push + request coalescing, origin
+   sees roughly 1 write per segment per quality variant regardless of
+   viewer count — about 3.5 req/sec total, versus the 32.5M req/sec
+   that would hit it without these mitigations.
+
+INTERVIEW PUNCH LINE: 16.25M manifest + segment requests/sec map onto the
+MULTI-CDN TIER's 8 PoPs; the 308 kbps average bitrate maps onto the ABR
+quality ladder and explains why audio-only mode exists; the 9 push
+calls/sec map onto the active segment push pipeline; and ~3.5 req/sec of
+origin load is the number that proves SEGMENT ORIGIN never sees the
+32M-viewer thundering herd. If your numbers don't land on a diagram box,
+the estimation was just arithmetic, not design.`,
+    followups: [
+      "How would these numbers change if Hotstar dropped 2-second segments to 1-second LL-HLS for everyone?",
+      "If the average bitrate is only 308 kbps, why does Hotstar still provision for 10 Tbps rather than less?",
+      "How would you estimate the Redis cluster size needed for 36,000 token validations/sec (32.5M ÷ 15-min refresh)?",
+    ],
+  },
+  {
+    id: "hs-q12",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Hotstar", "Netflix", "Disney+"],
+    question: "Hotstar's Auth Service and Engagement Services call each other and get called by 32M clients, while the video pipeline (ingest, transcode, CDN) is an entirely different kind of system. How would you manage reliability and security for the service-to-service traffic without slowing down the video path?",
+    answer: `This is the classic case for a SERVICE MESH — but the interesting
+part of this answer is knowing where NOT to put it.
+
+THE TWO PLANES:
+• VIDEO DELIVERY PATH (Ingest, Transcode Farm, Segment Origin, Multi-CDN)
+  — a media pipeline + CDN, not request/response microservices. A
+  sidecar here adds 1-2ms to the most latency-sensitive path in the
+  whole system for zero benefit.
+• SUPPORTING SERVICES PLANE (Auth Service, Engagement Services) — a
+  classic microservices fleet calling each other and serving 32M
+  clients. THIS is where the mesh belongs.
+
+1. Data plane — Envoy sidecar on every Auth Service and Engagement
+   Service pod, applying retries, timeouts, circuit breaking, and mTLS
+   with zero app code changes.
+
+2. Control plane — Istio/Consul pushes policy: "Auth Service p99 > 50ms
+   → eject pod", "Engagement Service v2 gets 5% canary traffic during a
+   regular-season match", "only the API edge and Engagement Service may
+   call Auth's internal validation endpoint".
+
+WHAT THIS BUYS HOTSTAR:
+• The existing circuit-breaker policy ("Auth p99 > 50ms → use cached
+  JWT") becomes outlierDetection at the mesh layer — tunable centrally,
+  mid-match, with no redeploy
+• Canary rollouts for Auth Service changes (token validation, signing-
+  key rotation) tested at low traffic weeks before the IPL final
+• mTLS between Auth and Engagement encrypts subscription/entitlement
+  data in transit
+• AuthorizationPolicy ensures only the API edge and Engagement Service
+  can reach Auth's internal endpoints — zero-trust even within this plane
+• End-to-end tracing for "issue playback token": API edge → Auth Service
+  → Redis subscription cache → JWT signing
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — negligible against the 50ms p99 budget,
+  but must be measured
+• Control plane becomes a new dependency (sidecars cache last-known
+  config if istiod goes down — critical during the IPL final)
+• The real engineering discipline is keeping sidecar injection OUT of
+  the media-pipeline namespace — the moment someone injects a sidecar
+  into the transcode farm "for consistency," IPL's tightest latency
+  budget gets an unplanned tax`,
+    followups: [
+      "Walk through what happens, step by step, if Playback Auth starts returning 5xx errors during the IPL final — from the outlierDetection ejection to the player's experience.",
+      "Why would injecting Envoy sidecars into the transcode farm be a bad idea even if the team standardizes on a mesh everywhere else?",
+      "How would you extend mTLS and AuthorizationPolicy to cover the CDN orchestrator, which sits between the media pipeline and the CDN providers?",
+    ],
   },
 ];

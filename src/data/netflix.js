@@ -13,7 +13,7 @@ The core insight — AWS handles control, Open Connect handles video bytes. They
                            ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                        AWS CLOUD (Brain)                         │
-│                                                                  │
+│      SERVICE MESH — Envoy sidecar attached to every service      │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐  │
 │  │  Zuul    │  │   Auth   │  │ Playback │  │ Recommendation │  │
 │  │ Gateway  │  │ Service  │  │ Service  │  │    Engine      │  │
@@ -22,7 +22,7 @@ The core insight — AWS handles control, Open Connect handles video bytes. They
 │  │ Billing  │  │   DRM    │  │ Metadata │  │  Data Pipeline │  │
 │  │ Service  │  │ License  │  │ Service  │  │  Kafka+Spark   │  │
 │  └──────────┘  └──────────┘  └──────────┘  └────────────────┘  │
-│                                                                  │
+│   mTLS · Load Balancing · Retries · Circuit Breaking · Tracing   │
 │              Cassandra · S3 · EVCache · MySQL                    │
 └──────────────────────────┬───────────────────────────────────────┘
                            │  "Fetch video from OCA-BLR-3"
@@ -85,6 +85,51 @@ Open Connect insight — OCA servers sit INSIDE ISPs:
 • ISP saves backbone bandwidth costs too → mutual benefit
 • Netflix provides hardware free; ISP provides rack space + power`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, pin down scale with rough math — numbers
+aren't graded for precision, they're graded for whether they
+justify the design decisions that follow.
+
+ASSUMPTIONS:
+• Total subscribers: 300M across 190 countries
+• Daily active users (DAU): ~30% of subscribers ≈ 90M
+• Peak concurrent streams: ~15M (Netflix's "15% of internet traffic")
+• Average bitrate per stream (SD/HD/4K blend): ~5 Mbps
+• Average session length: ~45 minutes
+• Catalog: ~50,000 hours of unique content × 1,200 encoded variants
+
+1. Peak bandwidth — justifies Open Connect CDN
+   15M streams × 5 Mbps = 75,000,000 Mbps = 75 Tbps
+   → No single AWS region can absorb 75 Tbps of egress
+   → 6,000+ OCAs × 100 Gbps = 600 Tbps capacity (8x headroom)
+
+2. Playback / manifest QPS — justifies EVCache over direct DB reads
+   New sessions/sec ≈ 15M concurrent ÷ (45 × 60s) ≈ ~5,500 req/sec avg
+   Peak (new release, 2-5x) ≈ 15K-25K req/sec
+   → Manifest is read-heavy + cacheable — DB never on hot path
+
+3. Event pipeline — derives the 500B events/day stat in Kafka
+   500B events/day ÷ 86,400 sec/day ≈ 5.8M events/sec average
+   Peak (prime time, ~1.5-2x) ≈ 8-12M events/sec
+   → Matches Netflix's published peak; justifies Kafka + per-user
+     partitioning for ordered, parallel consumption
+
+4. Viewing history storage — justifies the 90-day LiveVH TTL split
+   300M users × 10 events/day × 90 days × 200 bytes/row ≈ 54 TB raw
+   × replication factor 3 ≈ 162 TB cluster-wide
+   → Fits comfortably in Cassandra's working set; older data rolls
+     into CompressedVH (one blob per user per month)
+
+5. Video master storage — justifies S3 over block storage
+   50,000 hours × 1,200 variants × ~1.5 GB/variant-hour ≈ 90 PB
+   → OCAs cache only a popularity-weighted slice of this 90 PB
+
+Interview punch line: every number above maps to a box in the
+architecture diagram — 75 Tbps → Open Connect, 5.8M events/sec →
+Kafka, 90 PB → S3, 162 TB → Cassandra. State the number, then name
+the component it justifies.`,
+        },
       ],
     },
     {
@@ -121,6 +166,57 @@ Responsibilities:
 • Request logging — every request logged for debugging + analytics
 
 Scale: Handles all traffic from 300M users across 190 countries`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `A service mesh moves cross-cutting networking concerns OUT of
+application code and INTO a sidecar proxy (Envoy) deployed next
+to every service instance. All traffic in/out of a service passes
+through its sidecar first.
+
+WHY IT REPLACES THE OLD NETFLIX OSS STACK:
+• Eureka (service discovery SDK) → mesh control plane tracks every
+  instance; sidecar resolves endpoints — no SDK in app code
+• Ribbon (client-side load balancer) → sidecar load-balances every
+  outbound call, language-agnostic
+• Hystrix (circuit breaker, JVM-only library) → sidecar applies
+  circuit breaking / retries / timeouts uniformly to ANY language
+• Zuul (edge gateway) → can stay, or become an Envoy-based Ingress
+  Gateway — just another entry point into the same mesh
+
+1. Data plane — one Envoy sidecar per service instance
+   • iptables transparently redirects all in/out traffic through it
+   • Applies load balancing, retries, timeouts, circuit breaking
+   • Wraps every call in mTLS — zero-trust between services
+   • Emits identical metrics, logs, traces for every service
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Pushes routing rules + policy to every sidecar centrally
+   • "Retry 3x on 503", "5% canary to v2", "Billing only callable
+     by Auth + Playback" — one config, enforced everywhere
+   • No per-service code change to roll out a new policy
+
+WHAT THIS BUYS AT 1,000+ SERVICE SCALE:
+• Polyglot — Java, Node, Python, Go services get identical
+  reliability guarantees with zero shared library code
+• Zero-trust security — every hop mTLS-encrypted by default,
+  enforced centrally instead of opt-in per team
+• Canary releases — shift traffic % at the mesh layer, roll back
+  instantly without redeploying
+
+DIAGRAM: the "SERVICE MESH" band wrapping the AWS microservices
+grid represents this — every box (Zuul, Auth, Playback, Billing,
+DRM, Metadata...) has an Envoy sidecar, and the mTLS / load
+balancing / retry / circuit-breaking / tracing capabilities apply
+uniformly to all of them.
+
+TRADE-OFFS:
+• Adds ~1-2ms latency per hop — acceptable on the control plane
+  since video bytes never touch the mesh (Open Connect bypasses it)
+• The mesh control plane is itself a critical distributed system —
+  mismanage it and it becomes a new single point of failure
+• Migration is incremental in practice — Hystrix-based and
+  mesh-based services coexist for years during transition`,
         },
       ],
     },
@@ -638,6 +734,94 @@ Response:
 5. Write ranked list to EVCache per user (TTL: 1h)
 6. Homepage fetch reads from EVCache → sub-10ms response`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar traffic policy: mTLS, circuit breaking, retries, and canary routing between microservices",
+      api: `# DestinationRule — replaces per-service Hystrix config
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: playback-service
+spec:
+  host: playback-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp: { maxConnections: 100 }
+      http:
+        http1MaxPendingRequests: 50
+        maxRequestsPerConnection: 10
+    outlierDetection:            # = Hystrix circuit breaker
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST       # = Ribbon smart routing
+
+---
+# VirtualService — retries + canary split, replaces hand-rolled logic
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: playback-service
+spec:
+  hosts: ["playback-service.prod.svc.cluster.local"]
+  http:
+    - match: [{ headers: { x-canary: { exact: "true" } } }]
+      route:
+        - destination: { host: playback-service.prod.svc.cluster.local, subset: v2 }
+    - route:
+        - destination: { host: playback-service.prod.svc.cluster.local, subset: v1 }
+          weight: 95
+        - destination: { host: playback-service.prod.svc.cluster.local, subset: v2 }
+          weight: 5
+      retries:
+        attempts: 3
+        perTryTimeout: 200ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# PeerAuthentication — mesh-wide mTLS, replaces manual TLS config
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls: { mode: STRICT }`,
+      internals: `Sidecar injection:
+• Every pod gets an Envoy sidecar auto-injected at deploy time via
+  a Kubernetes mutating webhook — zero application code change
+• Sidecar intercepts traffic via iptables rules in the pod's
+  network namespace
+
+mTLS certificate flow:
+1. Mesh CA (Istio Citadel / SPIFFE) issues a short-lived X.509
+   cert to each sidecar on pod startup
+2. Certs auto-rotate ~every 24h — no manual rotation, no downtime
+3. Sidecar-to-sidecar handshake verifies cert against the mesh CA;
+   plaintext traffic between meshed services is rejected (STRICT)
+
+Circuit breaking (outlierDetection) vs. Hystrix:
+• Hystrix: each JVM service tracked its OWN failure counts per
+  downstream — duplicated config across 1,000 services
+• Istio: ejection policy lives on the DestinationRule, ONE place,
+  applies to every caller of playback-service regardless of language
+
+Canary rollout flow:
+1. Deploy playback-service:v2 alongside v1 (same Kubernetes Service)
+2. VirtualService routes 5% of traffic to v2 — no app restart
+3. Watch Atlas/Prometheus for v2's error rate + p99 latency
+4. Shift weight 5% → 25% → 100%, or roll back to 0% by editing
+   one resource
+
+Failure mode — control plane down:
+• Sidecars cache the LAST KNOWN config and keep enforcing it
+• New pods can't fetch sidecar config until control plane recovers
+• Existing traffic is unaffected — data plane is decoupled from
+  control plane by design`,
+    },
   ],
 };
 
@@ -1154,6 +1338,123 @@ Zipkin for distributed tracing:
       "How do you distinguish between a bad OCA vs a bad ISP link vs a bad user connection?",
       "How do you handle telemetry from 300M devices without overwhelming Kafka?",
       "What is the difference between metrics, logs, and traces? When do you use each?",
+    ],
+  },
+  {
+    id: "q11",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Netflix", "Amazon", "Uber"],
+    question: "Before drawing any boxes, walk me through a back-of-the-envelope estimation for Netflix's scale.",
+    answer: `This is the "size the system before you design it" step — the
+numbers drive every architectural decision that follows.
+
+STATE YOUR ASSUMPTIONS OUT LOUD:
+• 300M subscribers, 190 countries
+• DAU ≈ 30% of subscribers ≈ 90M
+• Peak concurrent streams ≈ 15M (Netflix's "15% of internet traffic")
+• Average stream bitrate ≈ 5 Mbps (SD/HD/4K blend)
+• Average session length ≈ 45 minutes
+• Catalog ≈ 50,000 hours × 1,200 encoded variants per title
+
+DERIVE THE NUMBERS THAT MATTER:
+
+1. Peak bandwidth (the number that decides the whole architecture)
+   15M streams × 5 Mbps = 75 Tbps
+   → No AWS region's network can absorb 75 Tbps of egress.
+   → This single number is WHY Netflix built Open Connect: video
+     bytes must be served from inside ISPs, not from AWS.
+
+2. Playback QPS (decides caching strategy)
+   New sessions/sec ≈ 15M concurrent ÷ (45 min × 60s) ≈ ~5,500/sec avg
+   → Read-heavy, highly cacheable → manifest served from EVCache,
+     not the database, even during a release-night spike (10-50K/sec)
+
+3. Kafka throughput (decides messaging infra)
+   500B events/day ÷ 86,400s ≈ 5.8M events/sec average
+   Peak (prime time) ≈ 8-12M events/sec
+   → Rules out a traditional message queue; only a partitioned log
+     like Kafka sustains millions of msgs/sec with replay
+
+4. Cassandra storage (decides the LiveVH/CompressedVH split)
+   300M users × 10 events/day × 90 days × 200B/row ≈ 54TB raw
+   × replication factor 3 ≈ 162TB
+   → Small enough to keep "hot" (last 90 days) data fully indexed;
+     everything older compacts into one blob per user per month
+
+5. S3 storage (decides object storage vs. block storage)
+   50,000 hours × 1,200 variants × ~1.5GB/variant-hour ≈ 90PB
+   → Justifies S3 as source of truth; OCAs cache only the
+     popularity-weighted slice that fits their local disks
+
+WHY THIS MATTERS IN THE INTERVIEW:
+The interviewer isn't checking arithmetic — they're checking whether
+you connect "75 Tbps" → "we need a CDN inside ISPs" → "Open Connect"
+without being prompted. Every number above should end with "...which
+is why we need [component]."`,
+    followups: [
+      "How would these numbers change for a regional player with 10M users instead of 300M?",
+      "If a single new release causes a 10x spike in playback QPS, which number breaks first?",
+      "How do you estimate storage growth rate, not just current storage?",
+    ],
+  },
+  {
+    id: "q12",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Netflix", "Uber", "Lyft"],
+    question: "Netflix's microservices traditionally used Ribbon, Hystrix, and Eureka client libraries. How would you redesign this with a service mesh today?",
+    answer: `Ribbon, Hystrix, and Eureka were Netflix OSS libraries — each
+service linked them into its own code (mostly JVM-only). A service
+mesh moves the same responsibilities into infrastructure, so they
+work identically regardless of language.
+
+MAP OLD → NEW:
+• Eureka (service discovery SDK) → mesh control plane (Istio Pilot /
+  Consul) tracks every instance; sidecar resolves names for you
+• Ribbon (client-side load balancer) → Envoy sidecar load-balances
+  every outbound call — no LB code in the app
+• Hystrix (circuit breaker library, JVM only) → sidecar applies
+  circuit breaking / retries / timeouts to ANY language uniformly
+• Zuul (edge gateway) → stays, or becomes an Envoy-based Ingress
+  Gateway — just another entry point into the same mesh
+
+ARCHITECTURE — DATA PLANE + CONTROL PLANE:
+
+1. Data plane — one Envoy sidecar per service instance
+   • iptables redirects all in/out traffic through the sidecar
+   • Sidecar terminates mTLS, load-balances, retries, times out,
+     circuit-breaks — all BEFORE the request reaches app code
+   • Emits identical metrics/traces for every service, automatically
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Single source of truth for routing rules and policy
+   • Push "Billing can only be called by Auth + Playback" once —
+     enforced at every sidecar, no per-team opt-in
+   • Canary rollout: shift 5% traffic to Playback-v2 by editing one
+     config, not redeploying 50 services
+
+WHY THIS MATTERS AT NETFLIX'S SCALE (1,000+ services, many languages):
+• Polyglot — a Python ML service and a Java playback service get
+  identical reliability guarantees with zero shared library code
+• Zero-trust security — every hop is mTLS-encrypted by default,
+  not opt-in; a compromised pod can't plaintext-sniff internal traffic
+• Uniform observability — distributed tracing "just works" across
+  every service without manual Zipkin instrumentation per team
+
+TRADE-OFFS TO MENTION:
+• Sidecar adds ~1-2ms per hop — for Netflix's < 0.1% rebuffer SLA,
+  this only touches the control plane (video bytes never go through it)
+• Operating the mesh control plane is itself a critical, highly
+  available distributed system — it becomes a new SPOF if mismanaged
+• Migration is incremental in practice — Hystrix-based services and
+  mesh-based services coexist for years during the transition`,
+    followups: [
+      "If the mesh control plane goes down, what happens to in-flight traffic?",
+      "How would you migrate 1,000 services from Hystrix to a mesh without a flag day?",
+      "Where does the mesh's mTLS end and Open Connect's DRM/HTTPS begin?",
     ],
   },
 ];

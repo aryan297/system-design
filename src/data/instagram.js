@@ -16,7 +16,9 @@ Instagram was originally built on Django/Python and moved to a distributed micro
                             ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                   API GATEWAY / LOAD BALANCER                       │
+│       SERVICE MESH — Envoy sidecar attached to every service        │
 │         Auth · Rate Limiting · Routing · TLS Termination            │
+│    mTLS · Load Balancing · Retries · Circuit Breaking · Tracing     │
 └──┬──────────────┬──────────────┬─────────────────┬─────────────────┘
    │              │              │                 │
    ▼              ▼              ▼                 ▼
@@ -110,6 +112,63 @@ STORY ORDERING:
   Not ranked (unlike feed) — chronological within each user
   Story tray ordering (whose stories to show first): ML model
   Signals: who does this viewer interact with most? Recency of story?`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, size the problem — every number here should map directly to a component in the architecture.
+
+ASSUMPTIONS:
+• 2B monthly active users, avg 150 accounts followed per user
+• 100M+ photos/videos uploaded per day
+• 4.2B+ likes per day
+• 140B+ Reels plays/day (Facebook + Instagram combined)
+• 1B+ DMs sent per day
+• 500M daily Stories users
+
+1. Photo upload rate: 100M ÷ 86,400s ≈ 1,157 uploads/sec average, with
+   5×+ spikes during concerts/holidays → ~5,800/sec peak.
+   → Media Service must be stateless and horizontally autoscaled to
+   absorb a 5x burst within seconds — this is why it's a thin layer in
+   front of S3/Haystack, with all heavy lifting deferred to async workers.
+
+2. Like write rate: 4.2B ÷ 86,400s ≈ 48,600 writes/sec average.
+   → A naive UPDATE posts SET like_count = like_count + 1 would create
+   massive row-lock contention on viral posts. This is why Like Service
+   uses Redis INCR (atomic, sub-millisecond) with a 60-second background
+   sync to PostgreSQL — the DB sees ~810 batched updates/sec instead of
+   48,600 row locks/sec.
+
+3. Feed fan-out write volume: with avg 150 follows per user, by symmetry
+   the median account has roughly similar follower counts. 100M posts/day
+   × ~150 avg followers (for the < 10K-follower push tier) ≈ 15B feed-
+   cache writes/day ≈ ~174,000 ZADD ops/sec average.
+   → This is the number that justifies the 10,000-follower push/pull
+   cutoff: a single 600M-follower account posting would itself generate
+   600M writes — ~3,400x this entire system's average load from ONE post.
+   Pull-on-read for large accounts isn't an optimization, it's a
+   requirement.
+
+4. Reels play rate: 140B ÷ 86,400s ≈ 1.62M plays/sec.
+   → Every play is a potential ranking signal (completion %, rewatch).
+   At this volume, completion signals MUST be aggregated/batched per
+   reel rather than written synchronously per play — this is why viral
+   distribution checks operate on cohort-level completion rates (1,000 →
+   10,000 → 100,000 viewers), not per-play events.
+
+5. DM throughput: 1B ÷ 86,400s ≈ 11,600 messages/sec average.
+   → Cassandra partitioned by conversation_id absorbs this comfortably
+   (write-heavy, no joins). Group chats of 50 multiply DELIVERY events
+   ~50x via WebSocket fan-out — at 11,600 msg/sec with even 10% group
+   chats, that's ~58,000 WebSocket pushes/sec, which is why offline
+   participants fall back to store-and-forward from Cassandra instead of
+   blocking the sender.
+
+Interview punch line: 1,157→5,800 uploads/sec maps onto Media Service
+autoscaling; 48,600 likes/sec maps onto the Redis INCR + 60s batch sync;
+174,000 feed-cache writes/sec is exactly why the 10K-follower push/pull
+cutoff exists; 1.62M reel plays/sec is why ranking signals are cohort-
+batched; and 11,600 msgs/sec (×50 for groups) is why DM delivery has a
+WebSocket-first, Cassandra-fallback design. Every number lands on a box.`,
         },
       ],
     },
@@ -254,6 +313,70 @@ NOTIFICATIONS (separate from feed fan-out):
   This IS fanned out immediately (via FCM/APNs)
   But: aggregated — if celeb posts 3 times in 1 hour, 1 notification not 3
   Rate limited: max 1 push per user per account per hour`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `A service mesh moves cross-cutting networking concerns OUT of
+application code and INTO a sidecar proxy (Envoy) deployed next
+to every service instance. All traffic in/out of a service passes
+through its sidecar first.
+
+WHY A MESH FITS INSTAGRAM'S FLEET:
+• Social Graph Service (TAO) is the hottest internal dependency —
+  Feed Service calls it for candidate retrieval, Media/Post Service
+  calls it on every fan-out, Story Service calls it for close-friends
+  lists, Messaging Service calls it for block checks
+• Feed Service's ranking model ships new versions constantly and
+  needs safe canary rollout to 2B users
+• Messaging Service's WebSocket fleet has very different latency
+  characteristics from the request/response services — mesh-level
+  observability helps separate "is it the WebSocket tier or TAO?"
+
+1. Data plane — Envoy sidecar per pod, attached to Media/Post Service,
+   Feed Service, Social Graph Service, and Messaging Service
+   • Transparently applies retries, timeouts, circuit breaking, mTLS
+   • Emits uniform metrics/traces across all four services
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Pushes policy centrally: "if Social Graph Service p99 > 100ms,
+     eject the pod"
+   • "Feed Service ranking-model v2 gets 5% canary traffic"
+   • "Only Feed/Post/Story/Messaging services may call Social Graph
+     Service's internal association endpoints"
+
+WHAT THIS BUYS INSTAGRAM SPECIFICALLY:
+• Circuit breaking on Social Graph Service (TAO) — if TAO Followers
+  (Memcached tier) degrade and Leaders get overloaded, outlierDetection
+  ejects unhealthy TAO-facing pods; Feed Service falls back to
+  push-cache-only results (skip the pull from large accounts) rather
+  than blocking the whole feed load
+• Canary rollout for Feed Service ranking model v2 — ship to 5% of
+  feed loads, compare engagement metrics, then ramp — without a
+  separate deployment pipeline per experiment
+• mTLS for social graph data — follow relationships, blocks, and
+  close-friends lists are encrypted in transit between every service
+  that touches TAO
+• AuthorizationPolicy — Social Graph Service only accepts calls from
+  Feed, Post, Story, and Messaging services; a compromised or
+  misconfigured service elsewhere can't enumerate the social graph
+• End-to-end tracing for "load feed" — API Gateway → Feed Service →
+  Social Graph Service (TAO) → Redis feed cache, critical for
+  debugging the < 50ms candidate-retrieval budget
+
+DIAGRAM: the "SERVICE MESH" band inside the API GATEWAY / LOAD BALANCER
+box represents this — every arrow down to Media Service, Feed Service,
+Social Graph, and Messaging Service passes through an Envoy sidecar,
+with mTLS / load balancing / retries / circuit breaking / tracing
+applied uniformly.
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — must be budgeted against Feed
+  Service's < 50ms candidate-retrieval and < 80ms ranking targets
+• Control plane becomes a new critical dependency (sidecars cache
+  last-known config if it goes down)
+• The Media CDN path (post-processing, CDN delivery) stays OUTSIDE
+  the mesh — it's a storage/CDN pipeline, not request/response
+  microservice traffic`,
         },
       ],
     },
@@ -931,6 +1054,137 @@ Top posts per hashtag:
   Stored: sorted set in Redis: ZADD hashtag_top:{tag} {score} {post_id}
   Cache TTL: 5 minutes`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar proxy configuration for inter-service traffic: circuit breaking on the Social Graph Service (TAO), canary rollout for Feed Service, mTLS and zero-trust access",
+      api: `# DestinationRule — circuit breaking for Social Graph Service (TAO)
+# Feed, Post, Story, and Messaging services all call this on the hot path
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: social-graph-circuit-breaker
+  namespace: prod
+spec:
+  host: social-graph-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 2000
+      http:
+        http1MaxPendingRequests: 1000
+        maxRequestsPerConnection: 50
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary rollout for Feed Service ranking model v2
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: feed-service-canary
+  namespace: prod
+spec:
+  hosts:
+    - feed-service.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-ranking-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: feed-service.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: feed-service.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: feed-service.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 100ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — only Feed, Post, Story, and Messaging services
+# may call Social Graph Service's internal association endpoints
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: social-graph-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: social-graph-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/feed-service"
+              - "cluster.local/ns/prod/sa/post-service"
+              - "cluster.local/ns/prod/sa/story-service"
+              - "cluster.local/ns/prod/sa/messaging-service"
+
+---
+# PeerAuthentication — mTLS enforced across the namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `SIDECAR INJECTION:
+Every pod in Media/Post Service, Feed Service, Social Graph Service,
+and Messaging Service gets an Envoy sidecar injected automatically via
+a Kubernetes mutating webhook — no application code changes needed.
+The Media Processing Pipeline and CDN delivery path stay outside the
+mesh (storage/CDN pipeline, not service-to-service request traffic).
+
+CIRCUIT BREAKING ON SOCIAL GRAPH SERVICE (the hot path):
+TAO's Followers (Memcached read-through cache) handle 99%+ of reads,
+but Leaders (MySQL-backed) can degrade under write pressure. The
+outlierDetection policy ejects a Social Graph Service pod from the
+load-balancing pool after 5 consecutive 5xx in 10s, for 30s, capped at
+50% of pods. Feed Service's own fallback then kicks in: serve the
+push-cache-only candidate set (skip the pull-model fetch from large
+accounts) — a degraded feed is far better than a blocked one.
+
+CANARY ROLLOUT FOR FEED SERVICE:
+New ranking model versions are deployed with 0% traffic (reachable
+only via the x-ranking-canary header for internal evaluation), then
+the VirtualService shifts 5% of live feed loads to v2. Engagement
+metrics (like/comment/save rate) are compared against the v1 control
+group before ramping to 100% — all via control-plane config pushes,
+no redeploy needed.
+
+mTLS + AUTHORIZATION POLICY FOR THE SOCIAL GRAPH:
+Follow relationships, blocks, and close-friends lists are sensitive —
+PeerAuthentication enforces STRICT mTLS on every hop, and
+AuthorizationPolicy restricts Social Graph Service to calls from Feed,
+Post, Story, and Messaging services only. A bug or compromise in an
+unrelated service (e.g. Search) cannot enumerate the social graph.
+
+CONTROL-PLANE-DOWN FAILURE MODE:
+If istiod becomes unavailable, sidecars continue operating on their
+last-known configuration — circuit breaking, mTLS, and routing rules
+keep working. New pods that start during the outage are held in
+NotReady until istiod recovers, which is why istiod itself runs with
+multiple replicas across availability zones.`,
+    },
   ],
 };
 
@@ -1276,6 +1530,123 @@ ENCRYPTION:
       "How do you implement group chats with 250 members efficiently?",
       "How do you handle message ordering if two users send simultaneously?",
       "How would you implement disappearing messages (messages that delete after X seconds)?",
+    ],
+  },
+  {
+    id: "iq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Meta", "Pinterest", "Snap"],
+    question: "Before drawing any boxes, walk me through a back-of-the-envelope estimation for Instagram's scale.",
+    answer: `This is the "size the system before you design it" step — every number should map to a component in the architecture.
+
+STATE YOUR ASSUMPTIONS FIRST:
+• 2B monthly active users, avg 150 accounts followed per user
+• 100M+ photos/videos uploaded per day
+• 4.2B+ likes per day
+• 140B+ Reels plays/day
+• 1B+ DMs sent per day
+
+1. Photo upload rate: 100M ÷ 86,400s ≈ 1,157 uploads/sec average, with
+   5×+ spikes during major events → ~5,800/sec peak. Media Service must
+   be stateless and horizontally autoscaled to absorb that burst within
+   seconds.
+
+2. Like write rate: 4.2B ÷ 86,400s ≈ 48,600 writes/sec average. A naive
+   UPDATE posts SET like_count = like_count + 1 would cause massive row-
+   lock contention on viral posts. Redis INCR (atomic, sub-millisecond)
+   with a 60-second background sync to PostgreSQL turns 48,600 writes/sec
+   into ~810 batched DB updates/sec.
+
+3. Feed fan-out write volume: 100M posts/day × ~150 avg followers (for
+   the < 10K-follower push tier) ≈ 15B feed-cache writes/day ≈ ~174,000
+   ZADD ops/sec average. This is exactly why the 10,000-follower
+   push/pull cutoff exists — a single 600M-follower account posting
+   would itself generate 600M writes, ~3,400x the entire system's
+   average load from one post.
+
+4. Reels play rate: 140B ÷ 86,400s ≈ 1.62M plays/sec. Every play is a
+   potential ranking signal — at this volume, completion signals must be
+   aggregated per cohort (1,000 → 10,000 → 100,000 viewers), not written
+   synchronously per play.
+
+5. DM throughput: 1B ÷ 86,400s ≈ 11,600 messages/sec average. Group
+   chats of 50 multiply delivery events ~50x via WebSocket fan-out — at
+   even 10% group chats, that's ~58,000 WebSocket pushes/sec, which is
+   why offline participants fall back to store-and-forward from
+   Cassandra instead of blocking the sender.
+
+INTERVIEW PUNCH LINE: 1,157→5,800 uploads/sec maps onto Media Service
+autoscaling; 48,600 likes/sec maps onto Redis INCR + 60s batch sync;
+174,000 feed-cache writes/sec is why the 10K-follower push/pull cutoff
+exists; 1.62M reel plays/sec is why ranking signals are cohort-batched;
+and 11,600 msgs/sec (×50 for groups) drives the WebSocket-first,
+Cassandra-fallback DM design. If your numbers don't land on a diagram
+box, the estimation was just arithmetic, not design.`,
+    followups: [
+      "How would these numbers change if Instagram introduced a 'super like' feature that triggers a notification fan-out?",
+      "If Reels plays doubled overnight, which component hits its limit first?",
+      "How do you size the Redis cluster needed for 48,600 like-counter INCRs/sec?",
+    ],
+  },
+  {
+    id: "iq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Meta", "Pinterest", "LinkedIn"],
+    question: "Instagram's Media/Post Service, Feed Service, Social Graph Service, and Messaging Service all call each other — and the Social Graph Service (TAO) is the hottest dependency, called by all three others. How do you manage reliability and security across this fleet without scattering retry logic and auth checks through every service?",
+    answer: `This is the classic case for a SERVICE MESH — moving cross-cutting
+networking concerns out of application code and into a sidecar proxy
+(Envoy) deployed alongside every service instance.
+
+WHY A MESH FITS INSTAGRAM'S FLEET:
+• Social Graph Service (TAO) is called by Feed Service (candidate
+  retrieval), Post Service (fan-out), Story Service (close friends),
+  and Messaging Service (block checks) — it's the prime circuit-
+  breaking candidate
+• Feed Service ships new ranking models constantly and needs safe
+  canary rollout to 2B users
+• Follow relationships, blocks, and close-friends lists are sensitive
+  and flow between every one of these services
+
+1. Data plane — Envoy sidecar per pod, transparently intercepts all
+   traffic via iptables. Applies retries, timeouts, circuit breaking,
+   mTLS, and emits uniform metrics/traces — zero app code changes.
+
+2. Control plane — Istio/Consul/AWS App Mesh pushes routing and policy
+   to every sidecar: "eject Social Graph Service pods at p99 > 100ms",
+   "Feed Service v2 gets 5% canary traffic", "only Feed/Post/Story/
+   Messaging may call Social Graph Service".
+
+WHAT THIS BUYS INSTAGRAM:
+• Circuit breaking on Social Graph Service — outlierDetection ejects
+  unhealthy TAO-facing pods after 5 consecutive 5xx in 10s; Feed
+  Service falls back to push-cache-only candidates rather than
+  blocking the whole feed load
+• Canary rollout for Feed Service ranking model v2 — ship to 5% of
+  feed loads, compare engagement metrics, then ramp, all via control-
+  plane config
+• mTLS + AuthorizationPolicy — every hop carrying follow/block/close-
+  friends data is encrypted, and Social Graph Service only accepts
+  calls from the four services that legitimately need it
+• End-to-end tracing for "load feed" — API Gateway → Feed Service →
+  Social Graph Service → Redis feed cache, critical for debugging the
+  < 50ms candidate-retrieval budget
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop, which must be budgeted against Feed
+  Service's < 50ms / < 80ms targets
+• The control plane becomes a new critical dependency (sidecars cache
+  last-known config if it goes down, but new pods can't start)
+• The Media CDN delivery path stays OUTSIDE the mesh — it's a
+  storage/CDN pipeline, not request/response service traffic, and
+  adding a sidecar there would only add latency for no benefit`,
+    followups: [
+      "Walk through exactly what happens, step by step, if Social Graph Service starts timing out during peak feed-load traffic — from the Feed Service call to the user-facing response.",
+      "How would you validate the Feed Service ranking model v2 canary is safe before ramping past 5%?",
+      "Would you put the same mesh policies around the Media Processing Pipeline, given it also calls Social Graph Service for tagging?",
     ],
   },
 ];

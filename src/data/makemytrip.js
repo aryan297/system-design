@@ -11,7 +11,9 @@ export const MAKEMYTRIP_HLD = {
                              │  HTTPS / gRPC
 ┌────────────────────────────▼─────────────────────────────────────────┐
 │                     API GATEWAY / BFF                                 │
+│        SERVICE MESH — Envoy sidecar attached to every service         │
 │   Rate limiting  ·  Auth (JWT + OAuth2)  ·  Session routing          │
+│     mTLS · Load Balancing · Retries · Circuit Breaking · Tracing      │
 └──┬──────────┬──────────┬──────────┬──────────┬────────────────────────┘
    │          │          │          │          │
 ┌──▼──┐  ┌───▼──┐  ┌────▼──┐  ┌───▼──┐  ┌────▼─────┐
@@ -104,6 +106,56 @@ Solution:
   4. Auto-scale Search workers from 50 → 500 pods at 11:45 AM via KEDA
 `,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, size the problem — every number below maps onto a component in the diagram.
+
+ASSUMPTIONS:
+• 50M+ searches/day, peak 500K concurrent users during flash sales
+• 15-25 GDS supplier calls per search (avg ~20), 600ms fan-out window
+• 200K+ flight PNRs/day, 99.95% booking success rate
+• 40% cancellation rate, refund SLA 5-7 business days
+• Fare cache: 15-min TTL ± jitter, ~75% steady-state hit rate
+
+1. Average search load: 50M ÷ 86,400s ≈ 580 searches/sec.
+   → At a 75% cache hit rate, only ~145 searches/sec actually fan out.
+   → 145 × 20 suppliers ≈ 2,900 GDS calls/sec — this is the load the
+   SUPPLIER INTEGRATION LAYER and its per-supplier rate limiters absorb.
+
+2. Per-supplier quota check: Amadeus allows 10,000 calls/min ≈ 167/sec
+   for search. If Amadeus gets even 1/4 of the 2,900 calls/sec ≈
+   725/sec, that's already 4x over quota.
+   → The fare cache isn't just a latency win — without ≥95% effective
+   hit rate (TTL + jitter + the Redis SET NX stampede lock), MMT would
+   blow past Amadeus's own quota by 4x at AVERAGE load, before any sale.
+
+3. Sale-day burst: 500K concurrent users firing roughly one search each
+   in the opening minute ≈ 8,300 searches/sec.
+   → Even if the hit rate drops to 60% for hot routes during the sale,
+   pre-warming the top 500 routes 30 minutes early keeps THOSE at ~95%+
+   hit rate — so the uncached overflow stays in the low hundreds/sec,
+   which is exactly what the 50→600 pod KEDA autoscale is sized for.
+
+4. Booking throughput: 200K PNRs/day ÷ 86,400s ≈ 2.3 bookings/sec
+   average, at 99.95% success.
+   → ~100 ISSUANCE_FAILED bookings/day — small enough that the
+   compensating-transaction refund path and dead-letter queue handle
+   this volume without needing a dedicated high-throughput pipeline.
+
+5. Refund pipeline depth: 40% of 200K = 80K cancellations/day, each
+   carrying a 5-7 day refund SLA.
+   → At steady state, ~80K/day × 6 days ≈ 480K refunds "in flight" at
+   any given moment — THIS is the working-set number the Refund Engine
+   and ops dashboard must be sized for, not the 0.9 cancellations/sec
+   average rate.
+
+Interview punch line: 580 avg searches/sec becomes 2,900 GDS calls/sec
+without caching — 4x over Amadeus's own quota — which is exactly why the
+15-min jittered FARE CACHE exists; the 8,300/sec sale-day burst is
+absorbed by pre-warming + KEDA autoscaling; and the ~480K refunds "in
+flight" (not the 0.9/sec rate) is the real sizing number behind the
+CANCELLATION, REFUNDS & SCALE phase.`,
+        },
       ],
     },
     {
@@ -182,6 +234,71 @@ Booking Svc stores: {idemKey → {status, result}} in Redis (24hr TTL)
 Duplicate request within 24hr → return stored result, no re-execution
 Prevents double-booking on client retry after network timeout
 `,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `Behind the API Gateway, Search Svc, Booking Svc, Price Engine, Payment Svc and Customer Support Svc all call each other constantly. A service mesh gives every one of them a uniform Envoy sidecar for traffic management, security and observability — without touching the booking saga's Go code.
+
+WHY A MESH FITS MMT'S FLEET:
+  Booking Svc → Payment Svc is the highest-stakes synchronous call: a
+    stuck Razorpay/PayU integration must not block a worker that's
+    holding a 15-minute airline fare-hold token.
+  Price Engine is called for EVERY search result — at 580 searches/sec ×
+    ~120 results, that's ~70,000 pricing calls/sec, the busiest internal
+    hop in the whole system.
+  Customer Support Svc needs read access to PNR data for agents handling
+    refund disputes, but must never be able to call Payment Svc directly.
+
+DATA PLANE: an Envoy sidecar runs next to every instance of Search Svc,
+  Booking Svc, Price Engine, Payment Svc and Customer Support Svc — the
+  five services fanning out from the API Gateway / BFF. All inter-service
+  calls (Booking→Payment, Search→Price Engine, Support→Booking) are
+  intercepted by these sidecars for mTLS, retries, load balancing and
+  circuit breaking.
+
+CONTROL PLANE (Istio): istiod pushes routing rules, TLS certs and
+  circuit-breaker thresholds to every sidecar fleet-wide — "Payment Svc
+  trips after 5 consecutive 5xx" is declared once, not per service.
+
+WHAT THIS BUYS MMT SPECIFICALLY:
+  Circuit breaking on Payment Svc: outlier detection ejects an unhealthy
+    Razorpay/PayU integration pod after 5 consecutive 5xx in 10s — Booking
+    Svc fails the booking fast and releases the fare-hold token instead of
+    burning the full 15-minute hold on a doomed payment.
+  Load balancing on Price Engine: LEAST_REQUEST spreads the ~70,000
+    calls/sec evenly, and a connection-pool cap protects it from a Search
+    Svc retry storm during a sale.
+  Canary for Search Svc ranking changes: new ranking/sort logic ships to
+    5% of traffic first via header-based routing, validated against real
+    search-to-book ratio, then promoted.
+  mTLS everywhere: traveller PII (passport numbers, DOB, contact details)
+    moving between Booking Svc, Price Engine and Payment Svc is encrypted
+    in transit by default.
+  AuthorizationPolicy: Customer Support Svc may call Booking Svc's
+    read-only PNR endpoints, but is denied at the sidecar if it ever tries
+    to call Payment Svc directly — enforcing least-privilege without a
+    code review catching every new endpoint.
+  Tracing: a single booking — API Gateway → Booking Svc → Price Engine →
+    Payment Svc → PNR Store — carries one trace ID across all hops,
+    matching the existing Jaeger trace-ID-in-PNR practice.
+
+DIAGRAM: the "SERVICE MESH — Envoy sidecar attached to every service" band
+  inside the API GATEWAY / BFF box is this section — every arrow fanning
+  out to Search Svc, Booking Svc, Price Engine, Payment Svc and Customer
+  Support Svc is mesh-managed traffic.
+
+TRADE-OFFS:
+  ~1-2ms sidecar latency per hop is trivial against the <3s payment SLA
+  but matters against the <200ms fare-lock SLA, so mesh timeouts are
+  tuned per route, tightest on Booking→Price Engine.
+  The GDS/airline-PSS circuit breakers (Amadeus, Sabre, IndiGo Direct)
+  stay OUTSIDE the mesh — those are external SOAP/REST calls in the
+  SUPPLIER INTEGRATION LAYER, governed by the existing per-supplier
+  CircuitBreaker code, not Envoy.
+  The control plane must be solid during sale-day bursts — if istiod is
+  unreachable, sidecars keep enforcing last-known config, but new policy
+  pushes (e.g. a tightened circuit-breaker threshold) wait until after
+  the surge.`,
         },
       ],
     },
@@ -823,6 +940,176 @@ func (h *ExpediaAdapter) GetAvailability(ctx context.Context, req HotelSearchReq
   return h.normalizer.NormalizeEPS(resp), nil
 }`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Istio configuration for circuit breaking on Payment Svc, load-balanced Price Engine fan-out, canary Search Svc rollouts, and zero-trust access to PNR data",
+      api: `# DestinationRule — circuit breaking on Payment Svc
+# A stuck Razorpay/PayU integration must not burn a 15-min fare-hold token
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-service-circuit-breaker
+  namespace: prod
+spec:
+  host: payment-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 500
+      http:
+        http1MaxPendingRequests: 200
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# DestinationRule — load balancing for Price Engine (~70K calls/sec)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: pricing-engine-lb
+  namespace: prod
+spec:
+  host: pricing-engine.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 4000
+      http:
+        http1MaxPendingRequests: 2000
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary rollout for Search Svc ranking logic
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: search-service-canary
+  namespace: prod
+spec:
+  hosts:
+    - search-service.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-search-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 200ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — Customer Support Svc is read-only on Booking Svc,
+# and may never call Payment Svc directly
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/booking-service"
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: booking-service-readonly-support
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: booking-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/customer-support-service"
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/api/v2/bookings/*", "/api/v2/refunds/*"]
+
+---
+# PeerAuthentication — mTLS STRICT across the booking namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `SIDECAR INJECTION SCOPE: Envoy sidecars are injected into Search Svc,
+Booking Svc, Price Engine, Payment Svc and Customer Support Svc — the five
+services fanning out from the API Gateway / BFF. The SUPPLIER INTEGRATION
+LAYER (Amadeus, Sabre, IndiGo Direct, Expedia EPS, IRCTC API) stays
+OUTSIDE the mesh — those are external HTTP/SOAP integrations governed by
+the existing per-supplier CircuitBreaker code shown above.
+
+CIRCUIT BREAKING ON PAYMENT SVC: outlierDetection ejects an unhealthy
+Payment Svc backend after 5 consecutive 5xx within 10s, for 30s, capped at
+50% of the pool. Without this, Booking Svc workers would block on a slow
+Razorpay/PayU call while still holding a 15-minute airline fare-hold token
+— at 200K PNRs/day, even a 1% stuck-call rate would tie up ~1.4 fare holds
+per minute that could otherwise serve another customer.
+
+LOAD BALANCING ON PRICE ENGINE: at ~70,000 calls/sec (580 searches/sec ×
+~120 results), Price Engine is the busiest internal hop. LEAST_REQUEST
+load balancing plus a 4,000-connection pool absorbs the steady-state load
+and the retry storms that happen when Search Svc itself retries a slow
+GDS supplier.
+
+CANARY FOR SEARCH SVC: new ranking/sort logic is routed to internal QA
+traffic via x-search-canary: "true" first, then a 95/5 production split,
+with rollback if the search-to-book ratio (normally ~8%) drops below 5%
+during the canary window — tying the mesh's canary signal directly to the
+business metric already tracked in Prometheus.
+
+mTLS + AUTHORIZATION POLICY: PeerAuthentication STRICT encrypts traveller
+PII (passport, DOB, contact info) moving between Booking Svc, Price Engine
+and Payment Svc. The two AuthorizationPolicies encode two invariants as
+network-layer rules: "only Booking Svc may call Payment Svc" and "Customer
+Support Svc may only read Booking Svc's booking/refund endpoints, never
+write or call Payment Svc" — so a bug or compromised pod in Support can't
+initiate a payment or refund.
+
+CONTROL-PLANE-DOWN FAILURE MODE: if istiod is unreachable during a sale-day
+burst, every sidecar keeps enforcing its last-known circuit breakers, mTLS
+and authorization rules. What's lost is the ability to push NEW policy
+(e.g. tightening Payment Svc's outlier thresholds mid-sale) — so mesh
+config changes follow the same freeze window as the KEDA autoscale
+config, locked before 11:45 AM on sale days.`,
+    },
   ],
 };
 
@@ -961,6 +1248,38 @@ export const MAKEMYTRIP_QNA = [
     asked_at: ["Razorpay", "Paytm", "Flipkart"],
     followups: [
       "How do you prevent duplicate manual refunds if two ops agents process the same DLQ entry?",
+    ],
+  },
+  {
+    id: "mmt-q11",
+    question:
+      "Walk through the back-of-the-envelope numbers for MakeMyTrip's search and supplier fan-out. How do they justify the fare cache design?",
+    answer:
+      "Start from 50M searches/day ÷ 86,400s ≈ 580 searches/sec average. At ~75% cache hit rate, ~145/sec fan out to suppliers, × 20 GDS calls/search ≈ 2,900 GDS calls/sec. Check that against Amadeus's own quota: 10,000 calls/min ≈ 167/sec — if Amadeus gets even 1/4 of those 2,900 calls/sec (~725/sec), that's 4x over quota at AVERAGE load. This is why the 15-min jittered fare cache with a Redis SET NX stampede lock isn't optional — without ≥95% effective hit rate, MMT blows its own supplier quotas before any sale even starts. On sale day, 500K concurrent users firing one search each ≈ 8,300 searches/sec; pre-warming the top 500 routes 30 minutes early keeps those at ~95%+ hit rate so the uncached overflow stays in the low hundreds/sec — sized for the 50→600 pod KEDA autoscale. Separately, 40% of 200K bookings/day = 80K cancellations/day × a 5-7 day refund SLA ≈ 480K refunds 'in flight' at any moment, which is the real sizing number for the Refund Engine, not the 0.9/sec average cancellation rate.",
+    category: "Estimation",
+    difficulty: "medium",
+    round: "system-design",
+    asked_at: ["MakeMyTrip", "Ixigo", "Cleartrip"],
+    followups: [
+      "How would these numbers change if the cache hit rate dropped to 50% during a sale instead of 75%?",
+      "What's the risk of over-provisioning Search pods for the sale-day burst, and how do you size the autoscale ceiling?",
+      "If Amadeus's quota were cut in half tomorrow, what's the fastest mitigation that doesn't require a code change?",
+    ],
+  },
+  {
+    id: "mmt-q12",
+    question:
+      "Search Svc, Booking Svc, Price Engine, Payment Svc and Customer Support Svc all sit behind the API Gateway. Would you put a service mesh in front of them, and what would it actually buy you?",
+    answer:
+      "Yes — the two highest-value wins are circuit breaking on Payment Svc and load-balanced fan-out to Price Engine. An Envoy sidecar is injected next to every instance of these five services; istiod pushes routing rules, TLS certs and circuit-breaker thresholds fleet-wide. Circuit breaking on Payment Svc: outlier detection ejects an unhealthy Razorpay/PayU backend after 5 consecutive 5xx in 10s, so Booking Svc fails fast and releases its 15-minute fare-hold token instead of burning the full hold on a doomed payment. Load balancing on Price Engine: at ~70,000 calls/sec (580 searches/sec × ~120 results per search), LEAST_REQUEST balancing plus a 4,000-connection pool is essential — this is the busiest internal hop in the system. Beyond that: canary rollouts for Search Svc ranking changes via header-based routing with a 95/5 split, mTLS encrypting traveller PII (passport, DOB) between Booking/Price/Payment, an AuthorizationPolicy so only Booking Svc can call Payment Svc and Customer Support Svc is read-only on Booking's PNR endpoints, and end-to-end tracing for a single booking across Gateway → Booking → Price Engine → Payment → PNR Store. The GDS/airline-PSS circuit breakers stay OUTSIDE the mesh — those are external SOAP/REST calls in the Supplier Integration Layer with their own per-supplier CircuitBreaker logic.",
+    category: "Architecture",
+    difficulty: "hard",
+    round: "system-design",
+    asked_at: ["MakeMyTrip", "Razorpay", "Expedia"],
+    followups: [
+      "Why keep the GDS supplier circuit breakers outside the mesh instead of migrating them to Envoy's outlier detection?",
+      "How would you tune the mesh's retry policy differently for Booking→Payment vs Search→Price Engine?",
+      "If istiod goes down mid-sale, what breaks and what keeps working?",
     ],
   },
 ];

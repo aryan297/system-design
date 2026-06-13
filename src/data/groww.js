@@ -27,7 +27,9 @@ Groww's stack is event-driven microservices on AWS, with Kafka at the centre for
                          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │                  API GATEWAY (Kong / AWS ALB)                        │
+│        SERVICE MESH — Envoy sidecar attached to every service        │
 │    Auth (JWT) · Rate Limiting · Routing · WebSocket Upgrade          │
+│     mTLS · Load Balancing · Retries · Circuit Breaking · Tracing     │
 └──┬──────────┬───────────┬──────────────┬─────────────────────────────┘
    │          │           │              │
    ▼          ▼           ▼              ▼
@@ -107,6 +109,62 @@ PRODUCT ELIGIBILITY MATRIX:
   Mutual funds: all accounts, no extra step
   F&O: income proof + SEBI test
   IPO applications: linked bank account with ASBA mandate`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, pin down scale with rough math — numbers
+aren't graded for precision, they're graded for whether they
+justify the design decisions that follow.
+
+ASSUMPTIONS:
+• 10M active investors, ~15 avg holdings each → 150M holdings to value
+• 2M daily orders, market hours = 9:15 AM-3:30 PM ≈ 22,500 seconds
+• NSE tick rate ~50,000 msgs/sec at peak (market open)
+• 2M concurrent WebSocket connections, ~5 subscribed symbols avg
+• 5M SIPs; BSE StAR MF rate limit ~500 orders/sec
+
+1. Order throughput — justifies the Redis-backed margin check
+   2M orders ÷ 22,500s ≈ 89 orders/sec average
+   Peak (market-open burst, ~10x) ≈ 890 orders/sec
+   → every order needs a synchronous margin check < 50ms — at 890/sec
+     that's ~45 concurrent lookups in flight, trivial for Redis but
+     impossible to hit < 50ms against PostgreSQL under load
+
+2. Portfolio valuation load — justifies lazy + push hybrid
+   150M holdings ÷ 2,000 tradeable symbols ≈ 75,000 holders/symbol avg
+   At 50K ticks/sec spread across 2,000 symbols ≈ 25 ticks/sec/symbol
+   25 ticks/sec × 75,000 holders ≈ 1.875M P&L recomputations/sec for
+   ONE popular symbol if pushed to everyone
+   → too expensive to push for all 10M investors — justifies LAZY
+     valuation (1s-TTL cache, computed on read) as the default, with
+     PUSH reserved for the ~2M users holding an open WebSocket
+
+3. WebSocket fan-out — justifies symbol-sharded WebSocket tier
+   2M connections × 5 subscribed symbols = 10M subscriptions
+   → no single server can hold every symbol's subscriber list; this
+     is exactly why symbols are consistent-hashed to WebSocket
+     server shards (RELIANCE ticks always land on shard 3, etc.)
+
+4. SIP burst on the 1st — justifies the 2.8-hour staggered window
+   5M SIPs ÷ 500 orders/sec (BSE StAR MF limit) = 10,000 seconds
+   ≈ 2.8 hours
+   → this single external rate limit is why the SIP scheduler starts
+     at midnight and staggers 1,000 sip.due events/sec to Kafka,
+     finishing well before the 3 PM cut-off
+
+5. Candle storage — justifies tiered TimescaleDB retention
+   2,000 symbols × 375 min/day × 1 candle/min = 750,000 rows/day
+   × 250 trading days/year ≈ 187.5M rows/year
+   → manageable indefinitely only because 1-min data is retained for
+     3 months while daily candles are kept forever — without tiering,
+     187.5M rows/year would compound unbounded
+
+Interview punch line: every number maps to a box — 890 orders/sec
+peak → Redis-backed margin check in OMS, 50K ticks/sec → Kafka
+market.ticks + symbol-sharded WebSocket tier, 500 orders/sec RTA
+limit → the 2.8-hour staggered SIP scheduler, 187.5M rows/year →
+tiered TimescaleDB retention. State the number, then name the
+component it justifies.`,
         },
       ],
     },
@@ -239,6 +297,68 @@ ORDER BOOK MANAGEMENT:
   Groww maintains its own copy of open orders per user
   Reconciled against NSE order dump at EOD (End of Day)
   Discrepancies trigger alert to operations team for manual resolution`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `A service mesh moves cross-cutting networking concerns OUT of
+application code and INTO a sidecar proxy (Envoy) deployed next
+to every service instance. All traffic in/out of a service passes
+through its sidecar first.
+
+WHY A MESH FITS GROWW'S FLEET:
+• Five core services (Order OMS, MF Service, Market Data, Portfolio
+  Service, User & KYC) plus Margin Service all call each other —
+  every order placement triggers a synchronous OMS → Margin Service
+  call that must complete in < 50ms
+• Portfolio Service reads live prices from Market Data's Redis
+  cache constantly during market hours
+• Deployments are frozen 9:15 AM-3:30 PM — any rollout must be safe
+  enough to ship in the narrow 5 PM-8 AM window and verified before
+  the next market open
+
+1. Data plane — one Envoy sidecar per service instance
+   • iptables transparently redirects all in/out traffic through it
+   • Applies load balancing, retries, timeouts, circuit breaking
+   • Wraps every call in mTLS — zero-trust between services
+   • Emits identical metrics, logs, traces for every service
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Pushes routing rules + policy to every sidecar centrally
+   • "Retry Margin Service 1x with 20ms timeout on 503" (must stay
+     well under the 50ms margin-check SLA)
+   • "OMS v2 gets 5% canary traffic at market open"
+   • "Only OMS, Portfolio Service may call Margin Service"
+
+WHAT THIS BUYS GROWW SPECIFICALLY:
+• Circuit breaking OMS → Margin Service — if margin lookups slow
+  down, outlierDetection ejects unhealthy pods after 5 consecutive
+  5xx in 10s; OMS fails fast and rejects the order rather than
+  silently blowing past the 500ms order-placement SLA
+• Safer canary rollouts in a constrained window — deploy OMS v2
+  during the 5 PM-8 AM freeze, then shift 5% of live traffic at
+  9:15 AM market open via VirtualService weights; watch error rate
+  for the first 15 minutes before going to 100% — far safer than an
+  all-or-nothing cutover
+• mTLS for financial data in transit — every inter-service hop
+  (order details, holdings, KYC data) is encrypted end-to-end,
+  supporting SEBI/RBI data-residency requirements within ap-south-1
+• End-to-end tracing — one trace ID follows an order from API
+  Gateway → OMS → Margin Service → Exchange Adapter → Kafka →
+  Portfolio Service update, critical for debugging the < 500ms SLA
+
+DIAGRAM: the "SERVICE MESH" band inside the API GATEWAY box
+represents this — every arrow down to Order/OMS, MF Service, Market
+Data, Portfolio Service, and User & KYC Service passes through an
+Envoy sidecar, with mTLS / load balancing / retries / circuit
+breaking / tracing applied uniformly to all of them.
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop — must be budgeted carefully against
+  the 50ms margin-check and 500ms order-placement SLAs
+• Control plane becomes a new critical dependency, though sidecars
+  cache last-known config if it goes down
+• The FIX protocol link to NSE/BSE co-location is OUTSIDE the mesh
+  — it's an external exchange connection, not a Kubernetes service`,
         },
       ],
     },
@@ -802,6 +922,140 @@ CREATE TABLE notification_log (
   status        TEXT DEFAULT 'PENDING'
 );`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar proxy configuration for inter-service traffic: circuit breaking on Margin Service, canary rollout for OMS, mTLS and zero-trust access",
+      api: `# DestinationRule — circuit breaking for Margin Service
+# OMS calls this synchronously on every order; must fail fast at 50ms
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: margin-service-circuit-breaker
+  namespace: prod
+spec:
+  host: margin-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 200
+      http:
+        http1MaxPendingRequests: 100
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary rollout for OMS v2 at market open
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: order-oms-canary
+  namespace: prod
+spec:
+  hosts:
+    - order-oms.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-oms-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: order-oms.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: order-oms.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: order-oms.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 1
+        perTryTimeout: 20ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — only OMS and Portfolio Service may call Margin Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: margin-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: margin-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/order-oms"
+              - "cluster.local/ns/prod/sa/portfolio-service"
+
+---
+# PeerAuthentication — mTLS enforced across the namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `SIDECAR INJECTION:
+Every pod in Order/OMS, MF Service, Market Data, Portfolio Service,
+User & KYC Service, and Margin Service gets an Envoy sidecar
+injected automatically via a Kubernetes mutating webhook at
+deploy time — no application code changes needed.
+
+CIRCUIT BREAKING ON MARGIN SERVICE (the hot path):
+Every order placement calls OMS → Margin Service synchronously,
+budgeted at < 50ms inside the overall 500ms order SLA. The
+outlierDetection policy ejects a Margin Service pod from the load
+balancing pool after 5 consecutive 5xx responses within 10s, for
+30s, capped at 50% of pods ejected at once. OMS's own retry policy
+(1 attempt, 20ms timeout) then fails fast and rejects the order
+with "margin check unavailable, please retry" rather than hanging
+past the SLA — better than a slow, eventually-successful order.
+
+CANARY ROLLOUT FOR OMS (deployment-freeze-aware):
+Deployments are frozen 9:15 AM-3:30 PM (market hours). OMS v2 is
+deployed during the 5 PM-8 AM window with 0% live traffic (reachable
+only via the x-oms-canary header for internal smoke tests). At the
+9:15 AM market open, the VirtualService weight shifts 5% of live
+order traffic to v2. The on-call engineer watches error rate and
+p99 latency for ~15 minutes; if clean, weight moves to 100%. If
+not, traffic reverts to v1 — no redeploy needed, just a config push
+to the control plane that sidecars pick up within seconds.
+
+mTLS FOR FINANCIAL DATA IN TRANSIT:
+PeerAuthentication in STRICT mode means every hop — order details,
+KYC documents, holdings, margin balances — is encrypted with
+mutual TLS automatically, certificates rotated by the control
+plane every 24 hours. Combined with AuthorizationPolicy restricting
+Margin Service to calls from OMS and Portfolio Service only, this
+gives Groww a zero-trust posture that supports SEBI/RBI
+data-residency and audit requirements within ap-south-1 without
+any application-level crypto code.
+
+CONTROL-PLANE-DOWN FAILURE MODE:
+If the Istio control plane (istiod) becomes unavailable, sidecars
+continue operating on their last-known configuration — circuit
+breaking, mTLS, and routing rules keep working. New pods that start
+during the outage fail to get sidecar config and are held in
+NotReady until istiod recovers, which is why istiod itself runs
+with 3 replicas across availability zones.`,
+    },
   ],
 };
 
@@ -1167,5 +1421,119 @@ COMMUNICATION:
   Investors shown exact nav_date at order confirmation: "Order placed. NAV date: April 30, 2026"
   If deferred: "Order placed after cut-off. NAV date: May 2, 2026 (next business day)"
   Never ambiguous — regulatory clarity required`,
+  },
+  {
+    id: "gq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Groww", "Zerodha", "Upstox"],
+    question: "Before drawing any boxes, walk me through a back-of-the-envelope estimation for Groww's trading platform at scale.",
+    answer: `This is the "size the system before you design it" step — every number should map to a component in the architecture.
+
+STATE YOUR ASSUMPTIONS FIRST:
+• 10M investors, ~15 holdings on average → 150M total holdings
+• 2M orders/day spread across ~22,500 seconds of market hours (9:15 AM-3:30 PM)
+• NSE ticks peak at ~50,000 ticks/sec across ~2,000 actively traded symbols
+• 2M concurrent WebSocket connections, each watching ~5 symbols on average
+• 5M active SIPs vs BSE StAR MF's ~500 orders/sec processing limit
+
+1. Order throughput: 2M ÷ 22,500s ≈ 89 orders/sec on average, with peaks
+   → ~10x average ≈ 890 orders/sec at market open/close. Each order needs
+   a synchronous margin check — this is why the Redis-backed margin
+   lookup in OMS must return in < 50ms, well inside the 500ms order SLA.
+
+2. Portfolio valuation load: 150M holdings ÷ ~2,000 symbols ≈ 75,000
+   holders per symbol on average. A popular stock ticking 25 times/sec
+   would naively trigger 25 × 75,000 ≈ 1.875M portfolio recomputations/sec
+   if done eagerly — clearly impossible. This is why Portfolio Service
+   uses a LAZY (1-second TTL cache) + PUSH hybrid: valuations are computed
+   on read with a short cache, and only the ~2M actively-watching
+   WebSocket users get push updates.
+
+3. WebSocket fan-out: 2M connections × 5 symbols ≈ 10M subscriptions.
+   → justifies consistent-hashing of symbols across the WebSocket
+   server fleet so that every tick for a symbol only needs to be
+   broadcast from the one shard that owns it.
+
+4. SIP burst: 5M SIPs ÷ 500 orders/sec (BSE StAR MF limit) ≈ 10,000
+   seconds ≈ 2.8 hours to drain a single batch. → justifies a staggered
+   SIP scheduler that starts spreading orders from midnight, feeding
+   Kafka at a controlled ~1,000 events/sec rather than firing 5M orders
+   at 9:00 AM sharp.
+
+5. Candle storage: 2,000 symbols × 375 minutes/day × 1-minute candles =
+   750,000 rows/day. Over a 250-day trading year: ~187.5M rows/year.
+   → justifies tiered TimescaleDB retention (1-minute candles kept for
+   3 months, daily candles kept forever) to bound storage growth.
+
+INTERVIEW PUNCH LINE: every one of these numbers should point straight
+at a box in the diagram — 890 orders/sec → Redis margin check in OMS;
+50,000 ticks/sec → Kafka market.ticks topic feeding the symbol-sharded
+WebSocket tier; 2.8-hour SIP drain → the staggered SIP scheduler;
+187.5M rows/year → tiered TimescaleDB retention. If your numbers don't
+land on a component, the estimation was just arithmetic, not design.`,
+    followups: [
+      "How would these numbers change during a high-volatility day when order volume spikes 5x?",
+      "If Groww doubled to 20M investors overnight, which component hits its limit first?",
+      "How do you size the Kafka partition count for the market.ticks topic given 50,000 ticks/sec peak?",
+    ],
+  },
+  {
+    id: "gq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["Groww", "Zerodha", "Razorpay"],
+    question: "Groww's OMS, MF Service, Market Data, Portfolio Service, User & KYC, and Margin Service all call each other constantly. How do you manage reliability and security across this fleet without scattering retry logic and auth checks through every service?",
+    answer: `This is the classic case for a SERVICE MESH — moving cross-cutting
+networking concerns out of application code and into a sidecar proxy
+(Envoy) deployed alongside every service instance.
+
+WHY A MESH FITS GROWW'S FLEET:
+• Every order placement makes a synchronous OMS → Margin Service call
+  that must complete in < 50ms — this is THE hot path and the prime
+  circuit-breaking candidate
+• Portfolio Service constantly reads live prices from Market Data's
+  Redis cache during market hours
+• Deployments are frozen 9:15 AM-3:30 PM — any rollout must be
+  provably safe within the narrow 5 PM-8 AM window
+
+1. Data plane — Envoy sidecar per pod, transparently intercepts all
+   traffic via iptables. Applies retries, timeouts, circuit breaking,
+   mTLS, and emits uniform metrics/traces — with zero app code changes.
+
+2. Control plane — Istio/Consul/AWS App Mesh pushes routing and policy
+   to every sidecar: "retry Margin Service once with a 20ms timeout
+   on 503", "OMS v2 gets 5% canary traffic at market open", "only OMS
+   and Portfolio Service may call Margin Service".
+
+WHAT THIS BUYS GROWW:
+• Circuit breaking on Margin Service — outlierDetection ejects
+  unhealthy pods after 5 consecutive 5xx in 10s; OMS fails fast and
+  rejects the order rather than silently blowing the 500ms SLA
+• Canary rollout for OMS v2 — deploy during the overnight freeze
+  window with 0% traffic, then shift 5% at market open and watch
+  error rates before going to 100% — far safer than a big-bang cutover
+• mTLS + AuthorizationPolicy — every hop (orders, KYC, holdings,
+  margin balances) is encrypted, and Margin Service only accepts
+  calls from OMS and Portfolio Service, supporting SEBI/RBI
+  data-residency requirements in ap-south-1
+• End-to-end tracing — one trace ID follows an order from API
+  Gateway → OMS → Margin Service → Exchange Adapter → Kafka, critical
+  for debugging the 500ms SLA
+
+TRADE-OFFS:
+• ~1-2ms extra latency per hop, which must be budgeted against the
+  50ms margin-check and 500ms order-placement SLAs
+• The control plane becomes a new critical dependency (sidecars cache
+  last-known config if it goes down, but new pods can't start)
+• The FIX protocol link to NSE/BSE co-location stays OUTSIDE the mesh
+  — it's an external exchange connection, not a cluster service`,
+    followups: [
+      "Walk through exactly what happens, step by step, if Margin Service starts timing out during peak order flow — from the OMS call to the user-facing response.",
+      "How would you validate the OMS v2 canary is safe within the 15-minute window before market volume ramps up further?",
+      "Would you put the same mesh policies around User & KYC Service, given it handles sensitive PII rather than live trading data?",
+    ],
   },
 ];

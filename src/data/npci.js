@@ -41,6 +41,8 @@ Three design insights that define UPI's architecture:
 │           │  Fraud Engine (real-time)      │                            │
 │           │  Idempotency Store             │                            │
 │           │  Settlement Instruction Gen    │                            │
+│           │  Service Mesh: Envoy sidecars  │                            │
+│           │  mTLS · LB · Retries · CB      │                            │
 │           └──────────┬─────────────────────┘                            │
 │                      │                                                   │
 │          ┌───────────┴───────────┐                                       │
@@ -163,6 +165,63 @@ PSP vs Bank on UPI:
     Some banks are also PSPs (HDFC's PayZapp, Axis's mobile app).
     Every UPI transaction involves at minimum 2 banks (payer + payee).`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, size the problem — every number here maps onto a component inside the NPCI UPI SWITCH box.
+
+ASSUMPTIONS:
+• 13B+ transactions/month, 460M+ active users, 300+ banks
+• ~5,000 TPS quoted as "peak"; a normal day already runs ~4,600 TPS average
+• <3s P99 end-to-end latency; fraud engine budget <50ms
+• Idempotency TxnId TTL = 90 days in Redis
+• ₹20+ lakh crore/month total value, settled via 3 intraday + 1 EOD cycle
+
+1. Average vs "peak": 13B ÷ (30 days × 86,400s) ≈ 5,000 TPS sustained,
+   24/7/365.
+   → That's already the figure quoted as "peak TPS" for festival days.
+   NPCI's switch fleet runs near its rated peak EVERY day — there is no
+   idle baseline to autoscale from, which is exactly why the Diwali/salary-
+   day playbook is manual pre-scaling (T-24h), not reactive autoscaling.
+
+2. Transaction value distribution: ₹20 lakh crore/month ÷ 13B
+   transactions ≈ ₹154 average transaction value, against a ₹1 lakh
+   per-transaction cap — a single max-value transaction is ~650x the
+   average.
+   → This is why the Fraud Engine's amount-anomaly rule (>10x the
+   payer's 30-day average AND >₹10,000) is tuned on a RATIO, not an
+   absolute threshold — an absolute cutoff would either miss large
+   legitimate transfers or flag nearly everyone.
+
+3. Idempotency Store sizing: ~5,000 TPS × 90-day TTL × 86,400s/day ≈
+   38.9 billion live keys (≈ 13B/month × 3 months of retention).
+   → At ~200 bytes/key (txnId → cached result), that's roughly 7.8 TB of
+   working set — this is the number that sizes the sharded Redis
+   cluster behind the Idempotency Store, partitioned the same way as the
+   VPA directory.
+
+4. Fraud Engine concurrency: 5,000 TPS × a <50ms processing budget ≈ 250
+   transactions "in flight" through the Fraud Engine at any instant.
+   → Each one runs a 4-command Redis velocity pipeline plus an ML
+   inference call — 250 concurrent requests is the connection-pool size
+   the Fraud Engine's Redis client and model server must sustain without
+   queueing past the 50ms budget.
+
+5. Settlement batch size: ₹20 lakh crore/month ÷ (4 cycles/day × 30
+   days) = 120 cycles/month ≈ ₹16,667 crore gross flow per cycle across
+   300 banks.
+   → Netting collapses this by 80-90% (most bank-pairs offset each
+   other), so the actual RTGS instructions per cycle total only a few
+   thousand crore — the Settlement Engine's "sum of net positions must
+   equal zero" check runs over hundreds of bank entries but moves a small
+   fraction of the gross figure.
+
+Interview punch line: the NPCI UPI SWITCH box runs at "festival peak"
+(~5,000 TPS) every single day — hence pre-scaling, not autoscaling; the
+Idempotency Store holds ~39B keys / ~7.8TB across 90 days; the Fraud
+Engine's <50ms budget caps it at ~250 concurrent in-flight scores; and the
+Settlement Engine turns ₹16,667cr of gross flow per cycle into a handful of
+RTGS instructions via netting.`,
+        },
       ],
     },
     {
@@ -241,6 +300,74 @@ Timeout handling:
   Timeout on CREDIT request (after debit succeeded): NPCI retries the credit up to 3×.
   If all credit retries fail: transaction marked as "credit pending" — reconciliation team resolves within 4 hours.
   This is why "money debited but not credited" complaints exist — and why NPCI has a dispute resolution layer.`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `Important distinction: NPCI already runs mTLS between itself and every PSP/bank — that's an external, certificate-based perimeter (rotated every 12 months, described above). The service mesh discussed here is a SEPARATE, internal layer — it governs how the Switch's own sub-components talk to EACH OTHER: VPA Directory, Transaction Router, Fraud Engine, Idempotency Store, and Settlement Instruction Gen.
+
+WHY A MESH FITS THE SWITCH'S INTERNALS:
+  Transaction Router → Fraud Engine is the tightest hop in the entire
+    system — a hard <50ms budget inside an overall <3s SLA. If the Fraud
+    Engine degrades, the Router needs a policy-driven fallback, not a
+    hung connection.
+  Transaction Router → Idempotency Store (Redis) is touched by EVERY
+    single transaction — 5,000 TPS sustained, the busiest internal hop.
+  VPA Directory is mostly read traffic and a natural target for canarying
+    new resolution/ranking logic without risking the payment hot path.
+  Settlement Instruction Gen runs on a totally different cadence (3x/day
+    + EOD) — it must be reachable ONLY by the batch scheduler, never by
+    the real-time Transaction Router.
+
+DATA PLANE: an Envoy sidecar runs next to every instance of Transaction
+  Router, VPA Directory, Fraud Engine, the Idempotency Store proxy, and
+  Settlement Instruction Gen — all inside the NPCI UPI SWITCH box. Every
+  internal call is intercepted for mTLS, retries, load balancing and
+  circuit breaking.
+
+CONTROL PLANE (Istio): istiod pushes routing rules, certs and
+  circuit-breaker thresholds to every sidecar in the switch fleet — "Fraud
+  Engine trips after its p99 exceeds 50ms" is declared once, fleet-wide.
+
+WHAT THIS BUYS NPCI SPECIFICALLY:
+  Circuit breaking on Fraud Engine: outlier detection ejects an
+    overloaded Fraud Engine instance the moment its latency creeps past
+    the 50ms budget. The Transaction Router's sidecar then fails toward a
+    pre-agreed conservative default (e.g. STEP_UP instead of ALLOW) rather
+    than blocking the whole <3s pipeline — turning an undefined hang into
+    a defined degradation.
+  Load balancing on the Idempotency Store proxy: LEAST_REQUEST spreads
+    the full 5,000 TPS evenly across Redis-fronting pods, with a
+    connection-pool cap that protects Redis from a retry storm during a
+    bank outage.
+  Canary for VPA Directory: new resolution/caching logic ships to 5% of
+    traffic via header-based routing, validated against resolution
+    latency and error rate, before fleet-wide rollout.
+  mTLS + AuthorizationPolicy internally: even though these services sit
+    inside NPCI's perimeter, mTLS between them is "zero trust internally"
+    — and the AuthorizationPolicy enforces that Settlement Instruction Gen
+    can ONLY be called by the batch scheduler's service account, never by
+    Transaction Router, hard-separating the real-time and batch paths.
+  Tracing: a single transaction — Transaction Router → Fraud Engine →
+    Idempotency Store → bank connection pool — gets one trace ID,
+    complementing the RRN-based reconciliation already used for
+    cross-bank disputes.
+
+DIAGRAM: the "Service Mesh: Envoy sidecars" / "mTLS · LB · Retries · CB"
+  lines now inside the NPCI UPI SWITCH box represent this layer — every
+  arrow between the switch's five sub-components is mesh-managed traffic.
+
+TRADE-OFFS:
+  Sidecar latency (~1-2ms) is a meaningful slice of the Fraud Engine's
+  50ms budget, so this hop's mesh timeouts are tuned tightest — and in
+  practice this is the textbook case where a team might run the Fraud
+  Engine WITHOUT a sidecar on the hottest path, accepting less uniform
+  observability for lower latency.
+  This internal mesh is independent of, and does not replace, the
+  external NPCI↔PSP/bank mTLS — those certificates, rotation schedule and
+  leased-line redundancy are unchanged.
+  The control plane must fail open: if istiod is unreachable, sidecars
+  keep enforcing last-known circuit breakers and AuthorizationPolicies —
+  critical given the 99.99% uptime SLA (<52 min/year).`,
         },
       ],
     },
@@ -927,6 +1054,157 @@ CREATE TABLE mandates (
     Payer can block the debit by responding within the window
     This is a regulatory requirement (RBI circular) added in UPI 2.0`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Internal mesh for the NPCI UPI Switch — circuit breaking on the Fraud Engine's 50ms budget, canary VPA Directory rollouts, and hard separation of the real-time and batch settlement paths",
+      api: `# DestinationRule — circuit breaking on the Fraud Engine
+# Transaction Router → Fraud Engine has a hard <50ms budget inside a <3s SLA
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fraud-engine-circuit-breaker
+  namespace: upi-switch
+spec:
+  host: fraud-engine.upi-switch.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 2000
+      http:
+        http1MaxPendingRequests: 500
+        maxRequestsPerConnection: 20
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# DestinationRule — load balancing for the Idempotency Store proxy
+# Touched by all ~5,000 TPS
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: idempotency-store-lb
+  namespace: upi-switch
+spec:
+  host: idempotency-store.upi-switch.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 5000
+      http:
+        http1MaxPendingRequests: 2000
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary rollout for VPA Directory resolution logic
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: vpa-directory-canary
+  namespace: upi-switch
+spec:
+  hosts:
+    - vpa-directory.upi-switch.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-vpa-directory-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: vpa-directory.upi-switch.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: vpa-directory.upi-switch.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: vpa-directory.upi-switch.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 50ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — Settlement Instruction Gen is batch-only:
+# only the settlement scheduler may call it, never the real-time Transaction Router
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: settlement-instruction-gen-access
+  namespace: upi-switch
+spec:
+  selector:
+    matchLabels:
+      app: settlement-instruction-gen
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/upi-switch/sa/settlement-scheduler"
+
+---
+# PeerAuthentication — mTLS STRICT across the switch's internal services
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: upi-switch
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `SIDECAR INJECTION SCOPE: Envoy sidecars run next to every instance of
+Transaction Router, VPA Directory, Fraud Engine, the Idempotency Store
+proxy, and Settlement Instruction Gen — the five sub-components inside the
+NPCI UPI SWITCH box. This is a SEPARATE layer from the external NPCI↔PSP
+and NPCI↔bank mTLS (certificate-based, 12-month rotation, leased lines) —
+that perimeter is untouched by this internal mesh.
+
+CIRCUIT BREAKING ON THE FRAUD ENGINE: outlierDetection ejects a Fraud
+Engine instance after 5 consecutive 5xx within a 5s window (tighter than
+the typical 10s — this hop's budget is 50ms, not 100s of ms). When the
+Fraud Engine degrades, Transaction Router's sidecar fails the call fast and
+the Router falls back to a pre-agreed conservative action (STEP_UP) rather
+than blocking — turning a hung dependency into a defined degradation
+within the <3s end-to-end SLA.
+
+LOAD BALANCING ON IDEMPOTENCY STORE: at ~5,000 TPS sustained — every
+transaction touches this — LEAST_REQUEST balancing across the
+Redis-fronting pods plus a 5,000-connection pool absorbs steady-state load
+and prevents a retry storm (e.g. during a bank outage causing mass
+CREDIT_PENDING retries) from overwhelming the idempotency Redis cluster.
+
+CANARY FOR VPA DIRECTORY: new VPA resolution/caching logic is routed to
+internal QA traffic via x-vpa-directory-canary: "true" first, then a 95/5
+production split. Because resolution sits on the critical path before the
+PIN-entry screen, the canary's perTryTimeout is set to 50ms — if v2 is
+slower, requests fall back to v1 within the same request.
+
+AUTHORIZATION POLICY — REAL-TIME/BATCH SEPARATION: Settlement Instruction
+Gen runs on a 3x/day + EOD cadence and produces the DNS file sent to RBI.
+The AuthorizationPolicy ensures only the settlement-scheduler service
+account can call it — Transaction Router (or any compromised real-time
+service) is denied at the sidecar, hard-enforcing the separation between
+UPI's real-time accounting layer and its deferred settlement layer.
+
+CONTROL-PLANE-DOWN FAILURE MODE: if istiod is unreachable, every sidecar
+keeps enforcing its last-known circuit breakers, load-balancing config and
+AuthorizationPolicies — essential given NPCI's 99.99% uptime SLA (<52
+min/year downtime). What's lost is the ability to push NEW policy (e.g.
+tightening the Fraud Engine's outlier thresholds), which is deferred until
+the control plane recovers.`,
+    },
   ],
 };
 
@@ -1203,5 +1481,55 @@ Other benefits of central hub:
 • Settlement: DNS works because NPCI sees all flows. In a bilateral model, each pair would need separate settlement — netting across the entire network is impossible.
 • Regulatory oversight: RBI can monitor all UPI transactions through NPCI. In a bilateral model, visibility is fragmented.`,
     followups: ["What is the single point of failure risk in a hub-and-spoke model, and how does NPCI mitigate it?", "How does this hub-and-spoke compare to Visa/Mastercard's network architecture?"],
+  },
+  {
+    id: "npci-q11",
+    category: "Scale & Performance",
+    difficulty: "Medium",
+    round: "System Design Round",
+    asked_at: ["Razorpay", "PhonePe", "Cred"],
+    question: "Walk through the back-of-the-envelope numbers for NPCI's switch. Why does 'average load' already look like 'festival peak'?",
+    answer: `Start with 13B+ transactions/month ÷ (30 days × 86,400s) ≈ 5,000 TPS sustained, 24/7. That number is the SAME figure NPCI quotes as "peak TPS for festival days" — meaning the switch fleet runs near its rated peak every single day. There's no idle baseline to autoscale from, which is exactly why the Diwali/salary-day playbook is manual pre-scaling at T-24 hours, not reactive autoscaling.
+
+Three more numbers fall out of this:
+
+1. Idempotency Store: ~5,000 TPS × 90-day TTL × 86,400s/day ≈ 38.9 billion live keys (roughly 13B/month × 3 months of retention). At ~200 bytes/key, that's ~7.8 TB of working set — the real sizing input for the sharded Redis cluster behind the Idempotency Store.
+
+2. Fraud Engine concurrency: 5,000 TPS × a <50ms processing budget ≈ 250 transactions "in flight" through the Fraud Engine at any instant — this caps the connection-pool size to Redis and the ML model server, not the TPS number itself.
+
+3. Settlement netting: ₹20 lakh crore/month ÷ (4 cycles/day × 30 days) ≈ ₹16,667 crore gross flow per cycle across 300 banks, but netting collapses this 80-90% — so the actual RTGS instructions per cycle are a small fraction of the gross figure, even though the "sum to zero" validation runs over the full gross flow.
+
+The throwaway insight interviewers look for: at NPCI's scale, "average" and "peak" are nearly the same number, so capacity planning isn't about handling spikes above a baseline — it's about provisioning the entire fleet at what other systems would call peak, permanently.`,
+    followups: [
+      "If average load is already near 'peak,' what does NPCI actually do differently to prepare for Diwali specifically?",
+      "How would you validate the ~7.8TB Idempotency Store sizing without waiting 90 days to observe it?",
+      "What's the risk of the Fraud Engine's 250-concurrent-request ceiling being too tight during a genuine traffic spike?",
+    ],
+  },
+  {
+    id: "npci-q12",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Deep Dive",
+    asked_at: ["Razorpay", "PhonePe", "Juspay"],
+    question: "The NPCI UPI Switch has VPA Directory, Transaction Router, Fraud Engine, Idempotency Store and Settlement Instruction Gen as sub-components. Would you put a service mesh between them — isn't NPCI already doing mTLS everywhere?",
+    answer: `NPCI's existing mTLS is an EXTERNAL perimeter — certificate-based, 12-month rotation, between NPCI and each of the 300+ banks and 200+ PSPs over leased lines. That's a completely separate concern from how the Switch's own five sub-components talk to each other INTERNALLY, which is where a service mesh adds value.
+
+Two hops dominate: Transaction Router → Fraud Engine has a hard <50ms budget inside an overall <3s SLA — every transaction goes through it. Transaction Router → Idempotency Store is touched by all ~5,000 TPS. An Envoy sidecar next to each of the five sub-components, with istiod as the control plane, gives:
+
+Circuit breaking on Fraud Engine: outlier detection ejects an instance once its latency creeps past the 50ms budget (5 consecutive 5xx in a 5s window — tighter than the usual 10s, because this hop's budget is so small). Transaction Router's sidecar then fails fast toward a pre-agreed conservative default (STEP_UP instead of ALLOW), turning an undefined hang into a defined degradation.
+
+Load balancing on the Idempotency Store proxy: LEAST_REQUEST across Redis-fronting pods plus a 5,000-connection pool absorbs the full sustained TPS and survives retry storms during bank outages.
+
+Canary for VPA Directory: new resolution logic ships to 5% of traffic via header routing with a 50ms perTryTimeout, since resolution sits before the PIN screen on the critical path.
+
+AuthorizationPolicy for real-time/batch separation: Settlement Instruction Gen runs 3x/day + EOD and produces the DNS file sent to RBI — the AuthorizationPolicy ensures only the settlement-scheduler service account can call it, denying Transaction Router (or a compromised real-time service) at the sidecar.
+
+mTLS internally is "zero trust within the perimeter" — defense in depth even though these five services already sit inside NPCI's network boundary. Trade-off: sidecar latency (~1-2ms) eats into the Fraud Engine's 50ms budget more than anywhere else in the system, so in practice this is the textbook case for either very aggressive timeout tuning or running that one hop without a sidecar at all.`,
+    followups: [
+      "Would you actually skip the sidecar on the Fraud Engine hop, and what do you lose by doing that?",
+      "How does this internal mesh's failure mode interact with the external NPCI↔bank mTLS if both degrade at once?",
+      "Why does Settlement Instruction Gen need network-level isolation from Transaction Router if both are already inside NPCI's trusted perimeter?",
+    ],
   },
 ];

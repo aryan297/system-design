@@ -16,7 +16,9 @@ Core challenges: real-time inventory reservation across thousands of SKUs per da
                           ▼
 ┌───────────────────────────────────────────────────────────────────────┐
 │                  API GATEWAY (Kong / AWS ALB)                         │
+│        SERVICE MESH — Envoy sidecar attached to every service         │
 │      Auth (JWT) · Rate Limiting · Routing · TLS Termination           │
+│     mTLS · Load Balancing · Retries · Circuit Breaking · Tracing      │
 └──┬──────────┬────────────┬──────────────┬────────────────┬────────────┘
    │          │            │              │                │
    ▼          ▼            ▼              ▼                ▼
@@ -97,6 +99,68 @@ IDEMPOTENCY:
   Every order placement carries an idempotency key (device-generated UUID)
   Stored in a DB table with UNIQUE constraint — duplicate requests return the same order_id
   Critical for mobile: user taps "Order" twice on bad network → only one order created`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Five numbers, derived from the headline metrics, explain why the dark-store
+capacity limits, Redis sizing, and forecasting batch job look the way they do.
+
+ASSUMPTIONS:
+• 5M+ orders/day (2024 scale), 3× peak during evening rush / festive seasons
+• 700+ dark stores across 10 cities, ~4,000 SKUs/store
+• Pick + pack SLA < 6 min (360s); dark-store capacity = 30-50 simultaneous active orders
+• Avg basket ≈ 5 items/order
+• Delivery partner GPS ping every 5s; tracking WebSocket pushes every 15s
+• Demand forecasting: XGBoost retrained nightly, one model per SKU-store pair
+
+1. ORDER RATE vs DARK-STORE CAPACITY — A CONSISTENCY CHECK
+   5M/day ÷ 86,400s ≈ 58 orders/sec globally ÷ 700 stores ≈ 0.083 orders/sec/store
+   ≈ 1 order arriving every 12 seconds, per store, on average.
+   Little's Law: concurrent orders/store ≈ arrival_rate × time_in_system
+     ≈ 0.083/sec × 360s ≈ 30 — exactly the LOWER bound of the documented
+     "30-50 simultaneous active orders" capacity.
+   At 3× peak (174 orders/sec globally, ~0.25/sec/store) → concurrent ≈ 90/store
+   → blows past the 50-order cap, which is precisely why "Burst handling: if
+     demand exceeds capacity, orders overflow to adjacent dark store" exists.
+
+2. GPS INGEST & TRACKING FAN-OUT
+   Assume ~40% of a store's concurrent orders are currently "en route"
+   (dispatched, not yet delivered) → 30-50 × 0.4 ≈ 12-20 active partners/store
+   × 700 stores ≈ 8,400-14,000 partners pinging GPS every 5s
+   ≈ ~1,700-2,800 location pings/sec globally → Kafka → Location Service → Cassandra
+   WebSocket pushes every 15s to the same set of orders ≈ ~560-930 pushes/sec
+   → Sizes Cassandra's partner_locations write rate and the WebSocket fanout tier.
+
+3. INVENTORY RESERVATION THROUGHPUT
+   5M orders/day × ~5 items/order = 25M reservation decrements/day
+   ÷ 86,400s ≈ 290 ops/sec average, ~870 ops/sec at 3× peak
+   Each is a Redis WATCH/MULTI/DECRBY/EXEC round trip
+   → Sizes the Redis Cluster's sustained command rate for inventory_cache —
+     comfortably inside a single Redis Cluster's typical 100K+ ops/sec ceiling,
+     confirming Redis (not Postgres) is the right choice for the hot path.
+
+4. CATALOG & SEARCH LOAD PER STORE INDEX
+   Each order session involves ~4 catalog/search requests on average before
+   checkout → 5M × 4 = 20M requests/day ÷ 86,400s ≈ 230 req/sec globally
+   Category pages are cached (60s TTL) — assume ~20% of requests are
+   uncached searches hitting Elasticsearch directly ≈ 46 search QPS
+   Spread across 700 PER-STORE indices ≈ ~0.066 QPS/index average
+   → Confirms per-store Elasticsearch indices are viable even though there
+     are 700 of them — each index sees a trickle of traffic, not a flood.
+
+5. DEMAND FORECASTING BATCH SIZE
+   700 stores × ~4,000 SKUs/store ≈ 2.8M SKU-store pairs, each needing its
+   own XGBoost model retrained nightly in the 1-3 AM window (≈2 hours)
+   2.8M ÷ 7,200s ≈ 389 models/sec sustained training throughput required
+   → This is the number that makes "retrained nightly" a distributed Spark
+     batch job across hundreds of executors, not a single-machine cron job.
+
+Interview punch line: "58 orders/sec ÷ 700 stores reproduces the documented
+30-50 concurrent-order capacity via Little's Law — and explains exactly when
+overflow-to-adjacent-store kicks in. ~290-870 reservation ops/sec confirms
+Redis over Postgres for the hot inventory path. ~1,700-2,800 GPS pings/sec
+sizes Cassandra's write rate. And 2.8M SKU-store pairs is why nightly
+forecasting is a Spark cluster job, not a script."`,
         },
       ],
     },
@@ -270,6 +334,86 @@ DELIVERY CONFIRMATION:
   Partner scans QR code on customer's door (or customer scans partner's code)
   If no confirmation after arrival geofence triggered → call attempt → auto-confirm after 2 min
   Photo proof of delivery available for unattended delivery`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `The API Gateway secures EDGE traffic. Behind it, the order-to-delivery
+pipeline is a chain of internal calls — Order Service → Inventory Service
+(checkout reservation) → Dispatch Service (partner assignment) → Tracking
+Service (live GPS/ETA) → Notification Service (push/SMS/WhatsApp) — each
+with a very different latency and reliability profile.
+
+WHY A MESH FITS HERE:
+• Order Service → Inventory Service is the single hottest internal hop:
+  every order's confirmation depends on the Redis MULTI/EXEC reservation
+  completing inside the order-confirmation SLA.
+• Dispatch Service holds a 30-second partner-offer window per order — the
+  same "in-flight offer state, don't eject mid-loop" shape as a ride-hailing
+  dispatch engine.
+• Tracking Service ingests GPS pings every 5s and pushes WebSocket updates
+  every 15s per active delivery — stateful connections, not request/response.
+• Notification Service's channel-priority cascade (FCM → WhatsApp → SMS)
+  means a slow downstream channel shouldn't block the others.
+
+DATA PLANE:
+Envoy sidecar attached to: Order Service, Inventory Service, Catalog
+Service, Dispatch Service, Tracking Service, and Notification Service —
+6 services, matching the LLD components.
+
+CONTROL PLANE:
+Istio, deployed PER CITY — mirroring the "Database per city" option from
+the multi-city scaling discussion. Mumbai's istiod is independent of
+Delhi's; a control-plane issue in one city never touches dispatch in another.
+
+WHAT THIS BUYS:
+1. Inventory Service gets TIGHT circuit breaking (outlierDetection,
+   interval: 5s / baseEjectionTime: 15s). This is a DIFFERENT layer from
+   the existing application-level circuit breaker (see "What happens if
+   the inventory service goes down during peak hours?"): the mesh breaker
+   ejects a single unhealthy REPLICA and reroutes to healthy ones —
+   transparent to Order Service. The app-level breaker only fires when
+   the WHOLE service is degraded, falling back to direct Redis reads. The
+   two are complementary, not conflicting: per-instance health (mesh) vs
+   whole-dependency fallback (app).
+2. Dispatch Service gets LOAD BALANCING ONLY — no outlierDetection. Each
+   replica holds in-flight 30-second partner-offer state; an
+   Envoy-triggered ejection mid-offer would orphan it and force a
+   re-assignment, exactly like a ride-hailing dispatch engine.
+3. Tracking Service also gets LB-only, no outlier ejection — its
+   connections are GPS-ingest + WebSocket-push, both stateful. Ejecting a
+   replica would drop active location streams for in-flight deliveries.
+4. A VirtualService canary on Dispatch Service lets the team A/B-test new
+   partner-scoring weights (currently 0.5 × proximity + 0.3 × acceptance +
+   0.2 × rating) against live acceptance-rate and on-time-delivery metrics.
+5. An AuthorizationPolicy on Inventory Service restricts
+   /internal/inventory/reserve and /internal/inventory/release to Order
+   Service ONLY — formalizing the exactly-once reservation invariant from
+   "How do you prevent overselling": no other service (Dispatch, Tracking,
+   Notification) can ever mutate stock directly, by mistake or otherwise.
+6. mTLS + distributed tracing across all 6 services — when an order takes
+   9 minutes instead of the promised ~8.5, tracing shows whether the time
+   went to reservation, picking, dispatch, or delivery.
+
+DIAGRAM:
+The SERVICE MESH band sits inside API GATEWAY at the top — Catalog
+Service, Order Service, Inventory Service, Dispatch Service, and
+Notification Service (shown) plus Tracking Service (LLD-level, called
+internally) all run an Envoy sidecar. The EVENT BUS (Kafka) and DATA LAYER
+(PostgreSQL, Redis, Elasticsearch, Cassandra, S3, ClickHouse) are untouched.
+
+TRADE-OFFS:
+• EVENT BUS (Kafka) and DATA LAYER — out, same reasoning as every file in
+  this series: not HTTP/gRPC, mesh policy doesn't apply.
+• Redis Cluster (inventory_cache, partner state, ETA cache) — direct
+  client connections stay OUT. At ~290-870 reservation ops/sec, adding a
+  sidecar hop to the hottest path in the system buys nothing.
+• Sidecar latency (~1-2ms/hop) is negligible against the <6min pick-pack
+  SLA — but Dispatch's 30-second offer timeout means retries must not
+  stack: perTryTimeout on the canary route is set well under 30s.
+• Control-plane-down fail-open is required: with a 99.99% order-placement
+  availability target, sidecars must keep routing on cached config. This
+  mirrors the existing "dark store can operate offline for 10 min, queuing
+  orders locally" precedent — graceful degradation is already a design value.`,
         },
       ],
     },
@@ -655,6 +799,200 @@ notification_log (PostgreSQL):
   notif_id, order_id, customer_id, channel, template_id,
   sent_at, delivered_at, opened_at, status (SENT/DELIVERED/FAILED)`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Sidecar Configuration",
+      description: "Per-city Istio mesh: Inventory circuit breaking, Dispatch/Tracking LB-only, scoring canary, reservation-integrity AuthorizationPolicy",
+      api: `# Istio configuration — applied per city (mumbai-prod, delhi-prod, ...)
+
+# 1. Inventory Service — tight circuit breaking.
+#    Every order's confirmation depends on the Redis MULTI/EXEC
+#    reservation completing fast. Complementary to (not a replacement
+#    for) the existing app-level "open circuit → fall back to cached
+#    Redis reads" breaker — this one ejects a single bad REPLICA.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: inventory-service-circuit-breaker
+  namespace: mumbai-prod
+spec:
+  host: inventory-service.mumbai-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 8000
+      http:
+        http1MaxPendingRequests: 4000
+        maxRequestsPerConnection: 100
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# 2. Dispatch Service — load balancing ONLY, no outlier ejection.
+#    Each replica holds in-flight 30-second partner-offer state; an
+#    Envoy-triggered ejection mid-offer would orphan it and force a
+#    re-assignment.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: dispatch-service-lb
+  namespace: mumbai-prod
+spec:
+  host: dispatch-service.mumbai-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 3000
+      http:
+        http1MaxPendingRequests: 1500
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# 3. Tracking Service — load balancing ONLY, no outlier ejection.
+#    GPS-ingest (every 5s) and WebSocket pushes (every 15s) are stateful
+#    connections per active delivery; ejecting a replica drops live
+#    location streams.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: tracking-service-lb
+  namespace: mumbai-prod
+spec:
+  host: tracking-service.mumbai-prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 5000
+      http:
+        http1MaxPendingRequests: 2500
+        maxRequestsPerConnection: 200
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# 4. Canary new partner-scoring weights (currently 0.5 proximity / 0.3
+#    acceptance / 0.2 rating) against live acceptance-rate and
+#    on-time-delivery metrics.
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: dispatch-service-canary
+  namespace: mumbai-prod
+spec:
+  hosts:
+    - dispatch-service.mumbai-prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-dispatch-scoring-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: dispatch-service.mumbai-prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: dispatch-service.mumbai-prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: dispatch-service.mumbai-prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 10s
+        retryOn: 5xx,reset,connect-failure
+---
+# 5. Reservation integrity — only Order Service may reserve or release
+#    inventory. No other service can mutate stock, by mistake or otherwise.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: inventory-service-reserve-restricted
+  namespace: mumbai-prod
+spec:
+  selector:
+    matchLabels:
+      app: inventory-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/mumbai-prod/sa/order-service"]
+      to:
+        - operation:
+            paths: ["/internal/inventory/reserve", "/internal/inventory/release"]
+            methods: ["POST"]
+---
+# 6. mTLS within the city
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: mumbai-prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope (6 services, matching the LLD components):
+  IN MESH:  Order Service, Inventory Service, Catalog Service, Dispatch
+            Service, Tracking Service, Notification Service
+  OUT:      Kafka (Event Bus), PostgreSQL, Redis Cluster, Elasticsearch,
+            Cassandra, S3, ClickHouse — none are HTTP/gRPC services Envoy
+            can apply L7 policy to, and Redis in particular sits on the
+            ~290-870 ops/sec hot reservation path where a sidecar hop
+            buys nothing.
+
+Inventory Service circuit breaking — two layers, two granularities:
+  From Back-of-the-Envelope Estimation: ~290 reservation ops/sec average,
+  ~870/sec at 3× peak, each a synchronous Order Service → Inventory
+  Service → Redis round trip inside the order-confirmation SLA.
+  MESH LAYER (this DestinationRule): if ONE replica starts returning 5xx,
+  outlierDetection (interval: 5s / baseEjectionTime: 15s) ejects it —
+  Order Service transparently retries against a healthy replica. No
+  application code involved.
+  APP LAYER (existing, see "What happens if the inventory service goes
+  down during peak hours?"): if errors exceed 5% over 10s ACROSS THE WHOLE
+  SERVICE (mesh-level LB can't find a healthy replica either), Order
+  Service's own circuit breaker opens and falls back to direct cached
+  Redis reads — degraded but available.
+  These don't conflict because they trigger on different scopes:
+  per-replica health (mesh) vs whole-dependency exhaustion (app).
+
+Dispatch & Tracking — LB-only, the same reasoning as Uber's Dispatch
+Engine and Location Service in this series: both hold per-order or
+per-delivery STATE across multiple requests (a 30s offer window; a
+multi-minute GPS/WebSocket session). outlierDetection would eject based on
+5xx rate, but a replica mid-offer or mid-stream isn't "unhealthy" from the
+caller's perspective — ejecting it actively breaks an in-flight operation.
+LEAST_REQUEST spreads NEW offers/connections without touching active ones.
+
+Canary — tied to the scoring formula:
+  score = 0.5 × proximity_score + 0.3 × acceptance_rate + 0.2 × avg_rating
+  Changing these weights changes which partner gets offered first — a
+  high-risk change to ship blind. perTryTimeout: 10s leaves 20s of margin
+  inside Dispatch's 30-second offer window for a single retry.
+
+Reservation-integrity AuthorizationPolicy:
+  "How do you prevent overselling" describes idempotent, exactly-once
+  reservation via Order Service. This policy makes Order Service the ONLY
+  mesh principal that can call /internal/inventory/reserve or /release —
+  independent of application code. A bug in Dispatch, Tracking, or
+  Notification that somehow constructs a reservation request is blocked
+  at the mesh layer before it reaches Inventory Service's listener.
+
+mTLS & control-plane topology:
+  Istio runs PER CITY (mumbai-prod, delhi-prod, ...), mirroring the
+  "Database per city" option from the multi-city expansion strategy — a
+  control-plane issue in Mumbai never touches Delhi's dispatch. With a
+  99.99% order-placement availability target, sidecars MUST fail open on
+  cached config if their local control plane briefly drops — this mirrors
+  the existing "dark store operates offline for 10 min" precedent.`,
+    },
   ],
 };
 
@@ -1008,5 +1346,143 @@ RESULT:
   Higher checkout conversion rate (fewer "sorry, OOS" moments)
   Higher NPS (customers trust what they see)
   Lower picker failure rate (items shown as available actually are available)`,
+  },
+  {
+    id: "zq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Zepto", "Swiggy Instamart", "Blinkit"],
+    question: "Walk through the back-of-the-envelope math for Zepto's scale — does the 30-50 concurrent order capacity per dark store actually add up to 5M orders/day?",
+    answer: `Yes — and the nice part is that it's a two-way check: you can derive the headline number from the per-store capacity, or derive the per-store capacity from the headline number, and they should land in the same place.
+
+ASSUMPTIONS:
+  5M+ orders/day (2024 scale, with ~3x multiplier at peak hours)
+  700+ dark stores across ~10 cities
+  Pick + pack target < 6 minutes (360 seconds) per order
+  Each store handles 30-50 simultaneous active orders (documented capacity)
+  Average basket ≈ 5 items
+  GPS ping every 5s, WebSocket location push every 15s per active delivery
+
+THE FIVE DERIVATIONS:
+
+1. Order rate vs documented capacity — Little's Law consistency check:
+   5,000,000 orders/day ÷ 86,400s ≈ 58 orders/sec globally
+   58 ÷ 700 stores ≈ 0.083 orders/sec/store
+   Concurrent orders in system = arrival rate × time in system
+   0.083 × 360s ≈ 30 concurrent orders/store
+   → This lands almost exactly on the documented LOWER bound (30-50)!
+   The headline "5M orders/day" and the operational "30-50 concurrent"
+   aren't two independent facts — one falls out of the other via Little's Law.
+
+2. What happens at 3x peak:
+   58 × 3 ≈ 174 orders/sec globally → ~0.25 orders/sec/store
+   0.25 × 360s ≈ 90 concurrent orders/store
+   → This EXCEEDS the 50-order cap by ~2x — which is exactly why the
+   overflow-to-adjacent-store logic exists. The capacity numbers and the
+   overflow design aren't separate decisions; the math forces the overflow path.
+
+3. GPS ingest & WebSocket fanout:
+   ~40% of concurrent orders are en-route at any moment
+   At peak: 90 × 700 × 0.4 ≈ 25,200 active deliveries
+   GPS pings: 25,200 ÷ 5s ≈ 5,040/sec → Cassandra write tier
+   WebSocket pushes: 25,200 ÷ 15s ≈ 1,680/sec → Tracking Service fanout
+   → Sizes the Cassandra + WebSocket tier independently of the order-placement path.
+
+4. Inventory reservation throughput:
+   5M orders/day × 5 items/basket ÷ 86,400s ≈ 290 reservation ops/sec average
+   At 3x peak: ~870 ops/sec
+   → Both comfortably inside Redis Cluster's 100K+ ops/sec ceiling — confirms
+   Redis (not Postgres) was the right choice for the hot reservation path.
+
+5. Demand forecasting batch job:
+   700 stores × ~4,000 SKUs ≈ 2.8M SKU-store pairs to retrain nightly
+   2.8M ÷ (2-hour batch window × 3,600s) ≈ 389 models/sec
+   → A single-machine job can't hit this; justifies the distributed Spark
+   batch architecture rather than a simpler per-store cron job.
+
+INTERVIEW PUNCH LINE:
+  "The most useful thing here isn't any single number — it's that the
+  5M orders/day headline and the 30-50 concurrent-order dark-store
+  capacity are the SAME fact expressed two ways, connected by Little's
+  Law. If an interviewer gives you one, you can derive the other — and
+  if they don't match, that's a sign one of your assumptions is wrong."`,
+    followups: [
+      "If a city's order volume doubled overnight, which number in this chain breaks first — store capacity, Redis throughput, or the forecasting batch window?",
+      "How would the GPS-ingest number change if delivery partners pinged every 2 seconds instead of every 5?",
+      "The 3x peak multiplier is doing a lot of work here — how would you actually measure it from production data rather than assuming it?",
+    ],
+  },
+  {
+    id: "zq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Deep Dive",
+    asked_at: ["Zepto", "Swiggy Instamart", "Uber"],
+    question: "Zepto's services already have circuit breakers and retries at the application layer (e.g. the Inventory Service fallback). Would you add a service mesh on top, and what would it actually do differently?",
+    answer: `Yes — but the key is framing it correctly: the mesh doesn't replace the app-level resilience that's already there, it adds a layer underneath at a different granularity. Conflating the two is the most common mistake.
+
+WHY A MESH FITS HERE:
+  Order Service → Inventory Service is the hottest, most latency-sensitive
+  hop in the system (checkout reservation, ~290-870 ops/sec).
+  Dispatch Service holds a 30-second in-flight partner-offer window — very
+  similar shape to ride-hailing dispatch.
+  Tracking Service is stateful (GPS ingest every 5s, WebSocket push every 15s).
+  Notification Service has a channel-priority cascade (push → SMS → WhatsApp).
+
+DATA PLANE: Envoy sidecar attached to all 6 core services — Order,
+Inventory, Catalog, Dispatch, Tracking, Notification.
+
+CONTROL PLANE: Istio deployed PER CITY (mumbai-prod, delhi-prod, ...),
+mirroring the "Database per city" sharding model from the multi-city
+expansion strategy — a control-plane blip in one city can't touch another.
+
+WHAT THIS BUYS, CONCRETELY:
+
+1. Inventory Service — TIGHT circuit breaking (outlierDetection,
+   interval: 5s, baseEjectionTime: 15s). This is the layer that catches a
+   SINGLE BAD REPLICA and reroutes around it transparently — before the
+   existing app-level breaker (which trips on whole-service error rate)
+   ever sees a problem. Two layers, two granularities, not a conflict:
+   per-replica health (mesh) vs whole-dependency exhaustion (app).
+
+2. Dispatch Service and Tracking Service — LOAD BALANCING ONLY, explicitly
+   NO outlierDetection. Both hold per-request state (a 30s offer; a live
+   GPS/WebSocket session) that an Envoy-triggered ejection would orphan.
+   LEAST_REQUEST spreads new work without disturbing in-flight state — the
+   same pattern used for Uber's Dispatch Engine and Location Service.
+
+3. VirtualService canary on Dispatch Service — ships changes to the
+   0.5/0.3/0.2 proximity/acceptance/rating scoring weights to 5% of
+   traffic via a header-matched subset before a full rollout.
+
+4. AuthorizationPolicy restricting /internal/inventory/reserve and
+   /release to Order Service's identity ONLY — this formalizes the
+   exactly-once reservation invariant as an INFRASTRUCTURE-ENFORCED rule,
+   not just an application convention. A bug anywhere else literally
+   cannot call these endpoints.
+
+5. mTLS (STRICT) + distributed tracing across all 6 services — every
+   request, including the 290-870/sec reservation path, is automatically
+   encrypted and traced without app code changes.
+
+WHAT STAYS OUT:
+  Kafka (Event Bus), PostgreSQL, Redis Cluster, Elasticsearch, Cassandra,
+  S3, ClickHouse — none are mesh-manageable HTTP/gRPC services, and Redis
+  in particular sits directly on the hot reservation path where an extra
+  hop is pure cost.
+
+TRADE-OFFS:
+  Sidecar adds ~1-2ms per hop — negligible against the 6-minute pick+pack
+  SLA, but Dispatch's 30s offer window means retry budgets must be
+  coordinated so they don't stack into a timeout.
+  Control-plane-down means sidecars fail open on last-known config — at a
+  99.99% order-placement target this mirrors the existing "dark store
+  operates offline for up to 10 minutes" precedent already in the design.`,
+    followups: [
+      "Walk through exactly what happens — at both the mesh layer and the app layer — when one Inventory Service replica starts timing out under peak load.",
+      "Why does the AuthorizationPolicy on Inventory Service matter if Order Service is the only caller in the code today anyway?",
+      "If you were rolling this mesh out city-by-city, which city would you pick first and what would you watch before expanding to the next?",
+    ],
   },
 ];

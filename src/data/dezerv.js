@@ -32,7 +32,9 @@ Dezerv integrates with BSE StAR MF (mutual fund order routing), CAMS/KFintech (R
                          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │              API GATEWAY (AWS ALB + Kong)                            │
+│        SERVICE MESH — Envoy sidecar attached to every service        │
 │    JWT Auth · Rate Limiting · Routing · mTLS to services             │
+│     mTLS · Load Balancing · Retries · Circuit Breaking · Tracing     │
 └──┬──────────┬───────────┬──────────────┬──────────────┬──────────────┘
    │          │           │              │              │
    ▼          ▼           ▼              ▼              ▼
@@ -129,6 +131,63 @@ GOAL CONFIGURATION:
   Each goal: { goal_id, type, target_amount, target_date, current_corpus, monthly_sip }
   Goal engine computes: required monthly SIP given target, date, expected CAGR, current corpus
   SIP amount = PMT(rate/12, n_months, -pv, fv) — standard financial formula`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing the microservices grid, pin down scale with rough
+math — every box in the diagram exists because of one of these
+numbers.
+
+ASSUMPTIONS:
+• Active investors: ~1L (100,000), AUM ₹5,000Cr+ → ~₹5L average portfolio
+• SIP mandates: 500K+ monthly NACH/UPI auto-investments
+• NAV universe: 10,000+ MF schemes published by AMFI at 9 PM daily
+• Portfolio baskets: 50+, each with ~4-5 fund components
+• Daily active users checking portfolio post-NAV update: ~20% of investors
+• Cut-off enforcement: hard 3:00 PM IST, soft cut-off 2:45 PM
+
+1. NAV fan-out — justifies the NAV Consumer + Redis cache design
+   100K investors × ~8 funds held avg ≈ 800K (investor, fund) pairs
+   revalued every night after the 9 PM AMFI publish
+   → A single popular fund (e.g. a Nifty 50 index basket component
+     held by 60% of investors) triggers ~60K portfolio recomputations
+     from ONE NAV update — this is WHY NAV is cached in Redis
+     (mf:nav:{isin}) and read millions of times/day vs written ~10K times/day
+
+2. SIP scheduler throughput — justifies the 20-thread partitioned cron
+   500K SIPs ÷ ~21 business days ≈ 24K executions/day average, but
+   month-start concentration (1st/5th) can push 100K+ in a single day
+   100K executions ÷ 20 parallel consumer threads ≈ 5,000/thread
+   → At ~200ms/execution (mandate check + BSE order + payment), that's
+     ~1,000s (~17 min) per thread — comfortably inside the 1 AM CronJob
+     window before market hours
+
+3. Cut-off burst — justifies the 2:45 PM soft cut-off buffer
+   5% of 100K investors placing month-end lumpsum orders in the last
+   15 min before 3 PM ≈ 5,000 orders ≈ ~5.5 orders/sec
+   Each order fans out to ~4 basket components ≈ ~22 component orders/sec
+   → This burst is WHY the soft cut-off at 2:45 PM exists — 15 minutes
+     of buffer absorbs it before the hard 3 PM regulatory deadline
+
+4. Portfolio read QPS — justifies the CQRS read model
+   ~20K daily active investors, concentrated post-9:30PM notification
+   and at market open ≈ peak ~50 reads/sec
+   → Each naive read would JOIN holdings × nav_history × goals — at
+     50 reads/sec with multi-table JOINs, Postgres contention is real;
+     this is WHY portfolio_snapshot (a materialised view) exists
+
+5. Capital gains scale — justifies ClickHouse for tax reports
+   100K investors × ~36 SIP lots (3-year SIP) × multiple basket funds
+   ≈ 3.6M+ purchase lots
+   → FIFO redemption matching across millions of lots, computed for
+     every investor at financial-year-end, is WHY tax report
+     generation runs on ClickHouse, not PostgreSQL
+
+Interview punch line: every number above maps to a box — 800K nightly
+revaluations → NAV Consumer + Redis, 100K SIP executions/day →
+20-thread scheduler, ~22 orders/sec burst → 2:45 PM soft cut-off, ~50
+reads/sec → CQRS portfolio_snapshot, 3.6M+ lots → ClickHouse tax
+reports. State the number, then name the component it justifies.`,
         },
       ],
     },
@@ -432,6 +491,70 @@ SEBI RIA COMPLIANCE:
   Conflict of interest: Dezerv cannot receive commissions from AMCs (RIA regulation)
   Annual compliance audit: all communications, recommendations, trade records reviewed
   Grievance redressal: SEBI SCORES portal integration — investor complaints escalated within 30 days`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `The Security Design section above mentions "mTLS between internal
+microservices (Istio service mesh)" — this section unpacks what that
+means for Dezerv's fleet behind the API Gateway: Auth, User, KYC,
+Portfolio, Recommendation, Order, and Market Data services.
+
+WHY A MESH FITS DEZERV'S FLEET:
+• Every cross-service call here touches regulated data (KYC docs,
+  bank mandates, portfolio values) — mTLS in transit isn't optional,
+  it's a SEBI RIA expectation
+• Order Service calls Market Data Service and is called by Portfolio
+  Service — one misbehaving downstream (e.g. Market Data Service
+  timing out on a stale AMC feed) shouldn't cascade into Order
+  Service failing investor SIPs
+• KYC Service has the strictest audit requirements — a mesh gives
+  uniform access logging for "who called the KYC service, when"
+  without each service hand-rolling audit middleware
+
+1. Data plane — one Envoy sidecar per service pod
+   • Sidecar intercepts all in/out traffic via iptables — Auth, User,
+     KYC, Portfolio, Recommendation, Order, and Market Data all get
+     identical mTLS, retries, and circuit breaking with zero app code
+   • Order Service → Market Data Service calls get a circuit breaker:
+     if Market Data Service starts timing out on AMC feeds, Order
+     Service fails fast instead of blocking SIP execution
+   • Recommendation Engine (FastAPI/Python ML server) gets the SAME
+     mTLS + tracing as the Go/Node services — polyglot uniformity
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • One mesh-wide PeerAuthentication STRICT policy satisfies the
+     "all internal traffic encrypted" line item in a SEBI audit
+   • Canary new Recommendation Engine model versions (the rule-based
+     → ML scoring evolution) by shifting a % of /v1/recommendations
+     traffic — the 23% retention-lift A/B test was run this way
+   • Central audit log: every service-to-service call recorded with
+     a SPIFFE identity, supporting "investment advice log" traceability
+
+WHAT THIS BUYS DEZERV SPECIFICALLY:
+• Compliance evidence — mTLS + access logs are exactly what a SEBI
+  RIA annual audit asks for, generated automatically per-hop
+• Blast radius containment — KYC Service or Order Service issues
+  don't silently propagate; outlier detection ejects unhealthy
+  instances
+• Safe ML rollout — Recommendation Engine model updates ship behind
+  a canary without touching Order/Portfolio service code
+
+DIAGRAM: the "SERVICE MESH" band inside the API GATEWAY box
+represents this — every service below it (Auth, User, KYC,
+Portfolio, Recommendation, Order, Market Data) has an Envoy sidecar,
+and the mTLS / load balancing / retry / circuit-breaking / tracing
+capabilities in that band apply uniformly to all of them.
+
+TRADE-OFFS:
+• ~1-2ms per hop added to every internal call — negligible against
+  the NAV pipeline's 5-minute SLA, but worth noting for the < 10 min
+  KYC flow
+• The mesh control plane becomes a new critical dependency — if it's
+  down, sidecars keep enforcing their LAST KNOWN policy, but new
+  deploys (including compliance-driven config changes) can't roll out
+• Certificate rotation (~24h) must be monitored — an expired cert
+  mid-trading-day would break Order → Market Data calls right when
+  the 3 PM cut-off matters most`,
         },
         {
           title: "AI Investment Advisor — Phase 3 Feature",
@@ -983,6 +1106,100 @@ CREATE TABLE notification_preferences (
   sms_enabled     BOOLEAN DEFAULT false   -- opt-in only for critical alerts
 );`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar traffic policy: circuit breaking Order→Market Data calls, canary Recommendation Engine model versions, and mesh-wide mTLS for SEBI compliance",
+      api: `# DestinationRule — circuit-break Order Service's calls to Market Data Service
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: market-data-service
+spec:
+  host: market-data-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp: { maxConnections: 100 }
+      http:
+        http1MaxPendingRequests: 50
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary the Recommendation Engine's ML model server
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: recommendation-engine
+spec:
+  hosts: ["recommendation-engine.prod.svc.cluster.local"]
+  http:
+    - match: [{ headers: { x-model-canary: { exact: "true" } } }]
+      route:
+        - destination: { host: recommendation-engine.prod.svc.cluster.local, subset: v2 }
+    - route:
+        - destination: { host: recommendation-engine.prod.svc.cluster.local, subset: v1 }
+          weight: 95
+        - destination: { host: recommendation-engine.prod.svc.cluster.local, subset: v2 }
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 500ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# PeerAuthentication — mesh-wide mTLS for SEBI "data in transit" compliance
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls: { mode: STRICT }`,
+      internals: `Sidecar injection:
+• Every service pod (auth, user, kyc, portfolio, recommendation,
+  order, market-data) gets an Envoy sidecar via a Kubernetes
+  mutating webhook at deploy time — zero application code change
+
+Circuit breaking Order → Market Data:
+• Market Data Service depends on AMC/exchange feeds it doesn't
+  control
+• outlierDetection ejects market-data-service instances after 5
+  consecutive 5xx in 10s, for 30s — Order Service's calls to it fail
+  fast instead of hanging on a 10s timeout, so SIP execution proceeds
+  even if intraday market data is temporarily unavailable
+
+Canary rollout — Recommendation Engine v2 (XGBoost model):
+  1. Deploy recommendation-engine:v2 alongside v1 (same K8s Service)
+  2. VirtualService routes 5% of /v1/recommendations to v2
+  3. Internal QA sets x-model-canary: true to force-route to v2
+  4. Compare v2 vs v1: match_score distribution, downstream 90-day
+     retention (the 23% lift mentioned in Phase 2 was validated this way)
+  5. Shift weight 5% → 25% → 100%, or roll back to 0% instantly
+
+mTLS and SEBI compliance:
+• PeerAuthentication STRICT means every hop — Order Service to
+  Market Data Service, KYC Service to Notification Service, etc. —
+  is mTLS-encrypted by default
+• Cert issuance/rotation (Istio Citadel, ~24h rotation) generates an
+  audit trail of which service identity called which service, when —
+  directly supporting the "investment advice log" and annual
+  compliance audit requirements
+
+Control-plane-down failure mode:
+• Sidecars cache the last-known DestinationRule/VirtualService/
+  PeerAuthentication and keep enforcing it
+• A control-plane outage at, say, 2:50 PM does NOT stop Order
+  Service → Market Data Service traffic before the 3 PM cut-off —
+  only NEW policy rollouts (e.g. a recommendation-engine canary
+  shift) are blocked until the control plane recovers`,
+    },
   ],
 };
 
@@ -1361,5 +1578,131 @@ MILESTONE NOTIFICATIONS:
   Tracked in goal_milestones table: { goal_id, pct: 25/50/75/100, notified: bool }
   Daily job: if current_corpus crosses milestone threshold → push + mark notified
   One-time notifications (notified flag prevents repeat)`,
+  },
+  {
+    id: "dq9",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["Dezerv", "INDmoney", "ETMoney"],
+    question: "Before designing the NAV pipeline and SIP scheduler, walk me through a back-of-the-envelope estimation for Dezerv's scale.",
+    answer: `This is the "size before you design" step — the numbers decide
+whether a single Postgres instance is fine or whether you need
+caching, partitioned schedulers, and a CQRS read model.
+
+STATE YOUR ASSUMPTIONS OUT LOUD:
+• ~1L (100,000) active investors, ₹5,000Cr+ AUM → ~₹5L avg portfolio
+• 500K+ monthly SIP mandates across 50+ curated baskets
+• 10,000+ MF schemes get a NAV update from AMFI every night at 9 PM
+• ~20% of investors check their portfolio after the nightly NAV update
+• Hard MF cut-off at 3 PM IST, soft internal cut-off at 2:45 PM
+
+DERIVE THE NUMBERS THAT MATTER:
+
+1. NAV fan-out (decides caching strategy)
+   100K investors × ~8 funds held avg ≈ 800K (investor, fund) pairs
+   revalued every night
+   → ONE NAV update for a popular fund (held by 60% of investors)
+     triggers ~60K portfolio recomputations — this is WHY NAV is
+     cached in Redis (mf:nav:{isin}), read millions of times/day but
+     written only ~10K times/day
+
+2. SIP scheduler load (decides the 20-thread partitioned cron design)
+   500K SIPs ÷ ~21 business days ≈ 24K/day average, but 1st/5th
+   concentration can push 100K+ in a single day
+   100K ÷ 20 parallel threads ≈ 5,000 executions/thread × ~200ms
+   ≈ ~17 min/thread — fits inside the 1 AM CronJob window
+
+3. Cut-off burst (decides the 2:45 PM soft cut-off)
+   5% of 100K investors placing month-end orders in the last 15 min
+   ≈ 5,000 orders ≈ ~5.5/sec, × ~4 basket components ≈ ~22 orders/sec
+   → That burst, hitting BSE StAR MF right before a hard regulatory
+     deadline, is WHY a 15-minute internal buffer exists
+
+4. Portfolio read QPS (decides CQRS)
+   ~20K daily active investors, peak ≈ ~50 reads/sec
+   → At 50 reads/sec with multi-table JOINs (holdings × nav_history
+     × goals), Postgres contention is real — this is WHY
+     portfolio_snapshot (a materialised view) exists
+
+5. Tax computation scale (decides ClickHouse)
+   100K investors × ~36 SIP lots (3-year SIP) × multiple basket funds
+   ≈ 3.6M+ purchase lots
+   → FIFO matching across millions of lots at financial-year-end is
+     WHY tax reports run on ClickHouse, not PostgreSQL
+
+WHY THIS MATTERS IN THE INTERVIEW:
+The interviewer is checking whether you connect "800K nightly
+revaluations" → "Redis NAV cache", and "~22 orders/sec burst before a
+hard deadline" → "soft cut-off buffer". State the number, then name
+the component or design decision it justifies.`,
+    followups: [
+      "How would these numbers change if Dezerv's average investor held 50 funds instead of 8?",
+      "If a new release causes a 10x spike in portfolio reads right after the 9:30 PM notification, which number breaks first?",
+      "How do you estimate the storage growth rate of the event_store table over 5 years?",
+    ],
+  },
+  {
+    id: "dq10",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "System Design Round",
+    asked_at: ["Dezerv", "Groww", "Stripe"],
+    question: "Dezerv's microservices (Auth, KYC, Portfolio, Order, Market Data, Recommendation) all touch regulated financial data. How would you put a service mesh between them, and what does it buy you for SEBI compliance?",
+    answer: `The Security Design section already says "mTLS between internal
+microservices (Istio service mesh)" — this question is about what
+that actually delivers operationally and for compliance.
+
+MAP THE REQUIREMENT TO MESH PRIMITIVES:
+• SEBI RIA expects encrypted "data in transit" for regulated data
+  (KYC docs, bank mandates, portfolio values) — PeerAuthentication
+  STRICT mTLS satisfies this mesh-wide, in one resource
+• "Investment advice log" traceability — the mesh's access logs
+  capture caller identity (SPIFFE ID) for every hop, for free
+• Order Service depends on Market Data Service, which depends on
+  external AMC feeds Dezerv doesn't control — that's exactly what
+  outlierDetection circuit breaking is for
+
+ARCHITECTURE — DATA PLANE + CONTROL PLANE:
+
+1. Data plane — Envoy sidecar per service pod
+   • DestinationRule on market-data-service: outlierDetection ejects
+     it after 5 consecutive 5xx in 10s — Order Service fails fast on
+     a bad AMC feed instead of blocking SIP execution
+   • VirtualService on recommendation-engine: weighted canary routing
+     (95/5 v1/v2) plus retries (attempts: 2, perTryTimeout: 500ms) for
+     the ML model server
+   • mTLS (PeerAuthentication STRICT) on every hop — Auth, User, KYC,
+     Portfolio, Recommendation, Order, Market Data
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • One outlierDetection + mTLS policy applies to the whole fleet —
+     no per-service config drift across 7 services
+   • Canary rollouts for Recommendation Engine model versions (the
+     rule-based → ML scoring transition) ship via VirtualService
+     weight changes, not redeploys
+
+WHY THIS MATTERS FOR DEZERV SPECIFICALLY:
+• Compliance evidence — mTLS + per-hop access logs are exactly the
+  artifact a SEBI RIA annual audit asks for
+• Blast radius containment — a KYC Service incident or a Market Data
+  Service outage doesn't cascade into Order Service failing SIPs
+• Safe ML iteration — Recommendation Engine ships new model versions
+  behind a canary without touching Order/Portfolio code
+
+TRADE-OFFS TO MENTION:
+• ~1-2ms per hop — negligible vs. the 5-minute NAV SLA, but worth
+  flagging for the < 10 min KYC flow
+• Cert rotation (~24h) must be monitored — an expired cert at 2:55 PM
+  breaking Order → Market Data right before the 3 PM cut-off is the
+  worst-case failure mode
+• Control-plane outage: sidecars keep enforcing last-known policy, so
+  existing traffic (including pre-cut-off orders) is unaffected, but
+  new canary shifts can't roll out until it recovers`,
+    followups: [
+      "If the mesh control plane goes down at 2:50 PM, what happens to in-flight 3 PM cut-off orders?",
+      "How would you extend mTLS identity (SPIFFE) to also cover the AI Investment Advisor's RAG retrieval calls to Elasticsearch?",
+      "Where does the mesh's mTLS end and BSE StAR MF / CAMS/KFintech's external API security begin?",
+    ],
   },
 ];

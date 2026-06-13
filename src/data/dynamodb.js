@@ -46,11 +46,13 @@ Three design decisions that define everything:
                            ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                   SUPPORTING SERVICES                                   │
+│         SERVICE MESH — Envoy sidecar attached to every service          │
 │  ┌───────────────┐  ┌──────────────┐  ┌────────────────────────────┐  │
 │  │  DynamoDB     │  │ Auto Scaling │  │    Global Tables           │  │
 │  │  Streams      │  │  (RCU / WCU) │  │  (multi-region replication)│  │
 │  │  (CDC log)    │  │              │  │                            │  │
 │  └───────────────┘  └──────────────┘  └────────────────────────────┘  │
+│      mTLS · Load Balancing · Retries · Circuit Breaking · Tracing       │
 └─────────────────────────────────────────────────────────────────────────┘`,
 
   metrics: [
@@ -127,6 +129,58 @@ Partition key selection rules:
   High cardinality: userId ✓   country ✗ (only 200 values, all load on 200 partitions)
   Uniform access:   orderId ✓  "latest" ✗ (everyone reads the newest item)
   No hot keys:      use write sharding if needed (append random 0–9 suffix, query all 10)`,
+        },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before designing a partition layout, pin down scale with rough
+math — every box in the diagram exists because of one of these
+numbers.
+
+ASSUMPTIONS:
+• A single large table: ~100 TB of data, 1M requests/sec sustained
+  (within the "millions of requests/second per table" metric)
+• Average item size: ~1 KB (well under the 400 KB item limit)
+• Per-partition limits: 10 GB storage, 3,000 RCU + 1,000 WCU
+• Replication factor: 3 (synchronous, across 3 AZs)
+• MemTable flush threshold: ~64 MB
+• Global Tables cross-region replication lag target: ~1 second
+
+1. Partition count — justifies the Partition Manager / consistent-hashing ring
+   100 TB ÷ 10 GB per partition ≈ 10,000 partitions
+   → A routing table with 10,000 entries needs O(log p) binary
+     search, not a linear scan — exactly the Partition Metadata
+     Cache, refreshed every ~30s
+
+2. Aggregate read ceiling — justifies "millions of requests/second" and write sharding
+   10,000 partitions × 3,000 RCU ≈ 30M RCU/sec theoretical ceiling
+   → 1M req/sec average uses only ~3% of that capacity, but ANY
+     single partition over 3,000 RCU throttles regardless of
+     table-wide headroom — this is WHY write sharding exists
+
+3. MemTable flush cadence — justifies continuous background compaction
+   1,000 WCU × ~1 KB/write ≈ ~1 MB/sec sustained writes per partition
+   64 MB MemTable ÷ 1 MB/sec ≈ ~64 seconds between flushes
+   → Each storage node flushes a new L0 SSTable roughly once a
+     minute under load — compaction must run continuously, not as a
+     rare maintenance job
+
+4. Replication fan-out — justifies the 3-AZ synchronous quorum design
+   1M writes/sec × 2 follower replicas ≈ 2M replication RPCs/sec
+   → Cross-AZ bandwidth, not CPU, becomes the bottleneck for W=2 —
+     this is WHY Global Tables settle for ~1s cross-region lag instead
+     of synchronous replication
+
+5. Streams volume — justifies idempotent, at-least-once consumer design
+   1M writes/sec × 86,400 sec/day × 24h retention ≈ 86.4B records/day
+   → A consumer that falls more than 24h behind permanently loses
+     data — this is WHY Streams consumers (Lambda, in the Supporting
+     Services box) must be idempotent, not just "eventually catch up"
+
+Interview punch line: every number above maps to a box — 10,000
+partitions → Partition Manager, 30M RCU ceiling → Request Router's
+partition cache, 1 MB/sec/partition → MemTable flush → compaction,
+2M RPCs/sec → 3-AZ quorum replicas, 86.4B records/day → Streams 24h
+retention. State the number, then name the component it justifies.`,
         },
       ],
     },
@@ -329,6 +383,75 @@ Limitations:
   • 24-hour retention: consumer must keep up or records are lost.
   • Ordering: events from different partitions can arrive out of global order.
   • At-least-once delivery: Lambda may process the same record twice. Make consumers idempotent.`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `DynamoDB itself is fully managed and opaque — you never deploy
+a sidecar inside it. But two layers around DynamoDB are very much
+"your microservices," and both benefit from a mesh: (1) the client
+services that call DynamoDB over the SDK, and (2) the Supporting
+Services — Streams consumers, the Auto Scaling controller, and the
+Global Tables replicator — which are themselves a fleet calling
+each other and calling this table.
+
+WHY A MESH FITS AROUND DYNAMODB:
+• ProvisionedThroughputExceededException (DynamoDB's throttling
+  error) is just another "backend overloaded, back off" signal from
+  the mesh's point of view — the sidecar's retry + circuit-breaking
+  policy handles it with zero application code change
+• Connection pooling to the DynamoDB endpoint (HTTP/2 keep-alive,
+  SigV4 signing overhead) is fiddly to get right per language — a
+  sidecar terminates and reuses connections uniformly for every
+  service
+• The Supporting Services talk to each other AND to the table's
+  endpoint — a mesh gives them service discovery and mTLS without
+  each one re-implementing it
+
+1. Data plane — one Envoy sidecar per calling service
+   • Sidecar wraps every DynamoDB SDK call leaving the pod
+   • Retries with backoff on throttling — the same idea as the AWS
+     SDK's own retry logic, but now visible and tunable centrally
+   • Circuit-breaks calls to a table/GSI that's consistently
+     throttling, so one hot caller doesn't queue thousands of
+     doomed requests
+   • mTLS between the Supporting Services themselves (Streams
+     consumer → aggregation service → cache-invalidation service)
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • Pushes "retry with backoff on throttling" as ONE policy to
+     every service that touches this table
+   • Maintains a live dependency map — "what breaks if Table X gets
+     hot" — by tracking which services call which tables
+   • Canary a new Streams-consumer version (e.g. a new Elasticsearch
+     indexer) by shifting a % of stream-processing traffic
+
+WHAT THIS BUYS AT FLEET SCALE:
+• Uniform throttling behavior — every team backs off the same way,
+  instead of 50 different retry implementations with different
+  jitter/backoff bugs
+• One signal for "DynamoDB is throttling us" — outlier detection on
+  the sidecar surfaces it as a circuit-breaker trip before it
+  cascades into the calling service's own latency SLA
+• Zero-trust between the Supporting Services — Streams consumers,
+  the Auto Scaling controller, and the Global Tables replicator
+  authenticate to each other via mTLS, not shared IAM roles alone
+
+DIAGRAM: the "SERVICE MESH" band inside the SUPPORTING SERVICES box
+represents this — DynamoDB Streams, Auto Scaling, and Global Tables
+are each their own service with an Envoy sidecar, and the mTLS /
+load balancing / retry / circuit-breaking / tracing capabilities
+apply uniformly across them and the client microservices that depend
+on this table.
+
+TRADE-OFFS:
+• DynamoDB's own internal replication (Paxos quorum writes between
+  storage nodes) is never meshed — that's AWS-managed and invisible
+  to you; the mesh only covers YOUR services around it
+• Sidecar retries can mask a genuinely under-provisioned table —
+  alert on circuit-breaker trips, don't let retries silently absorb
+  sustained throttling
+• Adds ~1-2ms per hop to every DynamoDB call — negligible next to
+  DynamoDB's own single-digit-ms latency, but worth knowing it's there`,
         },
       ],
     },
@@ -768,6 +891,146 @@ StreamRecord {
       Strategy 2: conditional write — "only update if version < stream record's sequence"
       Strategy 3: make the operation naturally idempotent (set, not increment)`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Sidecar traffic policy for services calling DynamoDB: circuit breaking on throttling, retries, canary Streams consumers, and mTLS between the Supporting Services",
+      api: `# === Part 1: calls FROM your services TO DynamoDB ===
+
+# ServiceEntry — registers the DynamoDB endpoint in the mesh's
+# service registry (DynamoDB is MESH_EXTERNAL — AWS-managed)
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: dynamodb-orders-table
+spec:
+  hosts: ["dynamodb.us-east-1.amazonaws.com"]
+  location: MESH_EXTERNAL
+  ports: [{ number: 443, name: https, protocol: TLS }]
+  resolution: DNS
+
+---
+# DestinationRule — circuit-break on sustained throttling
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: dynamodb-orders-table
+spec:
+  host: dynamodb.us-east-1.amazonaws.com
+  trafficPolicy:
+    connectionPool:
+      tcp: { maxConnections: 200 }
+      http: { http1MaxPendingRequests: 100, maxRequestsPerConnection: 0 }
+    outlierDetection:            # ProvisionedThroughputExceededException
+      consecutive5xxErrors: 5    # remapped 400→5xx via EnvoyFilter
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+
+---
+# VirtualService — bounded retry-with-backoff on throttling
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: dynamodb-orders-table
+spec:
+  hosts: ["dynamodb.us-east-1.amazonaws.com"]
+  http:
+    - route:
+        - destination: { host: dynamodb.us-east-1.amazonaws.com }
+      retries:
+        attempts: 3
+        perTryTimeout: 50ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# === Part 2: traffic BETWEEN your services around the table ===
+
+# DestinationRule — canary a new Streams-consumer version
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: streams-consumer
+spec:
+  host: streams-consumer.prod.svc.cluster.local
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_REQUEST
+  subsets:
+    - name: v1
+      labels: { version: v1 }
+    - name: v2
+      labels: { version: v2 }
+
+---
+# VirtualService — shift 5% of stream records to the new indexer
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: streams-consumer
+spec:
+  hosts: ["streams-consumer.prod.svc.cluster.local"]
+  http:
+    - route:
+        - destination: { host: streams-consumer.prod.svc.cluster.local, subset: v1 }
+          weight: 95
+        - destination: { host: streams-consumer.prod.svc.cluster.local, subset: v2 }
+          weight: 5
+
+---
+# PeerAuthentication — mTLS between YOUR services; DynamoDB itself
+# sits outside the mesh and is reached over SigV4-signed TLS
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls: { mode: STRICT }`,
+      internals: `Sidecar injection:
+• Every pod (order-service, streams-consumer, aggregation-service)
+  gets an Envoy sidecar auto-injected via a Kubernetes mutating
+  webhook
+• The ServiceEntry above is what lets the sidecar apply policy to
+  calls that LEAVE the mesh toward dynamodb.us-east-1.amazonaws.com
+  — without it, Envoy treats the call as opaque TCP passthrough
+
+Why outlierDetection on a 400, not a 5xx:
+• DynamoDB returns HTTP 400 + ProvisionedThroughputExceededException
+  for throttling — NOT a 5xx
+• An EnvoyFilter (Lua or WASM) inspects the response body and
+  remaps this specific 400 to a 5xx BEFORE outlierDetection
+  evaluates it, so the circuit breaker ejects the endpoint the same
+  way it would for a real backend 5xx
+
+Retry-with-backoff vs. the AWS SDK's built-in retries:
+• The AWS SDK already retries with exponential backoff + jitter —
+  the mesh's retries are a SECOND layer, capped at perTryTimeout:
+  50ms so a retry storm can't compound with the SDK's own retries
+• In practice teams pick ONE layer to own retries (usually the SDK)
+  and set the mesh's retries.attempts to 0 for DynamoDB calls — the
+  ServiceEntry + outlierDetection (circuit breaking) is the part
+  that earns its keep here
+
+Canary rollout flow (streams-consumer v2):
+  1. Deploy streams-consumer:v2 alongside v1 (same K8s Service)
+  2. VirtualService routes 5% of stream records to v2
+  3. Watch v2's error rate / processing lag on its own dashboard
+  4. Shift weight 5% → 25% → 100%, or roll back to 0% instantly
+
+mTLS scope:
+• PeerAuthentication STRICT covers order-service ↔ streams-consumer
+  ↔ aggregation-service — all YOUR traffic
+• DynamoDB itself is outside the mesh's CA — calls to it are
+  authenticated via SigV4 + AWS-managed TLS, a separate trust domain
+
+Control-plane-down failure mode:
+• Sidecars cache the last-known DestinationRule/VirtualService and
+  keep enforcing it — a control-plane outage doesn't stop existing
+  traffic to DynamoDB or between streams-consumer versions
+• New pods can't fetch policy until the control plane recovers, but
+  the canary split already in effect remains stable`,
+    },
   ],
 };
 
@@ -1029,5 +1292,133 @@ Without bloom filters: a GetItem for a non-existent key would read every SSTable
 
 Tradeoff: bloom filter size. 10 bits per key gives ~1% false positive rate. At 10M keys per SSTable, the filter is 12.5 MB — easily kept in RAM. False positives waste one SSTable read; they never return wrong data.`,
     followups: ["Can you ever get a false negative from a bloom filter? What does that imply about its safety for this use case?"],
+  },
+  {
+    id: "ddb-q11",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Round",
+    asked_at: ["Amazon", "Google", "Microsoft"],
+    question: "Before designing a table's partition layout, walk me through a back-of-the-envelope estimation for a large DynamoDB table.",
+    answer: `This is the "size before you design" step — every partitioning
+and throughput decision downstream depends on these numbers.
+
+STATE YOUR ASSUMPTIONS OUT LOUD:
+• Table size: ~100 TB, sustained 1M requests/sec
+• Average item size: ~1 KB (well under the 400 KB limit)
+• Per-partition limits: 10 GB storage, 3,000 RCU + 1,000 WCU
+• Replication: 3 synchronous replicas across 3 AZs
+• MemTable flush threshold: ~64 MB
+• Global Tables cross-region lag target: ~1 second
+
+DERIVE THE NUMBERS THAT MATTER:
+
+1. Partition count (decides the routing table size)
+   100 TB ÷ 10 GB per partition ≈ 10,000 partitions
+   → The Partition Metadata Cache needs O(log p) binary search over
+     10,000 entries — this is WHY it's a cached, periodically
+     refreshed routing table, not a live lookup per request
+
+2. Aggregate throughput ceiling (decides why hot partitions matter)
+   10,000 partitions × 3,000 RCU ≈ 30M RCU/sec theoretical ceiling
+   → 1M req/sec average is only ~3% of that, but a SINGLE partition
+     over 3,000 RCU throttles regardless of table-wide headroom —
+     this is WHY write sharding exists
+
+3. MemTable flush rate (decides compaction load)
+   1,000 WCU × ~1 KB/write ≈ ~1 MB/sec sustained writes/partition
+   64 MB ÷ 1 MB/sec ≈ ~64 seconds between flushes
+   → Each storage node flushes a new L0 SSTable roughly every
+     minute under load — compaction is continuous, not occasional
+
+4. Replication fan-out (decides why cross-region lag is ~1s, not 0)
+   1M writes/sec × 2 follower replicas ≈ 2M replication RPCs/sec
+   → That's the ceiling for synchronous same-region replication;
+     cross-region adds RTT, so Global Tables accept ~1s lag instead
+
+5. Streams volume (decides consumer design)
+   1M writes/sec × 86,400s × 24h retention ≈ 86.4B records/day
+   → Any consumer (Lambda, Elasticsearch indexer) that falls behind
+     by more than 24h loses data permanently — consumers must be
+     idempotent AND keep up, not just "eventually catch up"
+
+WHY THIS MATTERS IN THE INTERVIEW:
+The interviewer is checking whether you connect "10,000 partitions"
+→ "routing table needs binary search" → "Partition Metadata Cache",
+and "30M RCU ceiling but 1M avg" → "a single hot partition still
+throttles" → "write sharding". State the number, then name the
+component or design decision it justifies.`,
+    followups: [
+      "How would these numbers change for a table with a much smaller average item size, like 100 bytes?",
+      "If write traffic suddenly concentrates on 1% of partition keys, which number breaks first and what's the fix?",
+      "How do you estimate the GSI write amplification cost for a table with 3 GSIs at this scale?",
+    ],
+  },
+  {
+    id: "ddb-q12",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "System Design Round",
+    asked_at: ["Amazon", "Netflix", "Stripe"],
+    question: "Your microservices call DynamoDB heavily and occasionally get throttled. How would a service mesh help, given DynamoDB itself is a managed AWS service you can't put a sidecar inside?",
+    answer: `DynamoDB is fully managed and opaque — you can't inject a sidecar
+inside it. But the mesh doesn't need to go INSIDE DynamoDB; it goes
+around the services that CALL it.
+
+MAP THE PROBLEM TO MESH PRIMITIVES:
+• ProvisionedThroughputExceededException is an HTTP 400, not a 5xx
+  — but functionally it's "the backend is overloaded, back off,"
+  exactly what circuit breaking and retries exist to handle
+• Register the DynamoDB endpoint as a ServiceEntry (MESH_EXTERNAL) —
+  this makes it a first-class "service" the mesh can apply policy
+  to, even though AWS operates it
+• An EnvoyFilter remaps the 400 + ProvisionedThroughputExceeded
+  response to a 5xx so outlierDetection can eject the endpoint the
+  same way it would for any unhealthy backend
+
+ARCHITECTURE:
+
+1. Data plane — Envoy sidecar on every calling service
+   • DestinationRule on the DynamoDB ServiceEntry: outlierDetection
+     trips a circuit breaker after 5 consecutive throttling errors
+     in 10s, ejecting calls for 30s
+   • VirtualService retries (attempts: 3, perTryTimeout: 50ms) as a
+     SECOND layer below the AWS SDK's own retry/backoff — usually
+     teams pick one layer to own retries and set the other to 0
+   • mTLS (PeerAuthentication STRICT) secures traffic BETWEEN your
+     services (order-service → streams-consumer → aggregation
+     service) — DynamoDB itself sits in a separate trust domain,
+     authenticated via SigV4
+
+2. Control plane — Istio / Consul / AWS App Mesh
+   • One outlierDetection policy on the ServiceEntry applies to
+     every service calling this table — no per-team retry config
+   • Canary a new Streams-consumer version (e.g. a new Elasticsearch
+     indexer) by shifting 5% of stream records via VirtualService
+     weighted routing, with no redeploy of the old version
+
+WHY THIS MATTERS AT FLEET SCALE:
+• Uniform throttling response — 50 services no longer have 50
+  different (and differently-buggy) backoff implementations
+• Outlier detection on the DynamoDB ServiceEntry becomes a single
+  dashboard signal: "we are being throttled," before it cascades
+  into 50 services' own latency SLAs
+• mTLS + canary apply to the Supporting Services fleet (Streams
+  consumers, Auto Scaling controller, Global Tables replicator)
+  exactly like any other microservice fleet
+
+TRADE-OFFS TO MENTION:
+• DynamoDB's OWN internal replication (Paxos quorum writes between
+  storage nodes) is never meshed — that's AWS's problem, not yours
+• Sidecar retries can mask a genuinely under-provisioned table;
+  alert on circuit-breaker trips rather than letting retries hide
+  sustained throttling
+• Adds ~1-2ms per hop — negligible against DynamoDB's own
+  single-digit-ms latency, but it's there`,
+    followups: [
+      "How would you remap a DynamoDB 400 ProvisionedThroughputExceededException to a 5xx for outlierDetection — what does that EnvoyFilter actually look like?",
+      "If both the AWS SDK and the mesh retry independently, what failure mode does that create under sustained throttling?",
+      "How would you extend this mesh setup to also cover a service calling DynamoDB Accelerator (DAX) in front of the table?",
+    ],
   },
 ];

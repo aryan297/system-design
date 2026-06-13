@@ -28,8 +28,10 @@ Beyond Tatkal, IRCTC manages: real-time seat availability across 11 coach types 
                               ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                 API GATEWAY + RATE LIMITER (Kong / AWS ALB)                  │
+│            SERVICE MESH — Envoy sidecar attached to every service            │
 │   Auth (OTP/JWT) · Rate Limiting (captcha on booking) · DDoS protection      │
 │   Tatkal queue: token bucket per user — 1 booking attempt per 5 seconds      │
+│         mTLS · Load Balancing · Retries · Circuit Breaking · Tracing         │
 └───────┬──────────┬──────────┬──────────┬──────────┬────────────────────────┘
         │          │          │          │          │
         ▼          ▼          ▼          ▼          ▼
@@ -124,6 +126,59 @@ FORECAST MODEL:
   Shown to user: "WL 12 — 73% chance of confirmation based on historical data"
   Trained on millions of past booking/cancellation/confirmation events`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `Before drawing boxes, size the problem — every number here should map directly to a component in the architecture.
+
+ASSUMPTIONS:
+• 1.5M+ concurrent users in the Tatkal window (10:00:00–10:00:02 AM)
+• 800K–1.2M total online bookings/day
+• 150K+ cancellations/day
+• 50M+ PNR status checks/day vs ~1M bookings/day (50:1 read:write)
+• A popular train's Tatkal 3A quota ≈ 200 seats
+
+1. Tatkal arrival rate: 1.5M concurrent users firing requests within a
+   2-second window ≈ 750,000 req/sec instantaneous arrival rate.
+   → No atomic Redis DECR can safely absorb this directly — this is
+   exactly why the TATKAL QUEUE exists: append-only ZADD into a Redis
+   sorted set can absorb hundreds of thousands of writes/sec, while the
+   queue processor drains at a controlled 5,000 bookings/sec.
+
+2. Seat-to-request ratio: ~200 Tatkal seats vs 400K–600K requests in the
+   first 2 seconds → a >99.96% rejection rate.
+   → This is why the queue processor fails FAST — "SORRY_NO_SEATS" is
+   pushed via SSE the instant inventory hits zero, rather than letting
+   hundreds of thousands of doomed requests sit in a 3-minute booking
+   window.
+
+3. PNR read amplification: 50M PNR checks/day ÷ 86,400s ≈ 580 reads/sec
+   average, ~2,900/sec at evening peak (5x).
+   → With an 85% Redis cache hit rate, only ~87–435 reads/sec reach the
+   PostgreSQL read replicas — and each replica handles 5,000 reads/sec,
+   so 1 replica comfortably serves all PNR read traffic even at peak.
+
+4. Average vs peak booking rate: 800K–1.2M bookings/day ÷ 86,400s ≈
+   9–14 bookings/sec average — but the Tatkal queue alone is provisioned
+   for 5,000 bookings/sec for its 2-minute window.
+   → The "average" number is almost meaningless for capacity planning
+   here: IRCTC must provision for a >300x burst multiplier that arrives
+   at a known time every single day, which is why pre-scaling (not
+   autoscaling) governs the Tatkal Queue and Booking Service fleets.
+
+5. Waitlist propagation load: 150K cancellations/day ÷ 86,400s ≈ 1.7/sec
+   average, but festival peaks hit ~10,000/hour ≈ 2.8/sec.
+   → Each cancellation triggers a promotion chain (WL→RAC→Confirmed)
+   that must complete within 60 seconds — the Waitlist Promotion Service
+   (single Kafka consumer per train/class/date) must keep consumer lag
+   near zero even during these bursts, or SMS confirmations arrive late.
+
+Interview punch line: 750,000 req/sec maps onto the TATKAL QUEUE's Redis
+sorted set + 5,000/sec controlled drain; the 99.96% rejection rate is why
+the queue fails fast; the 50M PNR reads/sec → 85% cache hit → ~435/sec to
+Postgres maps onto the L1/L2/L3 PNR cache hierarchy; and the >300x burst
+multiplier is the single number that explains why IRCTC pre-scales for
+Tatkal instead of relying on autoscaling.`,
+        },
       ],
     },
     {
@@ -211,6 +266,73 @@ CHART PREPARATION (4 hours before departure):
   All remaining WL tickets: if not confirmed → auto-cancelled, full refund
   Physical chart printed at origin station showing confirmed passengers + RAC
   After charting: IRCTC updates train's carriage display boards in real-time`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `Behind the API Gateway sit five services — Search, Booking, Payment, PNR and Train Track — each calling several of the others and Kafka on the booking hot path. A service mesh gives every one of them a uniform Envoy sidecar for traffic management, security and observability, without touching their code.
+
+WHY A MESH FITS IRCTC'S FLEET:
+  Booking Service → Payment Service is the highest-stakes synchronous call
+    in the system — a stuck payment gateway during Tatkal must not
+    cascade into stuck booking workers holding seat locks.
+  PNR Service is hammered by external API partners (MakeMyTrip, Paytm,
+    RailYatri) — 50M checks/day, far more callers than just the app —
+    so it needs the same isolation a public-facing service gets.
+  Search Service and Train Track Service ship ranking/ETA model updates
+    regularly; a bad deploy the night before a Tatkal morning is
+    catastrophic, so canary rollouts matter more here than almost
+    anywhere else in the stack.
+
+DATA PLANE: an Envoy sidecar is injected next to every instance of
+  Search, Booking, Payment, PNR and Train Track Service. All inter-service
+  calls — Booking→Payment, Booking→PNR, Search→Train Track — are
+  intercepted by these sidecars, which handle mTLS, retries, timeouts,
+  load balancing and circuit breaking transparently.
+
+CONTROL PLANE (Istio): a central control plane (istiod) pushes routing
+  rules, TLS certificates and circuit-breaker thresholds to every sidecar.
+  Engineers declare policy once — "Payment Service trips after 5
+  consecutive 5xx" — and it applies fleet-wide without redeploying any
+  service.
+
+WHAT THIS BUYS IRCTC SPECIFICALLY:
+  Circuit breaking on Payment Service: if the UPI/card gateway integration
+    starts timing out, the sidecar's outlier detection ejects the
+    unhealthy backend instances and Booking Service's call fails fast —
+    the seat lock is released back to inventory within its TTL instead
+    of holding it until a 30-second gateway timeout expires.
+  Canary deploys for Search Service: a new ranking/availability algorithm
+    is rolled out to 5% of traffic at 2-4 AM (the same low-traffic window
+    used for PRS mainframe sync), validated against real queries, then
+    promoted — all via traffic-split config, no extra infrastructure.
+  mTLS everywhere: Aadhaar-linked passenger data moving between Booking,
+    PNR and Payment Service is encrypted in transit by default, satisfying
+    the same data-protection bar as the OTP/JWT layer at the gateway.
+  AuthorizationPolicy: only Booking Service may call Payment Service —
+    Search Service or Train Track Service calling the payment path
+    directly (a bug or compromised pod) is rejected at the sidecar before
+    it reaches the application.
+  Tracing: a single Tatkal booking request — API Gateway → Booking Service
+    → Inventory (Redis) → Payment Service → PNR Service → Kafka — gets one
+    trace ID across all five hops, so a slow Tatkal booking can be
+    attributed to the exact hop that's slow.
+
+DIAGRAM: the "SERVICE MESH — Envoy sidecar attached to every service" band
+  already sits inside the API GATEWAY + RATE LIMITER box at the top of the
+  diagram — that line is this section. Every arrow fanning out to Search,
+  Booking, Payment, PNR and Train Track Service is mesh-managed traffic.
+
+TRADE-OFFS:
+  Every hop adds ~1-2ms of sidecar latency — acceptable against the <4s
+  end-to-end booking SLA, but tight against the <200ms internal seat-lock
+  budget, so the mesh's own timeouts must be tuned per route.
+  The control plane must be rock-solid during the Tatkal window — if
+  istiod is unreachable, sidecars keep serving their last-known config
+  (fail open on existing rules), but no policy changes can be pushed
+  mid-surge, so any mesh config changes are frozen well before 10 AM.
+  The Oracle PRS mainframe sync stays OUTSIDE the mesh entirely — it's a
+  legacy batch integration, not a Kubernetes service, and is governed by
+  its own nightly maintenance window instead.`,
         },
       ],
     },
@@ -1007,6 +1129,131 @@ FUNCTION check_daily_limit(user_id, date):
   IF count > 2: RETURN LIMIT_EXCEEDED  -- max 2 Tatkal bookings per day
   RETURN ALLOWED`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Envoy/Istio Config (LLD)",
+      description: "Istio configuration for circuit breaking on Payment Service, canary rollouts for Search Service, and zero-trust mTLS across Booking/Payment/PNR",
+      api: `# DestinationRule — circuit breaking on Payment Service
+# A stuck UPI/card gateway integration must not hold Tatkal seat locks
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-service-circuit-breaker
+  namespace: prod
+spec:
+  host: payment-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 500
+      http:
+        http1MaxPendingRequests: 200
+        maxRequestsPerConnection: 10
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+
+---
+# VirtualService — canary rollout for Search Service ranking model
+# Deployed in the 2-4 AM window, validated before the next Tatkal opening
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: search-service-canary
+  namespace: prod
+spec:
+  hosts:
+    - search-service.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-search-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: search-service.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 150ms
+        retryOn: 5xx,reset,connect-failure
+
+---
+# AuthorizationPolicy — only Booking Service may call Payment Service
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/prod/sa/booking-service"
+
+---
+# PeerAuthentication — mTLS STRICT across the booking namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `SIDECAR INJECTION SCOPE: Envoy sidecars are injected into Search,
+Booking, Payment, PNR and Train Track Service — the five microservices
+sitting behind the API Gateway. The Tatkal Queue runs inside Booking
+Service's namespace and shares its sidecar configuration.
+
+CIRCUIT BREAKING ON PAYMENT SERVICE: this is the highest-value breaker in
+the entire fleet. outlierDetection ejects an unhealthy Payment Service
+backend after 5 consecutive 5xx responses within a 10s window, for 30s,
+capped at 50% of the pool. Without this, Booking Service workers would
+block on a 30s gateway timeout while still holding a Redis seat lock —
+during Tatkal, that's the difference between a seat being held for 200ms
+vs 30 seconds, a 150x difference in lock contention.
+
+CANARY FOR SEARCH SERVICE: ranking and availability-display changes are
+the riskiest deploys because they run right before Tatkal opens. The
+VirtualService routes traffic tagged x-search-canary: "true" (internal
+QA traffic) to v2 first, then a 95/5 production split for a few hours
+overnight, with automatic rollback if error rates rise — all without a
+second load balancer or duplicate service.
+
+mTLS + AUTHORIZATION POLICY: PeerAuthentication in STRICT mode encrypts
+every Booking↔Payment↔PNR call carrying passenger PII (names, Aadhaar-
+linked IDs, payment references). The AuthorizationPolicy on Payment
+Service is a single-line statement of a critical invariant — "only
+Booking Service initiates payments" — enforced at the network layer, so
+a bug in Search Service or Train Track Service can never accidentally (or
+maliciously) hit the payment path.
+
+CONTROL-PLANE-DOWN FAILURE MODE: if istiod becomes unreachable during the
+Tatkal window, every sidecar continues enforcing its last pushed
+configuration — circuit breakers, mTLS and authorization rules all keep
+working. What's lost is the ability to push NEW rules, which is why all
+mesh config changes for a given day are frozen well before 9 AM, the same
+discipline IRCTC already applies to its own deploy freeze around Tatkal.`,
+    },
   ],
 };
 
@@ -1284,5 +1531,134 @@ READ REPLICA SIZING:
   With 85% cache hit: 87 reads/second to DB
   At peak (7-9 PM departure time): 5× = 430 reads/second to DB
   1 PostgreSQL read replica handles 5,000 reads/second → comfortably served by 1 replica`,
+  },
+  {
+    id: "irctcq6",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["IRCTC", "MakeMyTrip", "Cleartrip"],
+    question: "Walk through the back-of-the-envelope numbers for IRCTC's Tatkal window. How do they justify the queue + controlled-drain design?",
+    answer: `Start from the headline numbers and derive what each architectural piece is actually absorbing.
+
+ASSUMPTIONS:
+  1.5M+ concurrent users in the Tatkal window (10:00:00–10:00:02 AM)
+  800K–1.2M total online bookings/day
+  150K+ cancellations/day
+  50M+ PNR status checks/day vs ~1M bookings/day (50:1 read:write)
+  A popular train's Tatkal 3A quota ≈ 200 seats
+
+1. ARRIVAL RATE: 1.5M concurrent users firing within a 2-second window
+   ≈ 750,000 req/sec instantaneous.
+   → No atomic Redis DECR survives this directly. This is exactly why
+   the Tatkal Queue exists: an append-only ZADD into a Redis sorted set
+   absorbs hundreds of thousands of writes/sec, while the queue
+   processor drains at a controlled 5,000 bookings/sec.
+
+2. REJECTION RATE: ~200 seats vs 400K-600K requests in the first 2
+   seconds → >99.96% of requests are doomed.
+   → The queue processor fails FAST: the instant inventory hits zero,
+   "SORRY_NO_SEATS" is pushed via SSE to everyone still waiting, instead
+   of letting hundreds of thousands of requests sit in a 3-minute
+   booking window for nothing.
+
+3. PNR READ LOAD: 50M reads/day ÷ 86,400s ≈ 580/sec average, ~2,900/sec
+   at evening peak (5x).
+   → With 85% Redis cache hit rate, only ~87-435 reads/sec reach
+   PostgreSQL — 1 read replica (5,000/sec capacity) easily covers it,
+   which is why PNR reads are isolated onto their own replicas, away
+   from the booking write path.
+
+4. AVERAGE VS PEAK: 800K-1.2M bookings/day ÷ 86,400s ≈ 9-14
+   bookings/sec average — vs the Tatkal Queue's provisioned 5,000/sec.
+   → That's a >300x burst multiplier arriving at a known time every
+   day. Average throughput is the wrong number to provision for; the
+   Tatkal Queue and Booking Service fleets are pre-scaled for the burst,
+   not autoscaled in response to it (autoscaling reacts too slowly for
+   a 2-minute spike).
+
+5. WAITLIST PROPAGATION: 150K cancellations/day ≈ 1.7/sec average, but
+   festival peaks hit ~10,000/hour ≈ 2.8/sec, each triggering a WL→RAC→
+   Confirmed promotion chain that must finish within 60 seconds.
+   → The Waitlist Promotion Service (one Kafka consumer per
+   train/class/date) must keep consumer lag near zero even during these
+   bursts, or SMS confirmations arrive late.
+
+Interview punch line: 750,000 req/sec maps onto the Tatkal Queue's Redis
+sorted set + 5,000/sec controlled drain; the 99.96% rejection rate is why
+it fails fast; 50M PNR reads/sec → 85% cache hit → ~435/sec to Postgres
+maps onto the L1/L2/L3 PNR cache hierarchy; and the >300x burst multiplier
+is the single number that explains why IRCTC pre-scales for Tatkal instead
+of trusting autoscaling.`,
+    followups: [
+      "Why is pre-scaling preferred over autoscaling for the Tatkal window specifically?",
+      "If the queue processor's 5,000/sec drain rate were doubled to 10,000/sec, what else in the system needs to scale with it?",
+      "How would you validate these estimates in production without risking a real Tatkal window?",
+    ],
+  },
+  {
+    id: "irctcq7",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["IRCTC", "MakeMyTrip", "Razorpay"],
+    question: "IRCTC has Search, Booking, Payment, PNR and Train Track Service all calling each other behind the gateway. Would you put these behind a service mesh? What would it actually buy you?",
+    answer: `Yes — and the highest-value win is on the Booking → Payment hop, with PNR Service's external-partner traffic as the second.
+
+WHY A MESH FITS HERE:
+  Booking Service → Payment Service is the highest-stakes synchronous call
+    in the system — a stuck payment gateway during Tatkal must not
+    cascade into stuck booking workers holding seat locks.
+  PNR Service is hammered by external API partners (MakeMyTrip, Paytm,
+    RailYatri) — 50M checks/day, far more callers than just the app —
+    so it needs the same network-level isolation a public-facing service
+    gets.
+  Search Service and Train Track Service ship ranking/ETA model updates
+    regularly; a bad deploy the night before a Tatkal morning is
+    catastrophic, so canary rollouts matter more here than almost
+    anywhere else in the stack.
+
+DATA PLANE: an Envoy sidecar sits next to every instance of Search,
+  Booking, Payment, PNR and Train Track Service. All inter-service calls —
+  Booking→Payment, Booking→PNR, Search→Train Track — are intercepted by
+  these sidecars for mTLS, retries, timeouts, load balancing and circuit
+  breaking, with zero application code changes.
+
+CONTROL PLANE: istiod pushes routing rules, TLS certs and circuit-breaker
+  thresholds to every sidecar. "Payment Service trips after 5 consecutive
+  5xx" is declared once and applies fleet-wide.
+
+WHAT THIS BUYS:
+  Circuit breaking on Payment Service: outlier detection ejects an
+    unhealthy backend after 5 consecutive 5xx in 10s. Without this,
+    Booking Service workers block on a 30s gateway timeout while still
+    holding a Redis seat lock — during Tatkal that's a 150x difference
+    in lock-hold time (200ms vs 30s).
+  Canary for Search Service: a new ranking model is rolled out to 5% of
+    traffic at 2-4 AM, validated, then promoted via traffic-split config
+    — no duplicate infrastructure.
+  mTLS everywhere: Aadhaar-linked passenger data moving between Booking,
+    PNR and Payment Service is encrypted in transit by default.
+  AuthorizationPolicy: only Booking Service may call Payment Service — a
+    bug in Search or Train Track Service hitting the payment path
+    directly is rejected at the sidecar.
+  Tracing: a single Tatkal booking — Gateway → Booking → Inventory (Redis)
+    → Payment → PNR → Kafka — gets one trace ID across all hops.
+
+TRADE-OFFS:
+  ~1-2ms sidecar latency per hop is fine against the <4s booking SLA but
+  tight against the <200ms internal seat-lock budget, so mesh timeouts
+  need per-route tuning.
+  The control plane must be frozen well before 9 AM — sidecars keep
+  enforcing last-known config if istiod is unreachable, but can't accept
+  new policy mid-surge.
+  The Oracle PRS mainframe sync stays OUTSIDE the mesh entirely — it's a
+  legacy batch integration governed by its own maintenance window, not a
+  Kubernetes service.`,
+    followups: [
+      "How would you tune the mesh's own retry/timeout config differently for the Booking→Payment hop vs the Search→Train Track hop?",
+      "What's your rollback plan if a circuit-breaker misconfiguration starts ejecting healthy Payment Service pods during Tatkal?",
+      "Why exclude the PRS mainframe sync from the mesh — what would it take to bring it in, and is that worth doing?",
+    ],
   },
 ];

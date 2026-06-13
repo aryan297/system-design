@@ -27,7 +27,9 @@ Core engineering challenges: video transcoding at scale (500M videos uploaded pe
                          ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │              API GATEWAY (Global — 150+ PoPs)                          │
+│         SERVICE MESH — Envoy sidecar attached to every service         │
 │    Auth (JWT) · Rate Limiting · Geo-routing · CDN Token Signing        │
+│      mTLS · Load Balancing · Retries · Circuit Breaking · Tracing      │
 └──┬──────────┬────────────┬──────────────┬────────────────┬─────────────┘
    │          │            │              │                │
    ▼          ▼            ▼              ▼                ▼
@@ -125,6 +127,63 @@ THUMBNAIL SELECTION:
   If creator doesn't choose: ML selects "most engaging" thumbnail
   Engagement model trained on CTR data per thumbnail type (faces, action, text overlay)`,
         },
+        {
+          title: "Back-of-the-Envelope Estimation",
+          content: `"1.7B users, 500M uploads/day" is the headline. The numbers that
+actually size the FYP Engine, the Transcoding Farm, and storage tiering
+come from dividing those by time and by video length.
+
+ASSUMPTIONS:
+  • 1B DAU, 34 min average session length
+  • 500M videos uploaded/day, ~50MB average file size
+  • Average video watched ≈ 30 seconds (15s-3min range)
+  • FYP serves ~30 videos per page load, queues 300 per session
+  • Total video storage ≈ 1 exabyte (1,000 PB)
+
+1. VIDEO-VIEW RATE (FYP Engine load):
+   1B DAU × 34 min/day ≈ 34B user-minutes/day
+   34B minutes ÷ 0.5 min/video ≈ 68B video-starts/day
+   68B ÷ 86,400s ≈ 787,000 video-starts/sec average
+   → This is the rate the FYP Engine's 4-stage funnel must sustain —
+     not peak, the DAILY AVERAGE, because TikTok's 1B DAU spans every
+     timezone
+
+2. UPLOAD INGRESS (why direct-to-S3 is mandatory):
+   500M videos/day × 50MB ≈ 25PB/day
+   25PB/day ÷ 86,400s ≈ 290 GB/sec ≈ 2.3 Tbps average ingress
+   → No application server fleet absorbs 2.3 Tbps — this is the
+     concrete number behind "server only handles metadata, not bytes"
+
+3. TRANSCODING CONCURRENCY (GPU worker pool sizing):
+   500M videos/day ÷ 86,400s ≈ 5,787 videos/sec entering the pipeline
+   At a ~2-minute processing SLA (5 quality variants + thumbnails on GPU):
+   5,787/sec × 120s ≈ 694,000 videos "in flight" at any moment
+   → This is a CONCURRENCY number, not a throughput number — it sizes
+     how many GPU FFmpeg workers must exist SIMULTANEOUSLY, regardless
+     of the per-video processing time
+
+4. FEED-REFRESH QPS (ANN index load):
+   787,000 video-starts/sec ÷ ~30 videos per feed-load ≈ 26,000
+   feed-loads/sec
+   → Each feed-load triggers Stage 1 candidate retrieval — ~26,000
+     ANN searches/sec against the FAISS/ScaNN index over billions of
+     video embeddings is what that cluster must serve at < 50ms p99
+
+5. STORAGE GROWTH vs 1 EXABYTE:
+   25PB/day of RAW uploads alone would reach 1 exabyte in ~40 days if
+   nothing were deleted, deduplicated, or tiered
+   → This is why deduplication (perceptual hash) and the hot/warm/cold
+     S3 tiering aren't optimizations — without them, raw upload growth
+     alone exhausts a year's storage budget in about six weeks
+
+INTERVIEW PUNCH LINE:
+"500M uploads/day and 1.7B users decompose into: ~787K video-starts/sec
+(FYP Engine baseline load), ~2.3 Tbps upload ingress (why bytes never
+touch app servers), ~694K videos concurrently in the transcoding pipeline
+(a CONCURRENCY number for GPU worker sizing, not throughput), ~26K
+ANN searches/sec (FAISS/ScaNN cluster), and a 40-day runway to exhaust
+1 exabyte from raw uploads alone if tiering and dedup didn't exist."`,
+        },
       ],
     },
     {
@@ -210,6 +269,77 @@ COLD START (new user):
   After 20 videos: meaningful preference model available
   After 100 videos: full FYP personalisation active
   TikTok's cold start is best-in-class because completion rate signal kicks in immediately`,
+        },
+        {
+          title: "Service Mesh — Sidecar Proxy Pattern (Envoy/Istio)",
+          content: `The API GATEWAY fans out to five services — Upload, FYP Engine, Social
+Graph, Live Streaming, Moderation. At ~787,000 video-starts/sec, the
+FYP Engine's GPU deep-ranking stage (Stage 3, < 100ms of the < 200ms
+total) is the tightest internal hop in the entire system.
+
+WHY A MESH FITS:
+  FYP's 4-stage funnel already has per-stage latency budgets (50ms /
+  30ms / 100ms / 20ms). A single degrading Stage-3 GPU replica doesn't
+  just slow one request — at 787K/sec, it can blow the 200ms budget for
+  a meaningful fraction of all feed loads within seconds. A mesh gives
+  every stage the SAME automatic circuit breaking without each stage's
+  team hand-rolling it differently.
+
+DATA PLANE:
+  Envoy sidecars on Upload Service, FYP Engine, Social Graph, Live
+  Streaming Service, Moderation Service, the Transcoding Farm, and the
+  Interaction Service.
+
+CONTROL PLANE:
+  Istio control plane, pushing outlierDetection, load-balancing policy,
+  canary VirtualService rules, mTLS certs, and AuthorizationPolicy to
+  every sidecar.
+
+WHAT THIS BUYS:
+  1. FYP Engine circuit breaking — tight outlierDetection on the Stage-3
+     GPU deep-ranking replicas protects the < 200ms FYP refresh SLO,
+     ejecting a degrading replica before it drags down ~26,000
+     feed-loads/sec
+  2. Live Streaming Service load balancing — LEAST_REQUEST across
+     ingest/transcode replicas, but deliberately NO outlier ejection:
+     ejecting a replica mid-stream would drop active viewer connections,
+     worse than a momentarily slow one
+  3. Two-tower model canary — FYP retrains nightly; a VirtualService
+     sends 5% of feed-loads to the new model version (with a header
+     override for the ML team to force-evaluate it) before full rollout
+  4. Action-logging integrity — AuthorizationPolicy restricts
+     POST /v1/actions (the engagement signals that feed the online
+     feature store and, ultimately, the ranking model) to calls that
+     have passed through the authenticated client path. No internal
+     batch service can inject WATCH_COMPLETE / LIKE events — closing
+     off a model-poisoning vector for bot farms
+  5. Moderation pipeline integrity — AuthorizationPolicy restricts
+     /internal/moderation/evaluate to the Transcoding Farm only (the
+     sole legitimate trigger per the video.transcoded → moderation
+     pipeline), keeping the CSAM/GIFCT hash-match chain of custody clean
+  6. mTLS + tracing — every hop encrypted; one trace ID follows a feed
+     load through all 4 FYP stages, useful for debugging which stage
+     blew the 200ms budget
+
+DIAGRAM:
+  The SERVICE MESH band inside API GATEWAY extends down through Upload
+  Service, FYP Engine, Social Graph, Live Streaming, and Moderation
+  Service.
+
+TRADE-OFFS:
+  • Object Storage/S3, Redis, MySQL, HBase/Cassandra, Elasticsearch,
+    ClickHouse, Kafka, and the Global CDN are OUT of the mesh — direct
+    driver/SDK connections or, for the CDN, a completely separate edge
+    network with its own token-auth model
+  • Sidecar latency (~1-2ms) is meaningful inside FYP's 200ms budget,
+    especially Stage 3's 100ms GPU window — this is why the two-tower
+    model stays as ONE GPU-inference hop rather than being split further
+  • Live Streaming's sub-second latency target means NO outlierDetection
+    on its replicas — the trade-off favors connection stability over
+    automatic ejection
+  • Control-plane-down fails OPEN (sidecars retain last config) — a
+    Pilot outage must never become a feed-load or live-stream outage
+    for 1B DAU`,
         },
       ],
     },
@@ -955,6 +1085,193 @@ CREATE TABLE moderation_decisions (
   INDEX (video_id)
 );`,
     },
+    {
+      id: "serviceMesh",
+      title: "Service Mesh — Sidecar Proxy Configuration (Istio)",
+      description: "Circuit breaking for the FYP deep-ranking stage, LB for Live Streaming, model canary, and AuthorizationPolicy for action-logging and moderation integrity",
+      api: `# DestinationRule — circuit breaker for FYP Engine
+# Stage 3 (deep ranking) has a 100ms budget inside the 200ms FYP total
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: fyp-engine-circuit-breaker
+  namespace: prod
+spec:
+  host: fyp-engine.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 8000
+      http:
+        http1MaxPendingRequests: 4000
+        maxRequestsPerConnection: 50
+    loadBalancer:
+      simple: LEAST_REQUEST
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 15s
+      maxEjectionPercent: 50
+---
+# DestinationRule — pure load balancing for Live Streaming Service
+# Sub-second latency target: NO outlier ejection (would drop live connections)
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: live-streaming-lb
+  namespace: prod
+spec:
+  host: live-streaming-service.prod.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 4000
+      http:
+        http1MaxPendingRequests: 2000
+        maxRequestsPerConnection: 100
+    loadBalancer:
+      simple: LEAST_REQUEST
+---
+# VirtualService — canary rollout for the two-tower ranking model
+# FYP retrains nightly; ship the new model to 5% of feed-loads first
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: fyp-engine-canary
+  namespace: prod
+spec:
+  hosts:
+    - fyp-engine.prod.svc.cluster.local
+  http:
+    - match:
+        - headers:
+            x-fyp-model-canary:
+              exact: "true"
+      route:
+        - destination:
+            host: fyp-engine.prod.svc.cluster.local
+            subset: v2
+    - route:
+        - destination:
+            host: fyp-engine.prod.svc.cluster.local
+            subset: v1
+          weight: 95
+        - destination:
+            host: fyp-engine.prod.svc.cluster.local
+            subset: v2
+          weight: 5
+      retries:
+        attempts: 2
+        perTryTimeout: 80ms
+        retryOn: 5xx,reset,connect-failure
+---
+# AuthorizationPolicy — action-logging integrity (anti-poisoning)
+# Only the authenticated client path may write engagement signals
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: interaction-service-action-write
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: interaction-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/api-gateway"]
+      to:
+        - operation:
+            paths: ["/v1/actions"]
+            methods: ["POST"]
+---
+# AuthorizationPolicy — moderation pipeline chain-of-custody
+# Only the Transcoding Farm may trigger moderation evaluation
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: moderation-service-access
+  namespace: prod
+spec:
+  selector:
+    matchLabels:
+      app: moderation-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/prod/sa/transcoding-farm"]
+      to:
+        - operation:
+            paths: ["/internal/moderation/evaluate"]
+            methods: ["POST"]
+---
+# PeerAuthentication — mTLS required cluster-wide
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: prod
+spec:
+  mtls:
+    mode: STRICT`,
+      internals: `Sidecar injection scope:
+  IN the mesh: Upload Service, FYP Engine, Social Graph, Live Streaming
+    Service, Moderation Service, Transcoding Farm, Interaction Service —
+    every service the API GATEWAY fans out to, plus the internal services
+    they call
+  OUT of the mesh: Object Storage/S3, Redis, MySQL, HBase/Cassandra,
+    Elasticsearch, ClickHouse, Kafka, Feature Store, Model Registry
+    (direct driver/SDK connections), and the Global CDN (separate edge
+    network with its own token-auth model)
+
+Circuit breaking — FYP Engine (the 787K/sec problem):
+  FYP's funnel has hard per-stage budgets: 50ms candidate retrieval,
+  30ms lightweight ranking, 100ms deep ranking (GPU), 20ms re-ranking —
+  200ms total. At ~787,000 video-starts/sec (~26,000 feed-loads/sec),
+  Stage 3's GPU replicas are the tightest hop. outlierDetection with a
+  5s/15s window (tighter than the standard 10s/30s) ejects a degrading
+  GPU replica fast enough to protect the 200ms SLO. maxEjectionPercent:
+  50 caps the blast radius of a bad GPU driver update
+
+Load balancing — Live Streaming Service (no ejection, on purpose):
+  Sub-second end-to-end latency means a viewer's connection to a replica
+  is STATEFUL in practice (RTMP ingest, active HLS session). Ejecting a
+  "slow" replica would drop real connections for real viewers — worse
+  than tolerating a temporarily slow one. LEAST_REQUEST spreads NEW
+  connections without touching existing ones
+
+Canary — two-tower model versions:
+  The FYP recommendation model retrains nightly (per the FYP Algorithm
+  section). x-fyp-model-canary lets the ML team force-route evaluation
+  traffic to v2, while the 95/5 weight handles gradual production
+  rollout. perTryTimeout: 80ms leaves headroom inside Stage 3's 100ms
+  budget for one retry
+
+AuthorizationPolicy — action-logging integrity:
+  POST /v1/actions is the ONLY way engagement signals (WATCH_COMPLETE,
+  LIKE, SHARE, SKIP) enter the online feature store that drives
+  personalization. Restricting this endpoint to calls that transited
+  api-gateway (i.e., real authenticated client sessions) means no
+  internal service — and critically, no compromised internal service —
+  can directly write fabricated engagement signals that would poison
+  the ranking model for bot-farm content promotion
+
+AuthorizationPolicy — moderation chain of custody:
+  /internal/moderation/evaluate is triggered by exactly one event in the
+  pipeline: video.transcoded. Restricting the endpoint to
+  transcoding-farm's service account only means the CSAM/GIFCT
+  hash-matching path has a single, auditable entry point — relevant
+  given the mandatory NCMEC law-enforcement reporting on hash matches
+
+mTLS and control-plane fail-open:
+  PeerAuthentication STRICT encrypts every hop. If the Istio control
+  plane goes down, sidecars keep serving with last-known config
+  (fail open) — consistent with the 99.9% CDN availability target and
+  the < 1s live-streaming SLA: a control-plane blip must never become
+  a feed-load or live-stream outage for 1B DAU`,
+    },
   ],
 };
 
@@ -1130,5 +1447,137 @@ RECONNECT & BUFFERING:
   Viewer loses connection → client buffers 3 seconds locally
   On reconnect: join at live edge (not from disconnection point — too much catch-up)
   Viewer count: Redis SCARD stream:{id}:viewers, heartbeat every 30s to stay in set`,
+  },
+  {
+    id: "tq5",
+    category: "Estimation",
+    difficulty: "Medium",
+    round: "System Design Screen",
+    asked_at: ["TikTok", "Instagram", "YouTube Shorts"],
+    question: "1.7B users, 500M uploads/day. Turn those into numbers that actually size the FYP Engine, the Transcoding Farm, and storage.",
+    answer: `1.7B users is a vanity metric. The numbers that drive architecture come
+from dividing by seconds and by average video length.
+
+ASSUMPTIONS:
+  • 1B DAU, 34 min average session
+  • 500M uploads/day, ~50MB average file size
+  • Average video watched ≈ 30 seconds
+  • FYP serves ~30 videos per page load
+  • Total video storage ≈ 1 exabyte (1,000 PB)
+
+1. VIDEO-VIEW RATE:
+   1B DAU × 34 min ÷ 0.5 min/video ≈ 68B video-starts/day
+   68B ÷ 86,400s ≈ 787,000 video-starts/sec average
+   → Baseline load the FYP Engine's 4-stage funnel sustains, all day
+
+2. UPLOAD INGRESS:
+   500M × 50MB ≈ 25PB/day ÷ 86,400s ≈ 2.3 Tbps average
+   → The number behind "videos go directly to S3, never through app
+     servers" — no server fleet absorbs 2.3 Tbps
+
+3. TRANSCODING CONCURRENCY:
+   5,787 videos/sec entering the pipeline × ~120s processing SLA ≈
+   694,000 videos concurrently "in flight"
+   → A CONCURRENCY number (how many GPU workers exist at once), not a
+     throughput number (how fast each one runs)
+
+4. ANN SEARCH QPS:
+   787,000 video-starts/sec ÷ ~30 videos/feed-load ≈ 26,000 feed-loads/sec
+   → Each one fires a Stage-1 ANN search — this is the FAISS/ScaNN
+     cluster's required QPS at < 50ms p99
+
+5. STORAGE RUNWAY:
+   25PB/day of raw uploads alone reaches 1 exabyte in ~40 days
+   → Deduplication and hot/warm/cold tiering aren't optimizations —
+     without them, raw uploads alone exhaust a year's storage budget
+     in about six weeks
+
+PUNCH LINE:
+"~787K video-starts/sec sizes the FYP Engine. ~2.3 Tbps sizes (or rather,
+explains the absence of) the upload server fleet. ~694K is a CONCURRENCY
+number for the GPU transcoding pool. ~26K/sec is the ANN index's QPS.
+And ~40 days is how fast raw uploads alone would burn through 1 exabyte
+without tiering and dedup — that's the urgency behind 'optimization'."`,
+    followups: [
+      "If average watched-video length dropped from 30s to 15s (shorter-form trend), which of these five numbers roughly doubles, and what breaks first?",
+      "The 694,000 'videos in flight' is a concurrency estimate based on a 2-minute SLA. How would this number change for the verified-creator priority queue with a < 1 minute SLA?",
+      "26,000 ANN searches/sec assumes every feed-load triggers a fresh Stage-1 retrieval. How would caching recent candidate sets per user change this number, and what staleness trade-off does it introduce?",
+    ],
+  },
+  {
+    id: "tq6",
+    category: "Architecture",
+    difficulty: "Hard",
+    round: "Onsite — System Design",
+    asked_at: ["TikTok", "Instagram", "YouTube"],
+    question: "The API Gateway fans out to Upload, FYP Engine, Social Graph, Live Streaming, and Moderation. How would a service mesh help here, and what's different about Live Streaming's needs vs FYP's?",
+    answer: `Both FYP Engine and Live Streaming have brutal latency budgets
+(200ms and <1s respectively), but a mesh should treat them DIFFERENTLY
+— that's the crux of this question.
+
+WHY A MESH FITS:
+  FYP's 4-stage funnel has per-stage budgets (50/30/100/20ms = 200ms).
+  At ~787,000 video-starts/sec (~26,000 feed-loads/sec), Stage 3's GPU
+  deep-ranking replicas are the tightest hop. A degrading replica there
+  can blow the 200ms SLO for thousands of feed-loads/sec within seconds
+  — a mesh's outlierDetection catches this automatically.
+
+DATA PLANE:
+  Envoy sidecars on Upload Service, FYP Engine, Social Graph, Live
+  Streaming Service, Moderation Service, Transcoding Farm, and
+  Interaction Service.
+
+THE FYP vs LIVE STREAMING DIFFERENCE:
+  FYP Engine — stateless, request/response, GPU-bound Stage 3:
+    outlierDetection with a tight 5s/15s window. A degrading replica
+    is EJECTED — the next request just goes to a healthy replica,
+    no user-visible state is lost.
+
+  Live Streaming Service — stateful, long-lived RTMP/HLS connections:
+    NO outlier ejection. A "slow" replica is still holding active
+    viewer connections and an active ingest stream. Ejecting it would
+    DROP those connections — strictly worse than tolerating temporary
+    slowness. LEAST_REQUEST handles only NEW connection placement.
+  This is the general principle: mesh-level circuit breaking is for
+  STATELESS request/response hops. Stateful, connection-oriented
+  services need LB-only configuration.
+
+WHAT THIS BUYS (beyond the two above):
+  1. Two-tower model canary — FYP retrains nightly; VirtualService
+     ships the new model to 5% of feed-loads with a header override
+     for forced evaluation
+  2. Action-logging integrity — AuthorizationPolicy restricts
+     POST /v1/actions (engagement signals feeding the ranking model)
+     to traffic that transited api-gateway — closing a model-poisoning
+     vector where a compromised internal service injects fake
+     WATCH_COMPLETE/LIKE events
+  3. Moderation chain of custody — AuthorizationPolicy restricts
+     /internal/moderation/evaluate to the Transcoding Farm only,
+     keeping the CSAM/GIFCT hash-match entry point auditable and singular
+  4. mTLS + tracing across every hop, useful for tracing which FYP
+     stage blew the 200ms budget on a specific slow request
+
+WHAT STAYS OUT:
+  S3, Redis, MySQL, HBase/Cassandra, Elasticsearch, ClickHouse, Kafka,
+  the Feature Store and Model Registry (direct connections), and the
+  Global CDN (a separate edge network with its own token-auth — mesh
+  mTLS between pods doesn't extend to CDN edges)
+
+TRADE-OFFS:
+  • Sidecar latency (~1-2ms) matters most for FYP's Stage 3 (100ms
+    budget) — it's why the two-tower model stays one GPU hop, not
+    split further
+  • Two circuit-breaking philosophies (eject for FYP, never-eject for
+    Live) must be deliberately DIFFERENT DestinationRules — applying
+    FYP's outlierDetection to Live Streaming by copy-paste would be
+    a production incident waiting to happen
+  • Control-plane-down fails open — for Live Streaming specifically,
+    this is non-negotiable: losing sidecar config mid-stream cannot
+    be allowed to drop the connection`,
+    followups: [
+      "Suppose a future feature adds a stateless 'live stream quality scorer' service called on every HLS segment. Would it get FYP-style or Live-Streaming-style mesh configuration, and why?",
+      "The action-logging AuthorizationPolicy trusts 'traffic that transited api-gateway.' What additional check would you add if api-gateway itself could be compromised?",
+      "How would you extend the moderation AuthorizationPolicy to support a second legitimate trigger — e.g., a creator-initiated re-moderation request after editing a video's caption?",
+    ],
   },
 ];
