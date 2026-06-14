@@ -12,11 +12,13 @@ import MachineCodingPage from "./pages/MachineCodingPage";
 import GoBasicsPage from "./pages/GoBasicsPage";
 import CodeReviewPage from "./pages/CodeReviewPage";
 import SDInterviewPage from "./pages/SDInterviewPage";
+import DesignPatternsPage from "./pages/DesignPatternsPage";
 import { DSA_CATEGORIES } from "./data/dsa";
 import { MC_CATEGORIES } from "./data/machineCoding";
 import { GO_BASICS_CATEGORIES } from "./data/goBasics";
 import { CR_CATEGORIES } from "./data/codeReview";
 import { SDI_CATEGORIES } from "./data/sdInterview";
+import { DESIGN_PATTERNS_CATEGORIES } from "./data/designPatterns";
 import "./styles/globals.css";
 
 const firstCat = DSA_CATEGORIES[0];
@@ -29,6 +31,8 @@ const firstCR = CR_CATEGORIES[0];
 const firstCRProblem = firstCR.problems[0];
 const firstSDI = SDI_CATEGORIES[0];
 const firstSDIProblem = firstSDI.problems[0];
+const firstDP = DESIGN_PATTERNS_CATEGORIES[0];
+const firstDPTopic = firstDP.topics[0];
 
 export default function App() {
   return (
@@ -75,6 +79,12 @@ export default function App() {
             element={<Navigate to={`/system-design-guide/${firstSDI.id}/${firstSDIProblem.id}`} replace />}
           />
           <Route path="system-design-guide/:categoryId/:problemId" element={<SDInterviewPage />} />
+          {/* Design Patterns routes */}
+          <Route
+            path="design-patterns"
+            element={<Navigate to={`/design-patterns/${firstDP.id}/${firstDPTopic.id}`} replace />}
+          />
+          <Route path="design-patterns/:categoryId/:topicId" element={<DesignPatternsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

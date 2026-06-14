@@ -8,6 +8,7 @@ import { MC_CATEGORIES } from "../data/machineCoding";
 import { GO_BASICS_CATEGORIES } from "../data/goBasics";
 import { CR_CATEGORIES } from "../data/codeReview";
 import { SDI_CATEGORIES } from "../data/sdInterview";
+import { DESIGN_PATTERNS_CATEGORIES } from "../data/designPatterns";
 import gopherImg from "../assets/gopher.png";
 import "./Sidebar.css";
 
@@ -20,7 +21,8 @@ export default function Sidebar({ open, onClose }) {
   const inGB = location.pathname.startsWith("/go-basics");
   const inCR = location.pathname.startsWith("/code-review");
   const inSDI = location.pathname.startsWith("/system-design-guide");
-  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers && !inEncyclopedia && !inMC && !inGB && !inCR && !inSDI);
+  const inDP = location.pathname.startsWith("/design-patterns");
+  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers && !inEncyclopedia && !inMC && !inGB && !inCR && !inSDI && !inDP);
   const [dsaOpen, setDsaOpen] = useState(inDSA);
   const [layersOpen, setLayersOpen] = useState(inLayers);
   const [encOpen, setEncOpen] = useState(inEncyclopedia);
@@ -28,6 +30,7 @@ export default function Sidebar({ open, onClose }) {
   const [gbOpen, setGbOpen] = useState(inGB);
   const [crOpen, setCrOpen] = useState(inCR);
   const [sdiOpen, setSdiOpen] = useState(inSDI);
+  const [dpOpen, setDpOpen] = useState(inDP);
 
   return (
     <aside className={`sidebar ${open ? "sidebar--open" : ""}`}>
@@ -411,6 +414,54 @@ export default function Sidebar({ open, onClose }) {
                         {idx + 1}.
                       </span>
                       {p.title}
+                    </NavLink>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {/* ── Design Patterns ── */}
+        <button
+          className="sidebar-section-toggle"
+          style={{ marginTop: "10px" }}
+          onClick={() => setDpOpen((v) => !v)}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: "0.85rem" }}>🏛️</span>
+            Design Patterns
+          </span>
+          <span className="sidebar-section-chevron">{dpOpen ? "▾" : "▸"}</span>
+        </button>
+
+        {dpOpen && DESIGN_PATTERNS_CATEGORIES.map((cat) => {
+          const catPath = `/design-patterns/${cat.id}`;
+          const isCatOpen = location.pathname.startsWith(catPath);
+          return (
+            <div key={cat.id} className="sidebar-system">
+              <NavLink
+                to={`${catPath}/${cat.topics[0].id}`}
+                className={`sidebar-system-link ${isCatOpen ? "active" : ""}`}
+              >
+                <span className="sidebar-system-icon">{cat.icon}</span>
+                <span className="sidebar-system-name">{cat.title}</span>
+                <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
+                  {isCatOpen ? "▾" : "▸"}
+                </span>
+              </NavLink>
+
+              {isCatOpen && (
+                <div className="sidebar-sub">
+                  {cat.topics.map((t, idx) => (
+                    <NavLink
+                      key={t.id}
+                      to={`${catPath}/${t.id}`}
+                      className={({ isActive: a }) => `sidebar-sub-link ${a ? "active" : ""}`}
+                    >
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.65rem", minWidth: 16 }}>
+                        {idx + 1}.
+                      </span>
+                      {t.title}
                     </NavLink>
                   ))}
                 </div>
