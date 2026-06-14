@@ -160,4 +160,11 @@ export const SYSTEMS = [
     description: "Shared GPU fleet — GeForce NOW cloud gaming, DGX Cloud AI training (gang scheduling, checkpointing), CUDA/driver distribution to 500M+ devices",
     color: "#76B900",
   },
+  {
+    id: "docker-kubernetes",
+    name: "Docker & Kubernetes Platform",
+    icon: "☸️",
+    description: "Container orchestration at scale — 5K-node clusters, image registry, declarative reconciliation, scheduling/auto-scaling, and a full Docker/K8s APM stack",
+    color: "#326CE5",
+  },
 ];

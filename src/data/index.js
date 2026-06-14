@@ -21,6 +21,7 @@ import { MAKEMYTRIP_HLD, MAKEMYTRIP_LLD, MAKEMYTRIP_QNA } from "./makemytrip";
 import { DISTRICT_HLD, DISTRICT_LLD, DISTRICT_QNA } from "./district";
 import { BOOKMYSHOW_HLD, BOOKMYSHOW_LLD, BOOKMYSHOW_QNA } from "./bookmyshow";
 import { NVIDIA_HLD, NVIDIA_LLD, NVIDIA_QNA } from "./nvidia";
+import { KUBERNETES_HLD, KUBERNETES_LLD, KUBERNETES_QNA } from "./kubernetes";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -161,6 +162,12 @@ const REGISTRY = {
     hld: NVIDIA_HLD,
     lld: NVIDIA_LLD,
     qna: NVIDIA_QNA,
+  },
+  "docker-kubernetes": {
+    meta: { icon: "☸️", color: "#326CE5" },
+    hld: KUBERNETES_HLD,
+    lld: KUBERNETES_LLD,
+    qna: KUBERNETES_QNA,
   },
 };
 
