@@ -19,6 +19,8 @@ import { CLAUDECODE_HLD, CLAUDECODE_LLD, CLAUDECODE_QNA } from "./claudecode";
 import { NPCI_HLD, NPCI_LLD, NPCI_QNA } from "./npci";
 import { MAKEMYTRIP_HLD, MAKEMYTRIP_LLD, MAKEMYTRIP_QNA } from "./makemytrip";
 import { DISTRICT_HLD, DISTRICT_LLD, DISTRICT_QNA } from "./district";
+import { BOOKMYSHOW_HLD, BOOKMYSHOW_LLD, BOOKMYSHOW_QNA } from "./bookmyshow";
+import { NVIDIA_HLD, NVIDIA_LLD, NVIDIA_QNA } from "./nvidia";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -147,6 +149,18 @@ const REGISTRY = {
     hld: DISTRICT_HLD,
     lld: DISTRICT_LLD,
     qna: DISTRICT_QNA,
+  },
+  "book-my-show": {
+    meta: { icon: "🎟️", color: "#C2185B" },
+    hld: BOOKMYSHOW_HLD,
+    lld: BOOKMYSHOW_LLD,
+    qna: BOOKMYSHOW_QNA,
+  },
+  nvidia: {
+    meta: { icon: "🎮", color: "#76B900" },
+    hld: NVIDIA_HLD,
+    lld: NVIDIA_LLD,
+    qna: NVIDIA_QNA,
   },
 };
 

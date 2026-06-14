@@ -146,4 +146,18 @@ export const SYSTEMS = [
     description: "Hyperlocal community platform — address-verified neighbours, locality feed, safety alerts, local business discovery",
     color: "#16A34A",
   },
+  {
+    id: "book-my-show",
+    name: "BookMyShow",
+    icon: "🎟️",
+    description: "Movie & event ticketing — 100M+ users, seat-level inventory locking, virtual waiting room for blockbuster releases",
+    color: "#C2185B",
+  },
+  {
+    id: "nvidia",
+    name: "NVIDIA Cloud Platform",
+    icon: "🎮",
+    description: "Shared GPU fleet — GeForce NOW cloud gaming, DGX Cloud AI training (gang scheduling, checkpointing), CUDA/driver distribution to 500M+ devices",
+    color: "#76B900",
+  },
 ];
