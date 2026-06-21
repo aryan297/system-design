@@ -1895,4 +1895,1116 @@ func main() {
       },
     ],
   },
+  // ─────────────────────────────────────────────────────────────────────────
+  // 4. Agentic AI Design Patterns
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "agentic-ai",
+    icon: "🤖",
+    title: "Agentic AI Patterns",
+    topics: [
+      {
+        id: "react",
+        title: "ReAct (Reasoning + Acting)",
+        language: "Python",
+        summary: "Interleave chain-of-thought reasoning traces with tool-action steps so the model can observe results and adapt mid-task",
+        explanation:
+          "ReAct (Reasoning + Acting) solves the core limitation of vanilla LLM completions: the model can think but can't observe the world mid-generation. The pattern works by prompting the model to alternate between a THOUGHT step (internal reasoning about what to do next) and an ACT step (invoking a tool — a search engine, a code executor, a database query). The tool's result is appended to the context as an OBSERVATION, and the model reasons again. This tight Think → Act → Observe loop lets the agent make decisions based on real, up-to-date information rather than what it memorized during training.\n\nThe implementation is a simple orchestration loop: parse the model's output for a tool call, execute it, append the result, and call the model again. Crucially, the full conversation history (thoughts, actions, observations) stays in the context window so every new step has access to everything that happened before — no hidden state.",
+        keyPoints: [
+          "The loop is: Thought → Action (tool name + args) → Observation (tool result) → repeat until a Final Answer is reached",
+          "Thoughts are never sent to external tools — they're scratchpad reasoning purely for the LLM to plan",
+          "Keeping the full trajectory in context makes the agent's reasoning transparent and debuggable — every step is a string you can log",
+          "Tool results ground responses in real data, dramatically reducing hallucinations on factual queries",
+          "A max-steps guard is mandatory — without it, a confused agent loops forever consuming tokens and budget",
+        ],
+        gotchas: [
+          "Context grows with every step — long tasks can hit the context limit; use summarization or sliding windows for multi-hour tasks",
+          "Tool errors need explicit handling: if you don't tell the model 'tool failed with X', it may assume success and hallucinate the next step",
+          "The model may start writing fictional Observations if it gets confused — validate that every Observation came from an actual tool call",
+        ],
+        code: `import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+tools = [
+    {
+        "name": "web_search",
+        "description": "Search the web for current information",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "calculator",
+        "description": "Evaluate a math expression",
+        "input_schema": {
+            "type": "object",
+            "properties": {"expression": {"type": "string"}},
+            "required": ["expression"],
+        },
+    },
+]
+
+def run_tool(name: str, inputs: dict) -> str:
+    if name == "web_search":
+        return f"[search result for '{inputs['query']}'] Claude Sonnet costs $3/MTok input."
+    if name == "calculator":
+        return str(eval(inputs["expression"]))
+    return "unknown tool"
+
+def react_agent(user_query: str, max_steps: int = 10) -> str:
+    messages = [{"role": "user", "content": user_query}]
+
+    for step in range(max_steps):
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            tools=tools,
+            messages=messages,
+        )
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason == "end_turn":
+            for block in response.content:
+                if hasattr(block, "text"):
+                    return block.text
+            return ""
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                print(f"  [step {step+1}] calling {block.name}({block.input})")
+                result = run_tool(block.name, block.input)
+                print(f"  [obs] {result}")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+        messages.append({"role": "user", "content": tool_results})
+
+    return "Max steps reached — task incomplete."
+
+answer = react_agent("How much would 1 million tokens cost with Claude Sonnet?")
+print(answer)`,
+      },
+      {
+        id: "tool-use",
+        title: "Tool Use / Function Calling",
+        language: "Python",
+        summary: "Give an LLM a typed schema of available functions so it can decide when and how to call them, grounding outputs in real system actions",
+        explanation:
+          "Tool Use (also called Function Calling) is the primitive that turns a language model into an agent. Instead of asking the model to guess an answer, you give it a catalogue of callable tools — each with a JSON Schema describing its name, purpose, and parameters. When the model decides a tool is needed, it emits a structured tool_use block (not free text) containing the tool name and typed arguments. Your code executes the real function and returns the result as a tool_result. The model integrates that result into its next generation.\n\nThis pattern enforces a clean separation: the LLM handles language, reasoning, and decision-making; your code handles actual side effects (DB queries, API calls, file I/O). The model never directly touches external systems — it only describes what it wants, and your orchestrator decides whether to allow and execute it.",
+        keyPoints: [
+          "Tool schemas are JSON Schema objects — the model is fine-tuned to produce arguments that match them, dramatically reducing parse errors vs free-text extraction",
+          "The model can call multiple tools in one turn (parallel tool use) — handle all tool_use blocks in a response before replying",
+          "Tool descriptions are natural-language prompts to the model — write them as you would a docstring: what it does, when to use it, what each param means",
+          "Always validate tool call arguments server-side before executing — the model can still produce out-of-schema values under adversarial prompts",
+          "Use tool_choice to force the model to always call a tool (useful for structured extraction) or to choose from a specific set",
+        ],
+        gotchas: [
+          "Returning tool errors as error strings (not exceptions) keeps the conversation alive — let the model retry with corrected arguments",
+          "Don't expose tools the model shouldn't use in the current context — capability exposure is effectively a permission grant",
+          "Large tool catalogues (50+ tools) degrade selection accuracy — use retrieval to inject only the top-k relevant tools per turn",
+        ],
+        code: `import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+tools = [
+    {
+        "name": "get_stock_price",
+        "description": "Get the current stock price for a ticker symbol",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {
+                    "type": "string",
+                    "description": "Stock ticker symbol, e.g. AAPL, GOOG",
+                },
+                "currency": {
+                    "type": "string",
+                    "enum": ["USD", "EUR", "GBP"],
+                    "description": "Currency for the price",
+                },
+            },
+            "required": ["ticker"],
+        },
+    }
+]
+
+def get_stock_price(ticker: str, currency: str = "USD") -> dict:
+    mock_prices = {"AAPL": 189.30, "GOOG": 175.10, "NVDA": 875.40}
+    price = mock_prices.get(ticker.upper(), 0.0)
+    return {"ticker": ticker.upper(), "price": price, "currency": currency}
+
+def run_with_tools(query: str) -> str:
+    messages = [{"role": "user", "content": query}]
+
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            tools=tools,
+            messages=messages,
+        )
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason == "end_turn":
+            return next(b.text for b in response.content if hasattr(b, "text"))
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = get_stock_price(**block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result),
+                })
+        messages.append({"role": "user", "content": tool_results})
+
+print(run_with_tools("What's the price of Apple and Nvidia stock?"))`,
+      },
+      {
+        id: "rag",
+        title: "RAG — Retrieval-Augmented Generation",
+        language: "Python",
+        summary: "Retrieve relevant chunks from an external knowledge base and inject them into the prompt so the LLM answers from current facts, not stale training data",
+        explanation:
+          "RAG (Retrieval-Augmented Generation) addresses the two fundamental limitations of a standalone LLM: knowledge cutoff (training data is frozen in time) and hallucination (the model confabulates facts it doesn't reliably know). The pattern has two stages:\n\n1. RETRIEVAL: the user's query is embedded into a vector, and an approximate nearest-neighbor search finds the top-k most semantically similar chunks in a vector store (Pinecone, pgvector, Weaviate). These chunks could be documentation pages, support tickets, code files, or any text.\n\n2. AUGMENTED GENERATION: the retrieved chunks are inserted into the system prompt as 'context', and the model is instructed to answer only from that context. The model can now cite specific passages and say 'I don't know' when the answer isn't in the retrieved material.\n\nThe retrieval step can be purely semantic (vector similarity), lexical (BM25/TF-IDF), or hybrid (both). Hybrid search consistently outperforms either alone, especially for proper nouns and code identifiers that dense vectors under-represent.",
+        keyPoints: [
+          "Chunk size is a critical tuning parameter — too small loses context; too large dilutes relevance. 256–512 tokens with ~20% overlap is a common starting point",
+          "Embed the query at inference time using the SAME embedding model used to index the chunks — cross-model embeddings are not comparable",
+          "Hybrid search (dense vector + sparse BM25) reliably outperforms dense-only, especially for technical terms and named entities",
+          "Add source citations to every chunk and instruct the model to cite them — this makes hallucinations visible and auditable",
+          "Re-ranking (a cross-encoder scoring query + chunk) after retrieval significantly boosts precision when top-k > 3",
+        ],
+        gotchas: [
+          "Retrieval quality is the ceiling — the model can only answer as well as the chunks it receives; bad chunking or stale indexes cap accuracy regardless of model size",
+          "Context stuffing (dumping 20 chunks) degrades quality via 'lost in the middle' — the model focuses on the first and last chunks; keep top-k ≤ 5–8 and re-rank",
+          "The model may hallucinate beyond the retrieved context when the user's question is partially out of scope — use explicit 'only use the provided context' instructions and test with adversarial queries",
+        ],
+        code: `import anthropic
+import numpy as np
+
+client = anthropic.Anthropic()
+
+# Mock knowledge base (in production: Pinecone / pgvector / Weaviate)
+DOCS = [
+    {"id": "d1", "text": "Claude supports a context window of up to 200K tokens."},
+    {"id": "d2", "text": "Tool use lets Claude call external functions and APIs."},
+    {"id": "d3", "text": "Claude's training data has a knowledge cutoff of August 2025."},
+    {"id": "d4", "text": "Prompt caching reduces cost by up to 90% for repeated prefixes."},
+]
+
+def embed(texts: list[str]) -> np.ndarray:
+    # Stub — replace with real embeddings via OpenAI, Cohere, or Anthropic Voyage
+    rng = np.random.default_rng(seed=sum(ord(c) for t in texts for c in t))
+    return rng.random((len(texts), 64))
+
+doc_embeddings = embed([d["text"] for d in DOCS])
+
+def retrieve(query: str, top_k: int = 2) -> list[dict]:
+    q_emb = embed([query])[0]
+    scores = doc_embeddings @ q_emb / (
+        np.linalg.norm(doc_embeddings, axis=1) * np.linalg.norm(q_emb) + 1e-9
+    )
+    return [DOCS[i] for i in np.argsort(scores)[::-1][:top_k]]
+
+def rag_answer(question: str) -> str:
+    chunks = retrieve(question)
+    context = "\\n".join(f"[{c['id']}] {c['text']}" for c in chunks)
+
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system=(
+            "Answer using ONLY the context below. "
+            "Cite source IDs like [d1]. If the answer is not in the context, say so.\\n\\n"
+            f"Context:\\n{context}"
+        ),
+        messages=[{"role": "user", "content": question}],
+    )
+    return response.content[0].text
+
+print(rag_answer("What is Claude's context window size?"))
+# → "Claude supports a context window of up to 200K tokens [d1]."`,
+      },
+      {
+        id: "orchestrator-subagent",
+        title: "Orchestrator-Subagent (Multi-Agent)",
+        language: "Python",
+        summary: "A coordinator agent decomposes a complex task into subtasks and delegates each to a specialized subagent, then synthesizes the results",
+        explanation:
+          "The Orchestrator-Subagent pattern is the multi-agent analogue of divide-and-conquer. One orchestrator agent receives a high-level goal, breaks it into independently executable subtasks, and dispatches each to a specialized subagent. Subagents can run in parallel (fan-out) or in a directed acyclic graph where some subtasks depend on others' outputs. The orchestrator collects all results and synthesizes a final answer.\n\nWhy specialize? A subagent given a narrow, well-defined task (e.g., 'write unit tests for this function' or 'translate this text to French') performs significantly better than a single generalist agent juggling the whole problem. Specialization also enables parallelism — subagents that don't share state can run concurrently, cutting wall-clock time by the parallelism factor.\n\nThe orchestrator doesn't have to be an LLM — it can be deterministic code that hard-codes the decomposition. LLM-based orchestrators are more flexible but add latency and cost for the planning step.",
+        keyPoints: [
+          "Parallel fan-out (concurrent subagent calls) cuts wall-clock time proportionally — a 5-subtask job takes 1x time instead of 5x",
+          "Each subagent should have a focused system prompt that describes its specialty — context isolation prevents cross-contamination of concerns",
+          "Subagents return structured output (JSON) rather than prose so the orchestrator can reliably parse and aggregate results",
+          "Use a max-concurrency limit on parallel subagents to avoid rate-limit exhaustion on the model API",
+          "The orchestrator can be a simple DAG scheduler in code — only promote it to an LLM if decomposition is dynamic and unpredictable",
+        ],
+        gotchas: [
+          "Subagent failures need explicit retry/fallback logic — if one subagent in a 10-way fan-out fails, decide whether to fail the whole task or proceed with partial results",
+          "Token budgets multiply: 10 subagents × 2K tokens each = 20K tokens per orchestration cycle — model cost can surprise you at scale",
+          "Avoid shared mutable state between subagents — race conditions are just as real in LLM multi-agent systems as in concurrent code",
+        ],
+        code: `import anthropic
+import asyncio
+import json
+
+client = anthropic.Anthropic()
+
+async def subagent(system: str, task: str) -> str:
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(
+        None,
+        lambda: client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=system,
+            messages=[{"role": "user", "content": task}],
+        ),
+    )
+    return response.content[0].text
+
+async def orchestrate(user_goal: str) -> str:
+    # Step 1: orchestrator decomposes the goal
+    plan_resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=256,
+        system='Break the user goal into 3 parallel subtasks. Reply with JSON: {"tasks": ["...", "...", "..."]}',
+        messages=[{"role": "user", "content": user_goal}],
+    )
+    plan = json.loads(plan_resp.content[0].text)
+    subtasks = plan["tasks"]
+
+    # Step 2: run subagents in parallel
+    specialists = [
+        "You are a researcher. Provide factual information concisely.",
+        "You are a critic. Identify risks and trade-offs.",
+        "You are an implementer. Suggest concrete next steps.",
+    ]
+    results = await asyncio.gather(*[
+        subagent(specialists[i % len(specialists)], t)
+        for i, t in enumerate(subtasks)
+    ])
+
+    # Step 3: orchestrator synthesizes
+    synthesis_input = "\\n\\n".join(
+        f"Subtask {i+1}: {t}\\nResult: {r}"
+        for i, (t, r) in enumerate(zip(subtasks, results))
+    )
+    final = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system="Synthesize the subtask results into a coherent final answer.",
+        messages=[{"role": "user", "content": synthesis_input}],
+    )
+    return final.content[0].text
+
+result = asyncio.run(orchestrate("How should I design a scalable notification system?"))
+print(result)`,
+      },
+      {
+        id: "human-in-the-loop",
+        title: "Human-in-the-Loop (HITL)",
+        language: "Python",
+        summary: "Pause agentic execution at high-stakes decision points and require explicit human approval before proceeding with irreversible actions",
+        explanation:
+          "Human-in-the-Loop (HITL) is the safety valve for agentic systems. Most automated tasks are reversible — the agent searches the web, reads a file, drafts text. But some actions are irreversible: sending an email to 10,000 users, deleting a production database, executing a trade, deploying to production. HITL inserts a synchronous or asynchronous human approval gate before any action that crosses a risk threshold.\n\nThe pattern has three parts:\n1. CLASSIFICATION: before every tool call, classify the action's risk (read-only, reversible write, irreversible write). This can be rule-based (hard-code which tools are dangerous) or model-based (ask an LLM to rate risk).\n2. PAUSE: if the action is above the threshold, serialize the agent's state (current task, proposed action, reasoning) and suspend execution.\n3. RESUME: when the human approves or modifies the proposed action, restore state and continue — or abort if denied.\n\nWell-designed HITL minimizes interruptions by pre-approving low-risk actions and only escalating genuinely ambiguous or high-stakes ones.",
+        keyPoints: [
+          "Define a risk taxonomy upfront: SAFE (read-only), LOW (reversible write), HIGH (irreversible) — and map every tool to a tier",
+          "Present the human with the agent's reasoning, not just the action — context makes approvals faster and more accurate",
+          "Approval state must be durable (DB-backed, not in-memory) — the human may take minutes or hours to respond",
+          "Give the human three options: Approve, Deny, or Modify — 'Modify' lets them correct parameters without restarting the task",
+          "Log every HITL decision with timestamp, reviewer, original proposal, and final action — this is your audit trail",
+        ],
+        gotchas: [
+          "HITL latency is human latency — don't block a real-time user-facing flow on a human approval that takes 30 minutes",
+          "Alert fatigue is real: if humans approve 99% of requests without reading them, HITL adds friction without safety — tune thresholds so interruptions are rare and meaningful",
+          "Never let the agent infer approval from silence (timeout = approved) — default-deny is the safe default for unreviewed actions",
+        ],
+        code: `import anthropic
+import time
+
+client = anthropic.Anthropic()
+
+PENDING_APPROVALS: dict[str, dict] = {}
+
+TOOL_RISK = {
+    "read_file": "SAFE",
+    "write_file": "LOW",
+    "send_email": "HIGH",
+    "delete_record": "HIGH",
+}
+
+def request_approval(tool_name: str, tool_input: dict, reasoning: str) -> str:
+    approval_id = f"appr_{int(time.time())}"
+    PENDING_APPROVALS[approval_id] = {
+        "tool": tool_name,
+        "input": tool_input,
+        "reasoning": reasoning,
+        "status": "pending",
+    }
+    print(f"\\n[HITL] Approval required (id={approval_id})")
+    print(f"  Tool   : {tool_name}")
+    print(f"  Input  : {tool_input}")
+    print(f"  Reason : {reasoning}")
+    decision = input("  Approve? [y/n]: ").strip().lower()
+
+    status = "approved" if decision == "y" else "denied"
+    PENDING_APPROVALS[approval_id]["status"] = status
+    return status
+
+def safe_execute_tool(tool_name: str, tool_input: dict, reasoning: str) -> str:
+    risk = TOOL_RISK.get(tool_name, "HIGH")
+    if risk == "HIGH":
+        decision = request_approval(tool_name, tool_input, reasoning)
+        if decision != "approved":
+            return f"Action '{tool_name}' was denied by the human reviewer."
+    print(f"[exec] {tool_name}({tool_input})")
+    return f"Tool '{tool_name}' executed successfully."
+
+# Example: agent proposes a high-risk action
+result = safe_execute_tool(
+    "send_email",
+    {"to": "users@example.com", "subject": "Price Change", "body": "..."},
+    "Notifying all users of the 10% price increase effective next month",
+)
+print(result)`,
+      },
+      {
+        id: "memory-patterns",
+        title: "Memory Patterns (Short / Long / Episodic)",
+        language: "Python",
+        summary: "Architect distinct memory stores for in-context working memory, persistent factual knowledge, and episodic records of past interactions",
+        explanation:
+          "LLMs have a single built-in memory: the context window — a short-term, in-context scratchpad that vanishes after the conversation ends. Agentic systems need richer memory architecture to operate across sessions and at scale:\n\n1. SHORT-TERM (In-context): The active conversation messages and tool results within the current context window. Limited to the model's max tokens; managed via truncation or summarization.\n\n2. LONG-TERM SEMANTIC (Vector Store): Factual knowledge encoded as embeddings and stored in a vector database. The agent retrieves relevant facts at the start of each turn via similarity search. Persistent across sessions, scales to millions of documents.\n\n3. EPISODIC (Structured DB): A record of past agent sessions — what was asked, what tools were called, what decisions were made. Useful for 'remember when we last discussed X' queries and for auditing.\n\n4. PROCEDURAL (System Prompt): Stable instructions and behavioral rules the agent always follows. Rarely updated; stored as the system prompt or prepended to every context.\n\nEffective memory management means storing the right thing in the right tier, retrieving only what's relevant, and evicting stale data before it fills the context window.",
+        keyPoints: [
+          "Compress short-term memory with a 'summarize this conversation so far' call before it hits the context limit — the summary replaces the full history",
+          "Write to long-term memory AFTER the session ends (post-processing), not mid-turn — reduces latency and avoids writing transient noise",
+          "Episodic memory entries should include timestamp, task description, outcome, and key entities — not full transcripts",
+          "Retrieval from long-term memory should be time-bounded and relevance-filtered — don't stuff the context with 50 old memories",
+          "Separate user-specific from global memory — a user's preferences shouldn't bleed into another user's context",
+        ],
+        gotchas: [
+          "Memory can encode errors and outdated facts — implement a TTL (time-to-live) or periodic review to prune stale or incorrect entries",
+          "Retrieving too much from long-term memory fills the context window just as badly as an overly long conversation history",
+          "Never store PII or secrets in a shared vector store — memory that crosses user boundaries is a privacy and security vulnerability",
+        ],
+        code: `import anthropic
+import json
+from datetime import datetime
+
+client = anthropic.Anthropic()
+
+SHORT_TERM: list[dict] = []
+LONG_TERM: list[dict] = []
+EPISODIC: list[dict] = []
+
+MAX_CONTEXT_MESSAGES = 20
+
+def compact_short_term() -> None:
+    if len(SHORT_TERM) <= MAX_CONTEXT_MESSAGES:
+        return
+    history_text = json.dumps(SHORT_TERM[:-5], indent=2)
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=256,
+        system="Summarize the following conversation history in 3 bullet points.",
+        messages=[{"role": "user", "content": history_text}],
+    )
+    SHORT_TERM.clear()
+    SHORT_TERM.insert(0, {"role": "system_summary", "content": resp.content[0].text})
+
+def retrieve_long_term(query: str, top_k: int = 3) -> list[str]:
+    return [f["fact"] for f in LONG_TERM[:top_k]]
+
+def save_to_long_term(fact: str) -> None:
+    LONG_TERM.append({"fact": fact, "saved_at": datetime.utcnow().isoformat()})
+
+def save_episode(summary: str) -> None:
+    EPISODIC.append({
+        "summary": summary,
+        "timestamp": datetime.utcnow().isoformat(),
+        "message_count": len(SHORT_TERM),
+    })
+
+def chat(user_message: str) -> str:
+    memories = retrieve_long_term(user_message)
+    memory_ctx = ("Relevant memories:\\n" + "\\n".join(f"- {m}" for m in memories)) if memories else ""
+
+    SHORT_TERM.append({"role": "user", "content": user_message})
+    compact_short_term()
+
+    messages = [m for m in SHORT_TERM if m.get("role") in ("user", "assistant")]
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system=f"You are a helpful assistant with persistent memory.\\n{memory_ctx}",
+        messages=messages,
+    )
+    answer = resp.content[0].text
+    SHORT_TERM.append({"role": "assistant", "content": answer})
+
+    if "remember" in user_message.lower():
+        save_to_long_term(user_message.replace("remember ", ""))
+    return answer
+
+print(chat("Remember that I prefer Python over Go."))
+print(chat("What are my programming language preferences?"))
+save_episode(f"User asked about memory patterns. {len(SHORT_TERM)} messages exchanged.")`,
+      },
+      {
+        id: "reflection",
+        title: "Reflection / Self-Critique",
+        language: "Python",
+        summary: "Have the agent critique its own draft output against explicit criteria, then revise until quality is sufficient — turning a single-shot generation into an iterative refinement loop",
+        explanation:
+          "Reflection (also called Self-Critique or Self-Refinement) exploits a key asymmetry: LLMs are often better at evaluating text than generating it on the first try. The pattern runs a GENERATE → CRITIQUE → REVISE loop:\n\n1. GENERATE: produce an initial draft (code, an essay, a plan, a tool call).\n2. CRITIQUE: pass the draft plus explicit rubric criteria to a critic (the same model or a separate one) and ask it to identify specific flaws, missing elements, or improvements.\n3. REVISE: pass the original draft AND the critique to the model and ask it to produce an improved version.\n4. GATE: stop when the critic scores the output above a threshold, or after a maximum number of iterations.\n\nThe critic should evaluate against objective, checkable criteria — not 'is this good?' but 'does it handle the null case?', 'is the Big O complexity correct?', 'does it answer all parts of the question?'.",
+        keyPoints: [
+          "Separate generator and critic roles — use two different system prompts or model instances to avoid the critic being too lenient on its own output",
+          "Criteria must be specific and checkable: 'handles edge cases', 'under 100 lines', 'cites sources' — not 'high quality' or 'accurate'",
+          "Pass the full previous draft (not just the critique) to the revision step — the model needs context to improve, not just a list of complaints",
+          "A stopping criterion based on a numeric score from the critic is more reliable than 'keep going until it seems good'",
+          "2–3 refinement rounds typically capture most of the improvement; beyond that, returns diminish and costs grow",
+        ],
+        gotchas: [
+          "A lenient critic produces flattering critiques that don't drive improvement — use adversarial phrasing: 'find every flaw, assume a skeptical reviewer'",
+          "The revision loop can diverge — a model that over-corrects to one critique may introduce new errors; track all versions and pick the best-scored one",
+          "Self-critique is not the same as factual grounding — the model can consistently critique and revise while still hallucinating facts; pair with RAG for factual accuracy",
+        ],
+        code: `import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+CRITERIA = """
+Evaluate the code against these criteria (score each 1-5):
+1. Correctness — does it solve the problem as stated?
+2. Edge cases — does it handle None, empty input, negative numbers?
+3. Readability — clear variable names, no unnecessary complexity?
+4. Efficiency — avoids obvious O(n²) loops where O(n) would work?
+
+Return JSON: {"scores": {"correctness": N, "edge_cases": N, "readability": N, "efficiency": N}, "issues": ["...", "..."], "overall": N}
+"""
+
+def generate(task: str) -> str:
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system="You are an expert Python developer. Write clean, correct code.",
+        messages=[{"role": "user", "content": task}],
+    )
+    return resp.content[0].text
+
+def critique(code: str) -> dict:
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=256,
+        system=CRITERIA,
+        messages=[{"role": "user", "content": f"Code to review:\\n{code}"}],
+    )
+    text = resp.content[0].text
+    start = text.find("{")
+    return json.loads(text[start:text.rfind("}") + 1])
+
+def revise(original_code: str, issues: list[str]) -> str:
+    issue_list = "\\n".join(f"- {i}" for i in issues)
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system="You are an expert Python developer. Fix the identified issues in the code.",
+        messages=[{
+            "role": "user",
+            "content": f"Original code:\\n{original_code}\\n\\nIssues to fix:\\n{issue_list}",
+        }],
+    )
+    return resp.content[0].text
+
+def reflection_loop(task: str, min_score: float = 4.0, max_rounds: int = 3) -> str:
+    draft = generate(task)
+    print("[round 0] Generated initial draft")
+
+    for round_num in range(1, max_rounds + 1):
+        review = critique(draft)
+        overall = review.get("overall", 0)
+        print(f"[round {round_num}] Score: {overall}/5 | Issues: {review.get('issues', [])}")
+
+        if overall >= min_score:
+            print(f"[done] Quality threshold reached at round {round_num}")
+            return draft
+
+        draft = revise(draft, review.get("issues", []))
+
+    print("[done] Max rounds reached")
+    return draft
+
+final_code = reflection_loop(
+    "Write a Python function that finds the two numbers in a list that sum to a target value."
+)
+print(final_code)`,
+      },
+      {
+        id: "parallel-fan-out",
+        title: "Parallel Agent Fan-out",
+        language: "Python",
+        summary: "Dispatch independent subtasks to multiple agent instances concurrently and aggregate their results, trading coordination overhead for dramatic wall-clock speedup",
+        explanation:
+          "Parallel Agent Fan-out is the pattern for extracting concurrency from agentic workloads where subtasks are independent. Instead of executing N tasks serially (total time = N × task_time), you dispatch all N at once and wait for all to complete (total time ≈ max(task_times) + coordination overhead).\n\nThe pattern has three phases:\n1. DECOMPOSE: split the workload into independent units — pages to summarize, URLs to scrape, code files to review, test cases to run.\n2. FAN-OUT: dispatch all units concurrently using asyncio or a task queue.\n3. AGGREGATE: collect results and synthesize — average scores, merge summaries, rank candidates.\n\nIndependence is the key invariant: tasks that depend on each other's outputs can't be parallelized without a DAG scheduler. Rate limits are the primary constraint in practice — a semaphore limiting concurrency to the API's token budget avoids cascading 429 errors.",
+        keyPoints: [
+          "asyncio.gather() is the idiomatic Python primitive — it runs all coroutines concurrently within a single thread using cooperative scheduling",
+          "A semaphore limits concurrency: asyncio.Semaphore(N) ensures at most N concurrent LLM calls regardless of task count",
+          "Return results with their input identity (index or key) so out-of-order completions can be correctly reassembled",
+          "Fan-out amplifies cost linearly — 50 parallel calls × 2K tokens each = 100K tokens per orchestration cycle; budget accordingly",
+          "Use a cheaper/faster model (Haiku) for leaf tasks and the smarter model (Sonnet) only for aggregation where quality matters most",
+        ],
+        gotchas: [
+          "asyncio.gather() with return_exceptions=False will cancel the entire batch if one task raises — use return_exceptions=True and handle errors per-result",
+          "Shared mutable state across coroutines causes race conditions even in asyncio's single-threaded model — keep each task's data isolated",
+          "Fan-out hides tail latency: one slow task blocks the entire aggregation step — set per-task timeouts with asyncio.wait_for()",
+        ],
+        code: `import anthropic
+import asyncio
+from typing import Any
+
+client = anthropic.Anthropic()
+
+CONCURRENCY = asyncio.Semaphore(5)  # cap to avoid rate-limit 429s
+
+async def analyze_document(doc_id: str, content: str, task: str) -> dict[str, Any]:
+    async with CONCURRENCY:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=256,
+                system=f"You are a document analyst. {task}. Reply in 2-3 sentences.",
+                messages=[{"role": "user", "content": content}],
+            ),
+        )
+        return {"doc_id": doc_id, "result": response.content[0].text}
+
+async def fan_out(documents: list[dict], task: str) -> list[dict]:
+    coros = [analyze_document(d["id"], d["content"], task) for d in documents]
+    results = await asyncio.gather(*coros, return_exceptions=True)
+
+    successes = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            print(f"[warn] {documents[i]['id']} failed: {result}")
+        else:
+            successes.append(result)
+    return successes
+
+async def aggregate(results: list[dict]) -> str:
+    combined = "\\n\\n".join(f"[{r['doc_id']}] {r['result']}" for r in results)
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(
+        None,
+        lambda: client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            system="Synthesize the following document analyses into a single executive summary.",
+            messages=[{"role": "user", "content": combined}],
+        ),
+    )
+    return response.content[0].text
+
+async def main() -> None:
+    docs = [
+        {"id": "doc1", "content": "Q1 revenue grew 23% YoY driven by enterprise sales."},
+        {"id": "doc2", "content": "Churn rate increased to 4.2% due to pricing changes."},
+        {"id": "doc3", "content": "New product launch exceeded targets by 40% in March."},
+        {"id": "doc4", "content": "Cloud infrastructure costs reduced 18% via spot instances."},
+    ]
+    print(f"Processing {len(docs)} documents in parallel...")
+    results = await fan_out(docs, "Identify the key business metric mentioned")
+    summary = await aggregate(results)
+    print(summary)
+
+asyncio.run(main())`,
+      },
+      {
+        id: "prompt-chaining",
+        title: "Prompt Chaining",
+        language: "Python",
+        summary: "Break a complex task into a sequence of focused LLM calls where each step's output feeds the next, trading flexibility for predictability and debuggability",
+        explanation:
+          "Prompt Chaining decomposes a complex multi-step task into a pipeline of smaller, focused LLM calls. Each step has a single, well-defined job: extract entities, translate a document, rewrite in a new tone, validate a schema. The output of step N is the input to step N+1.\n\nWhy chain instead of doing everything in one prompt? Three reasons:\n1. QUALITY: a model focused on one sub-task at a time makes fewer errors than one juggling five at once. Cognitive load for LLMs is real.\n2. DEBUGGABILITY: when a pipeline fails, you can inspect each intermediate output and isolate exactly which step went wrong — impossible with a monolithic prompt.\n3. CONDITIONAL BRANCHING: between steps you can run a cheap classifier to decide which chain to follow next, inject external data (RAG), or apply business logic that would be awkward inside a prompt.\n\nChains work best when the steps are deterministic enough to be serialized — i.e., step 2 cannot start until step 1 is correct. When steps are independent, prefer the Parallel Fan-out pattern instead.",
+        keyPoints: [
+          "Each step should do exactly one thing — the single-responsibility principle applied to LLM calls",
+          "Insert a validation gate between steps: if step N produces malformed output, catch it early rather than propagating garbage through the rest of the chain",
+          "Pass only the minimum context each step needs — avoid forwarding the entire prior conversation to every node; it wastes tokens and adds noise",
+          "Name each step in logs with its index and purpose so traces are human-readable when debugging failures",
+          "A cheap gating call (Haiku) can act as a router after step 1, choosing which chain branch to follow, before invoking the expensive steps",
+        ],
+        gotchas: [
+          "Error propagation: one bad intermediate output corrupts all downstream steps — validate at each node boundary, not just at the end",
+          "Latency adds up: a 5-step chain with 1s per step is 5s minimum — parallelize independent branches, and time-box expensive steps",
+          "Over-chaining: if the task fits cleanly in one prompt with structured output, a chain adds overhead and failure modes with no quality gain",
+        ],
+        code: `import anthropic
+
+client = anthropic.Anthropic()
+
+def step(system: str, user: str, model: str = "claude-haiku-4-5-20251001") -> str:
+    resp = client.messages.create(
+        model=model,
+        max_tokens=512,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return resp.content[0].text.strip()
+
+def validate(text: str, requirement: str) -> None:
+    result = step(
+        "You are a strict validator. Reply only 'PASS' or 'FAIL: <reason>'.",
+        f"Requirement: {requirement}\\nText to validate:\\n{text}",
+    )
+    if not result.startswith("PASS"):
+        raise ValueError(f"Validation failed: {result}")
+
+def translate_pipeline(raw_text: str, target_lang: str) -> str:
+    # Step 1 — detect language
+    detected = step(
+        "Detect the language of the text. Reply with just the language name.",
+        raw_text,
+    )
+    print(f"[step 1] detected language: {detected}")
+
+    # Step 2 — translate
+    translated = step(
+        f"Translate the following text to {target_lang}. Return only the translation.",
+        raw_text,
+        model="claude-sonnet-4-6",
+    )
+    print(f"[step 2] translated: {translated[:80]}...")
+
+    # Step 3 — validate translation is non-empty and in target language
+    validate(translated, f"Text must be written in {target_lang}")
+
+    # Step 4 — make it formal
+    formal = step(
+        f"Rewrite the following {target_lang} text in a formal, professional tone.",
+        translated,
+    )
+    print(f"[step 4] formalized: {formal[:80]}...")
+
+    return formal
+
+result = translate_pipeline(
+    "hey! our servers went down last night, super bad outage lol",
+    "French",
+)
+print("\\nFinal output:", result)`,
+      },
+      {
+        id: "routing",
+        title: "Routing / Intent-Based Dispatch",
+        language: "Python",
+        summary: "Classify the user's intent with a fast, cheap model call and route to the right specialized agent or prompt, giving each handler full focus on its narrow domain",
+        explanation:
+          "Routing solves the problem of applying one-size-fits-all prompts to radically different user requests. A customer message might be a billing question, a bug report, a feature request, or abuse. Forcing the same generalist agent to handle all of them yields mediocre results across the board.\n\nThe pattern has two parts:\n1. CLASSIFIER: a fast, cheap model call (or even a regex/embedding lookup) maps the input to a route label. The classifier's prompt is narrow and its output is structured (a JSON enum).\n2. HANDLERS: a registry of specialized agents, each with a system prompt, tool set, and context perfectly tuned for its route. The router picks the right handler and delegates.\n\nThe classifier should be intentionally simple — its only job is to correctly label intent. Sophistication belongs in the handlers. A misclassification lands the user in the wrong handler, so route labels should be mutually exclusive and exhaustive, with an explicit 'unknown' fallback.\n\nRouting pairs naturally with Orchestrator-Subagent: the router is the orchestrator's first step, and the handlers are the subagents.",
+        keyPoints: [
+          "Classifier output should be a closed enum of labels, not free text — parse JSON to get a typed route label with zero ambiguity",
+          "Use a cheap, fast model (Haiku) for classification and reserve expensive models for the specialized handlers",
+          "Always include an 'unknown' or 'general' route — never drop a request because it didn't match a known category",
+          "Log the classifier's confidence alongside the label — low-confidence classifications are candidates for human review",
+          "Route labels should be stable strings in code, not natural language — they're enum values that map to handler functions",
+        ],
+        gotchas: [
+          "Avoid 'galaxy-brained' classification prompts that try to capture all edge cases — keep the classifier simple and let handlers deal with ambiguity within their domain",
+          "A misconfigured classifier silently sends all traffic to the wrong handler — add observability: log route distribution and alert on unexpected shifts",
+          "Don't route purely on keywords — 'cancel' can mean cancel a subscription OR cancel an in-progress action; the classifier needs surrounding context",
+        ],
+        code: `import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+# ── Route definitions ────────────────────────────────────────────────────────
+ROUTES = {
+    "billing": {
+        "system": "You are a billing support specialist. Help with invoices, payments, and subscription questions.",
+        "examples": ["invoice", "charge", "refund", "subscription"],
+    },
+    "technical": {
+        "system": "You are a technical support engineer. Diagnose bugs, errors, and integration issues.",
+        "examples": ["error", "crash", "API", "not working"],
+    },
+    "sales": {
+        "system": "You are a sales advisor. Explain pricing, features, and enterprise options.",
+        "examples": ["pricing", "upgrade", "enterprise", "plan"],
+    },
+    "general": {
+        "system": "You are a helpful customer support agent.",
+        "examples": [],
+    },
+}
+
+def classify(user_message: str) -> str:
+    route_labels = list(ROUTES.keys())
+    resp = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=64,
+        system=(
+            f"Classify the user message into exactly one of these categories: {route_labels}.\\n"
+            'Return JSON: {"route": "<label>", "confidence": 0.0-1.0}'
+        ),
+        messages=[{"role": "user", "content": user_message}],
+    )
+    data = json.loads(resp.content[0].text)
+    route = data.get("route", "general")
+    confidence = data.get("confidence", 1.0)
+    print(f"[router] route={route} confidence={confidence:.2f}")
+    return route if confidence >= 0.6 else "general"
+
+def handle(route: str, user_message: str) -> str:
+    handler = ROUTES.get(route, ROUTES["general"])
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system=handler["system"],
+        messages=[{"role": "user", "content": user_message}],
+    )
+    return resp.content[0].text
+
+def dispatch(user_message: str) -> str:
+    route = classify(user_message)
+    return handle(route, user_message)
+
+# Test with different intents
+queries = [
+    "I was charged twice for my subscription last month",
+    "The API returns a 500 error when I send a POST request",
+    "What's the difference between the Pro and Enterprise plans?",
+]
+for q in queries:
+    print(f"\\nQ: {q}")
+    print(f"A: {dispatch(q)[:120]}...")`,
+      },
+      {
+        id: "structured-output",
+        title: "Structured Output (JSON Schema Extraction)",
+        language: "Python",
+        summary: "Constrain the model to produce typed, machine-parseable JSON by providing a schema — eliminating regex hacks and making LLM output a reliable API boundary",
+        explanation:
+          "Structured Output treats the LLM as a data extraction and transformation engine, not a prose generator. Instead of parsing free text with fragile regex, you provide an explicit JSON Schema and instruct the model to populate it. The model's output is valid JSON that your code can deserialize directly into typed objects.\n\nThis pattern is the foundation of many agentic pipelines: it's how you extract entities from documents, convert natural language commands into API parameters, parse interview transcripts into structured records, and build classification layers that downstream code can act on reliably.\n\nThree techniques, in order of reliability:\n1. PROMPT-ONLY: instruct the model to return JSON and provide the schema in the system prompt. Works well for simple schemas but can drift on complex ones.\n2. TOOL USE TRICK: define the schema as a tool's input_schema and use tool_choice: {type: 'tool', name: '...'} to force the model to always 'call' it. The model fills in the tool arguments — which are always JSON-schema-validated.\n3. STRUCTURED OUTPUTS API: newer providers expose a json_schema response format that hard-constrains the output token by token. Zero escape rate, but requires provider support.",
+        keyPoints: [
+          "The tool-use trick is the most reliable technique available today: defining the output schema as a tool's input_schema and forcing the call eliminates free-text leakage",
+          "Always parse with json.loads() in a try/except and fall back to a retry with a stronger instruction — even constrained models can emit preamble text on the first token",
+          "Keep schemas flat where possible — deeply nested required fields create more room for the model to miss a field or produce null where a value is expected",
+          "Use 'enum' constraints liberally for categorical fields — they dramatically reduce classification errors vs open string fields",
+          "Validate the parsed object against your schema with a library (jsonschema, pydantic) — parsing JSON successfully is not the same as passing schema validation",
+        ],
+        gotchas: [
+          "Large schemas with many optional fields tempt the model to omit them silently — mark the critical fields required and test with adversarial inputs",
+          "The model may wrap JSON in a markdown code block (```json ... ```) — strip it before parsing or explicitly forbid it in the system prompt",
+          "Structured output is a transport format, not a correctness guarantee — the model can correctly format a JSON field that contains a hallucinated value",
+        ],
+        code: `import anthropic
+import json
+from typing import Any
+
+client = anthropic.Anthropic()
+
+# ── Schema: what we want to extract from a job posting ──────────────────────
+EXTRACT_TOOL = {
+    "name": "extract_job_posting",
+    "description": "Extract structured data from a job posting",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "job_title": {"type": "string"},
+            "company": {"type": "string"},
+            "location": {"type": "string"},
+            "employment_type": {
+                "type": "string",
+                "enum": ["full-time", "part-time", "contract", "internship"],
+            },
+            "experience_years_min": {"type": "integer"},
+            "skills_required": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "salary_range": {
+                "type": "object",
+                "properties": {
+                    "min": {"type": "number"},
+                    "max": {"type": "number"},
+                    "currency": {"type": "string"},
+                },
+                "required": ["currency"],
+            },
+            "remote_allowed": {"type": "boolean"},
+        },
+        "required": ["job_title", "company", "employment_type", "skills_required"],
+    },
+}
+
+def extract(text: str) -> dict[str, Any]:
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        tools=[EXTRACT_TOOL],
+        tool_choice={"type": "tool", "name": "extract_job_posting"},
+        messages=[{"role": "user", "content": f"Extract from this job posting:\\n\\n{text}"}],
+    )
+    for block in resp.content:
+        if block.type == "tool_use" and block.name == "extract_job_posting":
+            return block.input
+    raise ValueError("Model did not call the extraction tool")
+
+job_posting = """
+Senior Python Engineer — Stripe (Remote, US)
+We're looking for a senior engineer with 5+ years of experience in Python,
+distributed systems, and PostgreSQL. Experience with Kafka and Go is a plus.
+Compensation: $180,000–$230,000 USD. Full-time position.
+"""
+
+result = extract(job_posting)
+print(json.dumps(result, indent=2))
+# {
+#   "job_title": "Senior Python Engineer",
+#   "company": "Stripe",
+#   "location": "Remote, US",
+#   "employment_type": "full-time",
+#   "experience_years_min": 5,
+#   "skills_required": ["Python", "distributed systems", "PostgreSQL", "Kafka", "Go"],
+#   "salary_range": {"min": 180000, "max": 230000, "currency": "USD"},
+#   "remote_allowed": true
+# }`,
+      },
+      {
+        id: "plan-and-execute",
+        title: "Plan-and-Execute",
+        language: "Python",
+        summary: "Have the agent generate an explicit multi-step plan before taking any action, then execute each step with full awareness of the overall goal",
+        explanation:
+          "Plan-and-Execute separates PLANNING (deciding what to do) from EXECUTION (actually doing it). This is especially valuable for long-horizon tasks where naive ReAct-style agents get lost mid-way because they made a wrong turn in step 2 and don't realize it until step 8.\n\nThe pattern has three phases:\n1. PLAN: given the goal, the agent produces a numbered, concrete plan — 'Step 1: search for X. Step 2: filter results by Y. Step 3: write a report using Z.' This plan is visible, auditable, and can be reviewed or modified before any actions are taken.\n2. EXECUTE: steps are executed one at a time. After each step, the agent may update its plan (re-planning) based on new information. Crucially, every execution step knows the full plan and where it stands in it — no local myopia.\n3. SYNTHESIZE: once all steps are done, a final synthesis call assembles the results into the requested output.\n\nPlan-and-Execute pairs naturally with Human-in-the-Loop: show the user the plan after phase 1 and get approval before proceeding to phase 2. This way expensive tool calls only happen after the human agrees the approach is correct.",
+        keyPoints: [
+          "Generate the plan as structured JSON (array of step objects) so your executor loop can iterate over it programmatically",
+          "Each plan step should name the tool it will call and the expected output — this makes the plan both human-readable and machine-executable",
+          "Support re-planning: after each execution step, optionally run a check — 'does the result change what we should do next?' — and update remaining steps",
+          "Store the plan alongside execution results in your logs — it's the clearest audit trail of why the agent did what it did",
+          "Gate on plan approval before execution in high-stakes contexts — pair with HITL after the planning phase",
+        ],
+        gotchas: [
+          "Plans can be overconfident: the model generates a plan assuming all steps will succeed — build in 'if step N fails, do Y' contingency steps for critical paths",
+          "Over-planning paralysis: for simple 1–2 step tasks, the planning overhead costs more than it saves — use a heuristic to skip planning for low-complexity inputs",
+          "Re-planning on every step can cause drift — the agent may talk itself into a completely different approach mid-task; cap re-planning to critical failure conditions only",
+        ],
+        code: `import anthropic
+import json
+
+client = anthropic.Anthropic()
+
+TOOLS = [
+    {
+        "name": "web_search",
+        "description": "Search the web",
+        "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    },
+    {
+        "name": "read_url",
+        "description": "Fetch the content of a URL",
+        "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+    },
+]
+
+def run_tool(name: str, inputs: dict) -> str:
+    # Stubs — replace with real implementations
+    if name == "web_search":
+        return f"Search results for '{inputs['query']}': [result1, result2, result3]"
+    if name == "read_url":
+        return f"Content of {inputs['url']}: [page content here]"
+    return "unknown tool"
+
+def plan(goal: str) -> list[dict]:
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system=(
+            "You are a planner. Given a goal, produce a concrete numbered plan. "
+            'Return JSON: {"steps": [{"id": 1, "description": "...", "tool": "...", "tool_input": {...}}]}'
+        ),
+        messages=[{"role": "user", "content": f"Goal: {goal}"}],
+    )
+    data = json.loads(resp.content[0].text)
+    return data["steps"]
+
+def execute_step(step: dict, context: str) -> str:
+    tool_name = step.get("tool")
+    tool_input = step.get("tool_input", {})
+
+    if tool_name and tool_name in {t["name"] for t in TOOLS}:
+        print(f"  [exec] {tool_name}({tool_input})")
+        return run_tool(tool_name, tool_input)
+
+    # No tool — pure reasoning step
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=256,
+        system="Complete this step using the provided context.",
+        messages=[{"role": "user", "content": f"Step: {step['description']}\\n\\nContext so far:\\n{context}"}],
+    )
+    return resp.content[0].text
+
+def synthesize(goal: str, step_results: list[dict]) -> str:
+    results_text = "\\n".join(
+        f"Step {r['id']}: {r['description']}\\nResult: {r['result']}"
+        for r in step_results
+    )
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system="Synthesize the step results into a final answer for the goal.",
+        messages=[{"role": "user", "content": f"Goal: {goal}\\n\\n{results_text}"}],
+    )
+    return resp.content[0].text
+
+def plan_and_execute(goal: str) -> str:
+    print(f"[planning] Goal: {goal}")
+    steps = plan(goal)
+    print(f"[plan] {len(steps)} steps generated")
+    for s in steps:
+        print(f"  {s['id']}. {s['description']}")
+
+    context = ""
+    step_results = []
+    for step in steps:
+        print(f"\\n[executing step {step['id']}] {step['description']}")
+        result = execute_step(step, context)
+        step_results.append({**step, "result": result})
+        context += f"\\nStep {step['id']} result: {result}"
+
+    print("\\n[synthesizing]")
+    return synthesize(goal, step_results)
+
+answer = plan_and_execute("Research the top 3 Python async frameworks and compare their performance")
+print("\\nFinal Answer:", answer)`,
+      },
+      {
+        id: "multi-agent-debate",
+        title: "Multi-Agent Debate",
+        language: "Python",
+        summary: "Run multiple independent agents with opposing or diverse perspectives, then have them critique each other's answers before a judge synthesizes the final verdict",
+        explanation:
+          "Multi-Agent Debate (also called LLM-as-a-Judge or Society of Mind) exploits the fact that LLMs are more accurate at evaluating claims than generating them from scratch, and that a model assigned a specific role (skeptic, advocate, domain expert) reasons very differently than a neutral generalist.\n\nThe pattern runs in three rounds:\n1. INDEPENDENT GENERATION: multiple agents (2–4) each independently answer the same question or propose a solution. They are isolated from each other to prevent groupthink. Agents can be differentiated by role, persona, or system prompt.\n2. CROSS-CRITIQUE: each agent reads the others' answers and writes a critique — pointing out logical flaws, missing evidence, or unstated assumptions. This round surfaces disagreements.\n3. JUDGMENT: a judge agent (typically the most capable model) reads all original answers and critiques, weighs the arguments, and synthesizes a final, well-reasoned answer.\n\nDebate is especially valuable for high-stakes decisions (code security reviews, medical triage, legal document analysis) where a single model's blind spots can be costly.",
+        keyPoints: [
+          "Assign agents distinct roles (Advocate, Skeptic, Domain Expert, Devil's Advocate) — role differentiation produces genuinely different perspectives, not just paraphrases",
+          "Isolation in round 1 is critical — if agents see each other's answers before writing their own, they anchor on the first response (groupthink)",
+          "The judge prompt should explicitly instruct: 'weigh the arguments, do not simply average them' — otherwise the judge produces a mushy consensus instead of a reasoned verdict",
+          "2–3 agents is usually optimal; beyond 4, the critique round's context grows large and the marginal diversity drops",
+          "Debate is expensive (N model calls + N critique calls + 1 synthesis call) — reserve it for high-stakes, low-frequency decisions",
+        ],
+        gotchas: [
+          "Sycophantic judges: the judge may defer to whichever agent sounds most confident rather than which has the strongest argument — use a rubric that forces evidence-based scoring",
+          "Role collapse: agents with subtly different system prompts sometimes converge on nearly identical answers — test that your roles actually produce different outputs before relying on diversity",
+          "Don't use debate for factual lookups — it adds cost with no benefit when the answer is objectively verifiable; reserve it for complex reasoning, trade-off analysis, or ambiguous decisions",
+        ],
+        code: `import anthropic
+
+client = anthropic.Anthropic()
+
+AGENTS = [
+    {
+        "name": "Advocate",
+        "system": "You are an optimistic advocate. Present the strongest case FOR the proposed solution. Identify benefits, opportunities, and reasons it will succeed.",
+    },
+    {
+        "name": "Skeptic",
+        "system": "You are a rigorous skeptic. Identify weaknesses, risks, edge cases, and reasons the proposed solution might fail. Be specific.",
+    },
+    {
+        "name": "Pragmatist",
+        "system": "You are a pragmatic engineer. Evaluate feasibility, implementation complexity, and real-world constraints. Focus on what it takes to actually ship this.",
+    },
+]
+
+JUDGE_SYSTEM = """You are an impartial technical judge.
+You will receive a question, multiple agent answers, and cross-critiques.
+Your job: synthesize a final verdict that:
+1. Identifies which arguments are well-supported vs weak
+2. Resolves genuine disagreements with evidence-based reasoning
+3. Produces a nuanced, balanced final recommendation
+Do NOT simply average the opinions — reason through them."""
+
+def generate_position(agent: dict, question: str) -> str:
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=512,
+        system=agent["system"],
+        messages=[{"role": "user", "content": question}],
+    )
+    return resp.content[0].text
+
+def critique(agent: dict, question: str, others_answers: list[tuple[str, str]]) -> str:
+    others_text = "\\n\\n".join(
+        f"[{name}]:\\n{answer}" for name, answer in others_answers
+    )
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=256,
+        system=agent["system"] + "\\nNow critically evaluate the other agents' answers. Point out specific flaws or merits.",
+        messages=[{
+            "role": "user",
+            "content": f"Question: {question}\\n\\nOther agents' answers:\\n{others_text}",
+        }],
+    )
+    return resp.content[0].text
+
+def judge(question: str, positions: list[tuple[str, str]], critiques: list[tuple[str, str]]) -> str:
+    debate_text = "\\n\\n".join(
+        f"[{name} — Position]:\\n{pos}" for name, pos in positions
+    )
+    critique_text = "\\n\\n".join(
+        f"[{name} — Critique]:\\n{crit}" for name, crit in critiques
+    )
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=768,
+        system=JUDGE_SYSTEM,
+        messages=[{
+            "role": "user",
+            "content": f"Question: {question}\\n\\n--- Positions ---\\n{debate_text}\\n\\n--- Critiques ---\\n{critique_text}",
+        }],
+    )
+    return resp.content[0].text
+
+def debate(question: str) -> str:
+    print(f"[round 1] Generating independent positions...")
+    positions = []
+    for agent in AGENTS:
+        pos = generate_position(agent, question)
+        positions.append((agent["name"], pos))
+        print(f"  {agent['name']}: {pos[:80]}...")
+
+    print("\\n[round 2] Cross-critiques...")
+    critiques = []
+    for i, agent in enumerate(AGENTS):
+        others = [(n, a) for j, (n, a) in enumerate(positions) if j != i]
+        crit = critique(agent, question, others)
+        critiques.append((agent["name"], crit))
+        print(f"  {agent['name']} critique: {crit[:80]}...")
+
+    print("\\n[round 3] Judge synthesizing verdict...")
+    return judge(question, positions, critiques)
+
+verdict = debate(
+    "Should we migrate our monolith to microservices this quarter?"
+)
+print("\\nFinal Verdict:")
+print(verdict)`,
+      },
+    ],
+  },
 ];

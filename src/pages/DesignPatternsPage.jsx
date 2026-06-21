@@ -127,10 +127,12 @@ export default function DesignPatternsPage() {
         )}
 
         {/* Code */}
-        <section className="gb-section">
-          <h2 className="gb-section-title">Go Code</h2>
-          <CodeBlock code={topic.code} label="Go" />
-        </section>
+        {topic.code && (
+          <section className="gb-section">
+            <h2 className="gb-section-title">{topic.language ? `${topic.language} Example` : "Go Code"}</h2>
+            <CodeBlock code={topic.code} label={topic.language || "Go"} />
+          </section>
+        )}
 
         {/* Prev / Next navigation */}
         <div className="gb-nav-footer">
