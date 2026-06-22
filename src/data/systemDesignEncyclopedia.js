@@ -1140,8 +1140,78 @@ export const SD_CATEGORIES = [
     ],
   },
   {
-    id: "research",
+    id: "scale-case-studies",
     num: "15",
+    title: "System Design at Scale",
+    color: "#f97316",
+    topics: [
+      {
+        id: "webhook-100m",
+        name: "Webhook System for 100M Users",
+        level: "adv",
+        desc: "Event-driven HTTP callbacks at massive scale — registration, fanout, reliable delivery, retries, HMAC security, 84K deliveries/sec",
+        brief: {
+          what: "A webhook delivery platform lets 100M users register HTTPS endpoints. When events occur (payment.success, order.shipped), the system fans out HTTP POST payloads to each subscriber's URL — reliably, at scale, with retries, without one slow customer blocking others.",
+          why: "Webhooks are the backbone of Stripe, GitHub, Shopify, Twilio integrations. At 100M users scale, naive approaches (synchronous HTTP calls, single delivery queue) collapse. You need decoupled ingestion, per-endpoint isolation, and exponential-backoff retries.",
+          how: `Scale envelope: 100M users × 3 endpoints avg = 300M registrations. If 1% of users trigger an event per minute → 1M events/min → 16.7K events/sec. With avg 3 subscribers per event → 50K webhook HTTP calls/sec.
+
+Components:
+1. Registration Service — REST API to CRUD webhook endpoints. Stores (user_id, event_type, url, secret, status) in Postgres. Cached in Redis (TTL 60s) for fast lookup during fanout.
+
+2. Event Ingestion — Services publish to Kafka topic per event type (payment.success, order.shipped). Partitioned by user_id for ordering guarantees per user. Kafka buffers spikes (Black Friday 10x traffic).
+
+3. Fanout Worker — Kafka consumer group. For each event: look up subscribers from Redis/DB, write one delivery task per subscriber into a per-endpoint Kafka topic (or Redis queue). Fanout is async — ingestion returns instantly.
+
+4. Delivery Workers — Dedicated worker pool per endpoint or per tenant tier. Workers dequeue tasks, make HTTP POST with HMAC-SHA256 Signature header, record result. Endpoint isolation: one slow customer's endpoint never blocks others.
+
+5. Retry Scheduler — On non-2xx or timeout: exponential backoff (1s, 5s, 30s, 5m, 30m, 2h, 12h, 72h). After 72h / 8 attempts: move to Dead Letter Queue. DLQ stored in Cassandra for manual inspection.
+
+6. Delivery Log — Cassandra (write-heavy, time-series). Schema: (user_id, event_id, attempt_number, timestamp, http_status, response_time_ms, next_retry_at). Retention: 30 days. Enables the dashboard users see.
+
+7. Security — HMAC-SHA256: signature = HMAC(secret, timestamp + "." + body). Header: X-Webhook-Signature: sha256=<hex>. Consumer verifies before processing. Timestamp prevents replay attacks (reject if >5 min old).
+
+DB Schema (Postgres):
+  webhook_endpoints(id, user_id, event_type, url, secret_hash, active, created_at)
+  webhook_events(id, event_type, payload_json, created_at)  — partitioned by month
+  webhook_deliveries(id, event_id, endpoint_id, status, attempts, next_retry_at, last_http_status)`,
+          tradeoffs: `Fanout amplification: 1 event → N deliveries. 1M events × 100 subscribers = 100M HTTP calls. Mitigate: cap max endpoints per event type per user (e.g., 10). Use tiered worker pools — free tier shares pool, paid tier gets dedicated workers.
+
+Slow endpoint problem: one customer's endpoint times out at 30s. Without isolation, this thread-starves the delivery worker. Solution: per-endpoint queue + circuit breaker (after 5 consecutive failures, stop delivery for 10 min, alert customer).
+
+Ordering: Kafka partitioning by user_id gives per-user ordering. But retries break ordering — a failed event retries after 30s while later events already delivered. Webhooks should be idempotent; document this for consumers.
+
+At-least-once delivery: Kafka consumer commits offset only after delivery task is written. Delivery worker deduplicates by (event_id, endpoint_id) in Redis with TTL. Postgres unique constraint as backup.
+
+Data volume: 50K deliveries/sec × 500 bytes avg payload = 25 MB/s. Cassandra delivery log at 30-day retention: 25 MB/s × 86400 × 30 = ~64 TB/month. Use TTL columns and compaction.`,
+          interview: `Frame it in three phases: Registration → Ingestion/Fanout → Reliable Delivery.
+
+Key numbers to cite: 100M users, 300M registrations, 50K deliveries/sec, 72-hour retry window with exponential backoff.
+
+Always cover:
+1. "We separate event ingestion (Kafka) from delivery to absorb spikes."
+2. "Per-endpoint worker isolation prevents one slow customer from blocking others."
+3. "Idempotency key = (event_id, endpoint_id) — Kafka at-least-once means we may redeliver."
+4. "HMAC-SHA256 signature + timestamp replay prevention."
+5. "Dead Letter Queue after max retries — customer can inspect and replay."
+6. "Circuit breaker: after N consecutive failures to an endpoint, pause and alert customer."
+
+Anti-patterns to avoid: synchronous HTTP calls in the hot path, single shared delivery thread pool, no retry mechanism, no signature verification.
+
+Monitoring: track delivery success rate per endpoint, p99 delivery latency, retry queue depth, DLQ growth rate. Alert if success rate < 95% for any endpoint.`,
+          example: `Stripe webhook architecture (public): events written to internal event bus, fanout to per-account delivery queues, dedicated workers per account tier. Retries up to 3 days. Dashboard shows every delivery attempt. HMAC-SHA256 on every request.
+
+GitHub webhooks: per-repo webhook config, delivery log in UI, supports re-delivery of any past event. Auto-disables endpoints that fail for 7+ consecutive days.
+
+Shopify: 100+ event types, merchants register via API or Admin UI. Each webhook delivery includes X-Shopify-Hmac-SHA256 header. Max 19K webhook subscriptions per shop. Retries for 5 days.
+
+Your design at 100M scale vs. Stripe (few million merchants): key difference is multi-tenancy isolation — giant pool of workers with per-endpoint circuit breakers rather than per-merchant dedicated workers (too expensive at 100M).`,
+        },
+      },
+    ],
+  },
+  {
+    id: "research",
+    num: "16",
     title: "Research & PhD-Level Topics",
     color: "#10b981",
     topics: [
