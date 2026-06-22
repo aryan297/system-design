@@ -10,12 +10,14 @@ import LayersPage from "./pages/LayersPage";
 import EncyclopediaPage from "./pages/EncyclopediaPage";
 import MachineCodingPage from "./pages/MachineCodingPage";
 import GoBasicsPage from "./pages/GoBasicsPage";
+import GoMonorepoPage from "./pages/GoMonorepoPage";
 import CodeReviewPage from "./pages/CodeReviewPage";
 import SDInterviewPage from "./pages/SDInterviewPage";
 import DesignPatternsPage from "./pages/DesignPatternsPage";
 import { DSA_CATEGORIES } from "./data/dsa";
 import { MC_CATEGORIES } from "./data/machineCoding";
 import { GO_BASICS_CATEGORIES } from "./data/goBasics";
+import { GO_MONOREPO_CATEGORIES } from "./data/goMonorepo";
 import { CR_CATEGORIES } from "./data/codeReview";
 import { SDI_CATEGORIES } from "./data/sdInterview";
 import { DESIGN_PATTERNS_CATEGORIES } from "./data/designPatterns";
@@ -27,6 +29,8 @@ const firstMC = MC_CATEGORIES[0];
 const firstMCProblem = firstMC.problems[0];
 const firstGB = GO_BASICS_CATEGORIES[0];
 const firstGBTopic = firstGB.topics[0];
+const firstGM = GO_MONOREPO_CATEGORIES[0];
+const firstGMTopic = firstGM.topics[0];
 const firstCR = CR_CATEGORIES[0];
 const firstCRProblem = firstCR.problems[0];
 const firstSDI = SDI_CATEGORIES[0];
@@ -67,6 +71,12 @@ export default function App() {
             element={<Navigate to={`/go-basics/${firstGB.id}/${firstGBTopic.id}`} replace />}
           />
           <Route path="go-basics/:categoryId/:topicId" element={<GoBasicsPage />} />
+          {/* Go Monorepo routes */}
+          <Route
+            path="go-monorepo"
+            element={<Navigate to={`/go-monorepo/${firstGM.id}/${firstGMTopic.id}`} replace />}
+          />
+          <Route path="go-monorepo/:categoryId/:topicId" element={<GoMonorepoPage />} />
           {/* Code Review routes */}
           <Route
             path="code-review"

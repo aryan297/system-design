@@ -6,6 +6,7 @@ import { DESIGN_LAYERS } from "../data/layers";
 import { SD_CATEGORIES } from "../data/systemDesignEncyclopedia";
 import { MC_CATEGORIES } from "../data/machineCoding";
 import { GO_BASICS_CATEGORIES } from "../data/goBasics";
+import { GO_MONOREPO_CATEGORIES } from "../data/goMonorepo";
 import { CR_CATEGORIES } from "../data/codeReview";
 import { SDI_CATEGORIES } from "../data/sdInterview";
 import { DESIGN_PATTERNS_CATEGORIES } from "../data/designPatterns";
@@ -19,15 +20,17 @@ export default function Sidebar({ open, onClose }) {
   const inEncyclopedia = location.pathname === "/encyclopedia";
   const inMC = location.pathname.startsWith("/machine-coding");
   const inGB = location.pathname.startsWith("/go-basics");
+  const inGM = location.pathname.startsWith("/go-monorepo");
   const inCR = location.pathname.startsWith("/code-review");
   const inSDI = location.pathname.startsWith("/system-design-guide");
   const inDP = location.pathname.startsWith("/design-patterns");
-  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers && !inEncyclopedia && !inMC && !inGB && !inCR && !inSDI && !inDP);
+  const [systemsOpen, setSystemsOpen] = useState(!inDSA && !inLayers && !inEncyclopedia && !inMC && !inGB && !inGM && !inCR && !inSDI && !inDP);
   const [dsaOpen, setDsaOpen] = useState(inDSA);
   const [layersOpen, setLayersOpen] = useState(inLayers);
   const [encOpen, setEncOpen] = useState(inEncyclopedia);
   const [mcOpen, setMcOpen] = useState(inMC);
   const [gbOpen, setGbOpen] = useState(inGB);
+  const [gmOpen, setGmOpen] = useState(inGM);
   const [crOpen, setCrOpen] = useState(inCR);
   const [sdiOpen, setSdiOpen] = useState(inSDI);
   const [dpOpen, setDpOpen] = useState(inDP);
@@ -292,6 +295,54 @@ export default function Sidebar({ open, onClose }) {
 
         {gbOpen && GO_BASICS_CATEGORIES.map((cat) => {
           const catPath = `/go-basics/${cat.id}`;
+          const isCatOpen = location.pathname.startsWith(catPath);
+          return (
+            <div key={cat.id} className="sidebar-system">
+              <NavLink
+                to={`${catPath}/${cat.topics[0].id}`}
+                className={`sidebar-system-link ${isCatOpen ? "active" : ""}`}
+              >
+                <span className="sidebar-system-icon">{cat.icon}</span>
+                <span className="sidebar-system-name">{cat.title}</span>
+                <span style={{ fontSize: "0.65rem", color: "var(--text-muted)" }}>
+                  {isCatOpen ? "▾" : "▸"}
+                </span>
+              </NavLink>
+
+              {isCatOpen && (
+                <div className="sidebar-sub">
+                  {cat.topics.map((t, idx) => (
+                    <NavLink
+                      key={t.id}
+                      to={`${catPath}/${t.id}`}
+                      className={({ isActive: a }) => `sidebar-sub-link ${a ? "active" : ""}`}
+                    >
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.65rem", minWidth: 16 }}>
+                        {idx + 1}.
+                      </span>
+                      {t.title}
+                    </NavLink>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {/* ── Go Monorepo ── */}
+        <button
+          className="sidebar-section-toggle"
+          style={{ marginTop: "10px" }}
+          onClick={() => setGmOpen((v) => !v)}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <img src={gopherImg} alt="" style={{ width: 14, height: 14, objectFit: "contain" }} />
+            Go Monorepo
+          </span>
+          <span className="sidebar-section-chevron">{gmOpen ? "▾" : "▸"}</span>
+        </button>
+
+        {gmOpen && GO_MONOREPO_CATEGORIES.map((cat) => {
+          const catPath = `/go-monorepo/${cat.id}`;
           const isCatOpen = location.pathname.startsWith(catPath);
           return (
             <div key={cat.id} className="sidebar-system">
