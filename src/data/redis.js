@@ -421,54 +421,186 @@ func isRateLimited(ctx context.Context, rdb *redis.Client, userID string) (bool,
     windowStart := now - 60_000 // 60 seconds ago
 
     pipe := rdb.Pipeline()
-    // Remove requests older than the window
     pipe.ZRemRangeByScore(ctx, key, "0", strconv.FormatInt(windowStart, 10))
-    // Count requests in the current window
     countCmd := pipe.ZCard(ctx, key)
-    // Add current request with timestamp as score
     pipe.ZAdd(ctx, key, redis.Z{Score: float64(now), Member: now})
-    // Set TTL so key auto-expires (no cleanup needed)
     pipe.Expire(ctx, key, 70*time.Second)
     _, err := pipe.Exec(ctx)
     if err != nil { return false, err }
-
-    return countCmd.Val() >= 100, nil // true = rate limited
+    return countCmd.Val() >= 100, nil
 }
 
-// ── Pattern 2: Distributed Lock (Redlock — single node simplified) ──────────
-// Goal: only one server runs a cron job at a time
+// ════════════════════════════════════════════════════════════════════════════
+// ── Pattern 2: Distributed Locking — Complete Implementation ────────────────
+// ════════════════════════════════════════════════════════════════════════════
+
+// STEP 0 — Why NOT the naive approach (SETNX + separate EXPIRE):
+//   SETNX lock:order 1   ← acquires lock
+//   EXPIRE lock:order 30 ← sets TTL
+// PROBLEM: if the process crashes between these two commands, the lock has
+// NO TTL → it lives forever → deadlock. Always use SET NX PX in one command.
+
+// ── 2a. Basic single-node lock ───────────────────────────────────────────────
+// token = UUID generated per lock attempt (proves ownership)
+// NX    = only set if key does NOT exist (atomic acquisition)
+// PX    = millisecond TTL (auto-release on crash / hang)
 
 func acquireLock(ctx context.Context, rdb *redis.Client, lockKey, token string, ttl time.Duration) (bool, error) {
-    // SET key token NX PX ttl — atomic: only set if key does NOT exist
-    ok, err := rdb.SetNX(ctx, lockKey, token, ttl).Result()
-    return ok, err
+    return rdb.SetNX(ctx, lockKey, token, ttl).Result()
 }
+
+// Release: Lua script is critical — must be atomic check-then-delete.
+// Without Lua: GET → (lock expires, B acquires) → DEL deletes B's lock → disaster.
+var releaseScript = redis.NewScript(\`
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+        return redis.call("DEL", KEYS[1])
+    end
+    return 0
+\`)
 
 func releaseLock(ctx context.Context, rdb *redis.Client, lockKey, token string) error {
-    // Lua script: only delete if the value matches our token (atomic check-and-delete)
-    script := redis.NewScript(\`
-        if redis.call("GET", KEYS[1]) == ARGV[1] then
-            return redis.call("DEL", KEYS[1])
-        else
-            return 0
-        end
-    \`)
-    return script.Run(ctx, rdb, []string{lockKey}, token).Err()
+    return releaseScript.Run(ctx, rdb, []string{lockKey}, token).Err()
 }
 
-// ── Pattern 3: Cache-Aside Pattern ──────────────────────────────────────────
+// ── 2b. Lock with retry + exponential backoff ────────────────────────────────
+// Don't busy-spin: back off with jitter to avoid thundering herd on the lock.
+
+func acquireLockWithRetry(ctx context.Context, rdb *redis.Client, lockKey string, ttl time.Duration, maxRetries int) (string, error) {
+    token := uuid.New().String()
+    backoff := 50 * time.Millisecond
+
+    for i := 0; i < maxRetries; i++ {
+        ok, err := rdb.SetNX(ctx, lockKey, token, ttl).Result()
+        if err != nil { return "", err }
+        if ok { return token, nil } // acquired
+
+        // Jittered backoff: sleep [backoff/2, backoff]
+        jitter := time.Duration(rand.Int63n(int64(backoff/2)))
+        select {
+        case <-time.After(backoff/2 + jitter):
+        case <-ctx.Done():
+            return "", ctx.Err()
+        }
+        if backoff < 2*time.Second { backoff *= 2 } // cap at 2s
+    }
+    return "", errors.New("failed to acquire lock after retries")
+}
+
+// ── 2c. Lock renewal / Watchdog (prevent TTL expiry during long operations) ──
+// Problem: task takes 40s, lock TTL is 30s → lock expires mid-task → two holders.
+// Solution: background goroutine renews the lock before TTL expires.
+
+type Lock struct {
+    rdb     *redis.Client
+    key     string
+    token   string
+    ttl     time.Duration
+    stopCh  chan struct{}
+}
+
+func (l *Lock) StartWatchdog(ctx context.Context) {
+    go func() {
+        ticker := time.NewTicker(l.ttl / 3) // renew at 1/3 of TTL
+        defer ticker.Stop()
+        for {
+            select {
+            case <-ticker.C:
+                // Lua: only extend TTL if we still own the lock
+                renewScript.Run(ctx, l.rdb, []string{l.key}, l.token,
+                    int(l.ttl.Milliseconds()))
+            case <-l.stopCh:
+                return
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+}
+
+func (l *Lock) Release(ctx context.Context) {
+    close(l.stopCh)
+    releaseScript.Run(ctx, l.rdb, []string{l.key}, l.token)
+}
+
+var renewScript = redis.NewScript(\`
+    if redis.call("GET", KEYS[1]) == ARGV[1] then
+        return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+    end
+    return 0
+\`)
+
+// ── 2d. Fencing Token — making locks safe even when they expire ──────────────
+// Problem: even with watchdog, a GC pause or network partition can cause two
+// holders. The resource (DB, file, API) must reject stale requests.
+//
+// Solution: embed a monotonically increasing fencing token in the lock value.
+// Each lock acquisition gets a higher token than the previous holder.
+// The resource rejects writes with a token lower than the last accepted one.
+//
+// Implementation: use Redis INCR to generate a monotonically increasing token.
+
+func acquireLockWithFencingToken(ctx context.Context, rdb *redis.Client, lockKey string, ttl time.Duration) (token int64, err error) {
+    // Atomically: increment counter → use as token, set NX with token as value
+    script := redis.NewScript(\`
+        local token = redis.call("INCR", KEYS[2])
+        local ok = redis.call("SET", KEYS[1], token, "NX", "PX", ARGV[1])
+        if ok then return token end
+        return -1
+    \`)
+    result, err := script.Run(ctx, rdb,
+        []string{lockKey, lockKey + ":fence"},
+        ttl.Milliseconds()).Int64()
+    if err != nil || result == -1 { return 0, errors.New("lock not acquired") }
+    return result, nil // caller sends this token to the resource with every write
+}
+
+// Resource side — reject stale fencing tokens:
+// if request.FencingToken < lastAcceptedToken { return ErrStaleRequest }
+// lastAcceptedToken = max(lastAcceptedToken, request.FencingToken)
+
+// ── 2e. Redlock — multi-node lock for HA requirements ────────────────────────
+// Use when: single Redis primary failure would cause two lock holders.
+// Requires: 5 independent Redis instances (not replicas of each other).
+
+type Redlock struct { nodes []*redis.Client }
+
+func (r *Redlock) Acquire(ctx context.Context, lockKey, token string, ttl time.Duration) (bool, int64) {
+    N := len(r.nodes)     // e.g. 5
+    quorum := N/2 + 1     // 3 of 5
+
+    start := time.Now()
+    acquired := 0
+
+    for _, node := range r.nodes {
+        ok, err := node.SetNX(ctx, lockKey, token, ttl).Result()
+        if err == nil && ok { acquired++ }
+    }
+
+    elapsed := time.Since(start)
+    validFor := ttl - elapsed // actual time the lock is valid
+
+    if acquired >= quorum && validFor > 0 {
+        return true, validFor.Milliseconds() // lock held on majority
+    }
+    // Failed: release on ALL nodes we did acquire
+    r.Release(ctx, lockKey, token)
+    return false, 0
+}
+
+func (r *Redlock) Release(ctx context.Context, lockKey, token string) {
+    for _, node := range r.nodes {
+        releaseScript.Run(ctx, node, []string{lockKey}, token)
+    }
+}
+
+// ── Pattern 3: Cache-Aside ───────────────────────────────────────────────────
 func getUser(ctx context.Context, rdb *redis.Client, db *sql.DB, userID string) (*User, error) {
     key := "user:" + userID
-    // Try cache first
     val, err := rdb.Get(ctx, key).Bytes()
     if err == nil {
-        var u User
-        json.Unmarshal(val, &u)
-        return &u, nil
+        var u User; json.Unmarshal(val, &u); return &u, nil
     }
-    // Cache miss: load from DB
     u := loadFromDB(db, userID)
-    // Write to cache with TTL
     data, _ := json.Marshal(u)
     rdb.Set(ctx, key, data, 5*time.Minute)
     return u, nil
@@ -478,17 +610,66 @@ func getUser(ctx context.Context, rdb *redis.Client, db *sql.DB, userID string) 
 func updateScore(ctx context.Context, rdb *redis.Client, playerID string, delta float64) error {
     return rdb.ZIncrBy(ctx, "leaderboard:global", delta, playerID).Err()
 }
-
 func getTopN(ctx context.Context, rdb *redis.Client, n int) ([]redis.Z, error) {
     return rdb.ZRevRangeWithScores(ctx, "leaderboard:global", 0, int64(n-1)).Result()
 }
-
 func getRank(ctx context.Context, rdb *redis.Client, playerID string) (int64, error) {
     rank, err := rdb.ZRevRank(ctx, "leaderboard:global", playerID).Result()
-    return rank + 1, err // 1-indexed rank
+    return rank + 1, err
 }`,
 
-      internals: `Pipeline vs. Transaction vs. Lua Script:
+      internals: `Distributed Lock — failure modes and mental model:
+
+  THE CORE GUARANTEE Redis provides:
+    SET key value NX PX ttl is atomic. Either the key is set (lock acquired) or it
+    isn't (lock already held by someone else). No race between check and set.
+
+  FAILURE MODE 1 — Lock holder crashes:
+    TTL fires, key deleted. Next contender acquires the lock. Safe.
+    This is WHY the TTL must be set in the same command as acquisition.
+    Old pattern (SETNX + EXPIRE in two steps) is broken: crash between them = no TTL = deadlock.
+
+  FAILURE MODE 2 — Lock holder pauses (GC, VM migration, network):
+    A: acquires lock at T=0, TTL=30s
+    A: GC pause for 35 seconds
+    lock expires at T=30
+    B: acquires lock at T=30 (A's lock is gone)
+    A: resumes at T=35, thinks it still holds the lock → A and B both in critical section
+    Fix 1 (watchdog): A's background goroutine renews lock while A is running. GC pause
+      long enough to let watchdog miss two renewals → lock eventually expires. A must
+      check it still holds lock before acting on critical data.
+    Fix 2 (fencing token): A sends token=5, B sends token=6. Resource rejects token=5
+      after seeing token=6. Even if A wakes up, its writes are rejected.
+
+  FAILURE MODE 3 — Redis primary crashes (async replication):
+    A acquires lock on primary. Primary crashes before replicating to replica.
+    Replica is promoted to primary (Sentinel failover, ~30s).
+    New primary has NO knowledge of A's lock.
+    B acquires the same lock on the new primary.
+    A and B both hold the lock.
+    Fix: Redlock (acquire on majority of independent nodes, not replicas).
+
+  FAILURE MODE 4 — Clock drift (Redlock weakness):
+    Redlock relies on monotonic elapsed time to compute lock validity.
+    If a system clock jumps forward (NTP adjustment, VM clock sync), a lock's
+    effective TTL shrinks. If clock jumps > remaining TTL, the lock appears expired
+    on that node before it actually should be.
+    Martin Kleppmann's critique: for systems requiring strong safety (database writes,
+    financial operations), Redlock + clock drift can still allow two holders.
+    Antirez's response: clock drift in practice is < 1ms/sec; design TTL with margin.
+    Practical takeaway: for most use cases (cron dedup, resource locking),
+    Redlock is safe. For distributed consensus requiring hard safety guarantees,
+    use ZooKeeper / etcd (which use Raft and don't rely on wall-clock TTL).
+
+  WHEN TO SKIP THE DISTRIBUTED LOCK ENTIRELY:
+    • Idempotent operations: instead of locking, make the operation safe to run
+      twice (use database unique constraint, conditional writes, deduplication keys).
+    • Short critical sections on a single DB: use a DB row-level lock (SELECT FOR UPDATE).
+      It's simpler, transactional, and automatically releases on connection close.
+    • Optimistic concurrency: read version number → write with WHERE version=N condition.
+      No lock at all; retries handle conflicts. Works well when conflicts are rare.
+
+  Pipeline vs. Transaction vs. Lua Script:
 
   PIPELINE (not atomic):
     Groups multiple commands into one TCP round trip.
@@ -513,14 +694,14 @@ func getRank(ctx context.Context, rdb *redis.Client, playerID string) (int64, er
   LUA SCRIPT (truly atomic, general-purpose):
     Redis executes the entire script atomically in the event loop.
     No other client command runs until the script finishes.
-    Use for: complex conditional logic that must be atomic (e.g., rate limiter, lock release).
+    Use for: complex conditional logic that must be atomic (e.g., lock release, fencing).
     Caution: a slow Lua script blocks ALL Redis clients — keep scripts short.
     Scripts are cached by SHA1: SCRIPT LOAD → EVALSHA avoids re-sending script bytes.
 
   When to pick which:
     • Multiple reads, no write: PIPELINE
     • Simple read-modify-write: WATCH/MULTI/EXEC
-    • Complex atomic logic: LUA SCRIPT
+    • Complex atomic logic (lock release, fencing token): LUA SCRIPT
     • Just want latency reduction: PIPELINE`,
     },
     {
@@ -830,31 +1011,222 @@ Scale to 10M players:
     difficulty: "Hard",
     round: "Deep Dive",
     asked_at: ["Amazon", "Stripe", "Cloudflare", "HashiCorp"],
-    question: "How would you implement a distributed lock in Redis? What are the failure modes?",
-    answer: `Single-node distributed lock (basic):
-  Acquire: SET lock:resource_name <unique_token> NX PX 30000
-    NX = only set if key does NOT exist (atomic check + set)
-    PX 30000 = auto-expire in 30 seconds (prevents deadlock if holder crashes)
-  Release: Lua script: GET → compare token → DEL (atomic check-and-delete)
-    Must compare token before deleting! Otherwise, if lock expired and was re-acquired by another client, you'd delete the new client's lock.
+    question: "How would you implement a distributed lock in Redis? Walk through every failure mode.",
+    answer: `A Redis distributed lock has three components: acquire, hold, and release. Each step has a specific failure mode if done wrong.
 
-Why the Lua script for release is critical:
-  Without it: GET key → (lock expires here, new client acquires) → DEL → deleted wrong client's lock.
-  With Lua: Redis executes GET + compare + DEL atomically — no interleaving possible.
+ACQUIRE — why SET NX PX in one command:
+  Correct:  SET lock:order-456 <token> NX PX 30000   (atomic)
+  Wrong:    SETNX lock:order-456 1  then  EXPIRE lock:order-456 30  (two commands)
+  If the process crashes between SETNX and EXPIRE → lock has no TTL → permanent deadlock.
+  The single SET with NX+PX is atomic: either both the key and the TTL are set, or neither is.
 
-Failure modes:
-  1. Lock holder crashes before release: TTL expires, lock auto-released. Next requester gets it. Safe.
-  2. Lock holder is slow (GC pause): lock expires, new holder acquires, original holder wakes up and thinks it still holds lock. Both holders in critical section simultaneously (false safety).
-     Mitigation: lock holder should check if it still holds the lock before any critical action (re-GET and compare token). Or use fencing tokens (monotonically increasing counter added to lock).
-  3. Redis primary crashes before replicating lock to replica: new primary (post-failover) doesn't have the lock, another client acquires it. Two holders simultaneously.
-     Mitigation for this: Redlock algorithm.
+The token (UUID per attempt) is what proves ownership. Without it, any holder can delete any other holder's lock.
 
-Redlock (multi-node):
-  Acquire lock on N/2+1 independent Redis nodes (majority quorum). Lock is valid only if acquired on majority within time limit. Eliminates single-node failure risk.
-  Controversy: Martin Kleppmann argued Redlock is unsafe for distributed systems requiring strong fencing. Antirez (Redis creator) disagreed. For most practical use cases (cron deduplication, resource locking), single-node is sufficient.`,
+RELEASE — why a Lua script is mandatory:
+  Wrong: GET key → compare → DEL  (three separate commands)
+  Race: lock expires between GET and DEL → new holder acquires → DEL deletes new holder's lock.
+  Correct: Lua script runs GET + compare + DEL atomically inside Redis's event loop.
+  No other command can interleave during a Lua script.
+
+FAILURE MODES:
+
+1. Lock holder crashes mid-task:
+   TTL fires → key deleted → next contender acquires lock → safe.
+   This is the entire point of the TTL. Works correctly.
+
+2. Lock holder pauses (GC pause, VM live migration, network partition):
+   A acquires lock (TTL=30s). A pauses for 35s (e.g., JVM full GC).
+   Lock expires at T=30. B acquires lock at T=30.
+   A resumes at T=35, still thinks it holds the lock. A and B are both in the critical section.
+   Fix (watchdog): background goroutine renews the lock every TTL/3 seconds.
+   If the lock can't be renewed (process died), TTL naturally expires and the next holder acquires it.
+   Fix (fencing token): described in the next question.
+
+3. Redis primary fails, replica promoted (async replication gap):
+   A acquires lock on primary at T=0. Primary crashes at T=1 (before replicating to replica).
+   Sentinel promotes replica to primary at T=30. New primary has NO record of A's lock.
+   B acquires the lock on the new primary. A and B both hold the lock.
+   Fix: Redlock algorithm — acquire on a majority of independent Redis nodes.
+
+4. Retry without jitter (thundering herd on the lock):
+   100 services all fail to acquire → all retry at the same interval → all retry simultaneously.
+   Fix: exponential backoff with random jitter. Each retryer wakes up at a random time.
+
+PRODUCTION CHECKLIST:
+  ✓ SET key token NX PX ttl  (one atomic command)
+  ✓ UUID token per attempt (proves ownership)
+  ✓ Lua script for release (atomic check-and-delete)
+  ✓ Watchdog goroutine for long operations
+  ✓ Retry with exponential backoff + jitter
+  ✓ Log when lock cannot be acquired after max retries (don't silently skip)`,
     followups: [
-      "What is a fencing token and how does it make distributed locks safer?",
-      "When would you use Redlock vs. a single-node lock?",
+      "What is a fencing token and why can't a watchdog alone prevent two lock holders?",
+      "When would you use Redlock vs. a single-node lock? What does Redlock NOT protect against?",
+      "When should you skip the distributed lock entirely and use a different mechanism?",
+    ],
+  },
+  {
+    id: "redis-q6b",
+    category: "Reliability",
+    difficulty: "Hard",
+    round: "Deep Dive",
+    asked_at: ["Google", "Meta", "Stripe", "Coinbase"],
+    question: "What is a fencing token and how does it solve the problem that watchdogs cannot?",
+    answer: `A fencing token is a monotonically increasing number embedded in every lock acquisition. The resource (database, file storage, external API) rejects any write that arrives with a token lower than the last accepted one.
+
+WHY A WATCHDOG ALONE IS INSUFFICIENT:
+  A: acquires lock, token=5, watchdog running.
+  A: enters a 90-second GC pause.
+  Watchdog goroutine (inside A's process) also pauses — it's in the same JVM/process.
+  Lock TTL expires. Watchdog cannot renew it because the thread is frozen.
+  B: acquires lock, token=6.
+  A: GC completes, resumes, watchdog hasn't noticed the lock expired.
+  A: sends write with token=5. Without fencing, the write succeeds.
+  B: sends write with token=6. Conflict — last accepted is still 5. Succeeds.
+  RESULT: A's stale write overwrites B's valid write.
+
+HOW FENCING TOKENS FIX THIS:
+  Lock service (Redis) maintains a counter: INCR lock:order-456:fence on each acquisition.
+  A: acquires lock → gets token=5.
+  B: acquires lock → gets token=6 (after A's lock expired).
+  A: resumes, sends write with token=5 → resource sees lastAccepted=6 → REJECT.
+  B: sends write with token=6 → resource sees lastAccepted=6 → ACCEPT.
+
+  Resource-side enforcement:
+    type Resource struct { lastToken int64 }
+    func (r *Resource) Write(data []byte, token int64) error {
+        if token <= r.lastToken { return ErrStaleRequest }
+        r.lastToken = token
+        // ... apply write
+    }
+
+REDIS IMPLEMENTATION of fencing token:
+  Use a separate INCR counter key (never expires). Each lock acquisition reads the counter value.
+  Acquiring thread sends this token with every write to the protected resource.
+  The counter only ever increases — expired lock holders always have an older token.
+
+KEY INSIGHT: fencing tokens shift the safety burden from the lock to the resource.
+  The resource doesn't trust "whoever has the lock is the only writer" — it trusts
+  "whoever has the highest token is the latest writer." This works even if:
+  • The lock implementation is buggy.
+  • The network partitions the lock holder from the lock server.
+  • A GC pause longer than the TTL occurs.
+
+WHEN YOU CAN'T ADD FENCING TO THE RESOURCE:
+  If the resource is a third-party API or legacy system that can't enforce token ordering,
+  you're back to trusting the lock. This is the realistic limit of distributed locking —
+  for truly critical operations (financial transactions), use the database's own locking
+  (SELECT FOR UPDATE) or optimistic concurrency (version numbers in the DB row).`,
+    followups: [
+      "How would you implement the resource-side fencing token check in a Postgres transaction?",
+      "Can you use a Redis ZSET as a fencing-safe queue so only the holder with the highest token dequeues?",
+    ],
+  },
+  {
+    id: "redis-q6c",
+    category: "Reliability",
+    difficulty: "Hard",
+    round: "Deep Dive",
+    asked_at: ["Amazon", "Netflix", "Cloudflare", "HashiCorp"],
+    question: "Explain the Redlock algorithm. What does it protect against and what are its known weaknesses?",
+    answer: `Redlock solves the single-point-of-failure problem: if you use a Redis primary-replica setup and the primary crashes, the lock can be lost before replication, allowing two clients to hold it simultaneously. Redlock acquires the lock on a majority of independent Redis nodes so no single failure breaks the guarantee.
+
+THE ALGORITHM (5 independent Redis nodes, no replication between them):
+  1. Record start time T1.
+  2. Generate a UUID token.
+  3. Try SET lockKey token NX PX ttl on ALL 5 nodes in parallel.
+  4. Count how many nodes returned OK. Measure elapsed time elapsed = now - T1.
+  5. Lock is valid if: acquired_count >= 3 (majority) AND ttl - elapsed > 0 (still valid time left).
+  6. Effective TTL = ttl - elapsed (subtract time spent acquiring across nodes).
+  7. If condition fails: release on ALL nodes (even the ones that succeeded) and retry.
+
+RELEASE: run the Lua check-and-delete script on all 5 nodes — even nodes that said NO during acquire (clock skew could have caused a spurious success that later became visible).
+
+WHAT REDLOCK PROTECTS AGAINST:
+  ✓ Single Redis node crash: 2 of 5 nodes can fail; majority (3) still hold the lock.
+  ✓ Network partition (minority): if < 3 nodes are reachable, no client can acquire.
+  ✓ Key expiry asymmetry: by measuring acquisition time and subtracting it from TTL,
+    Redlock accounts for time spent contacting slow nodes.
+
+KNOWN WEAKNESSES (Martin Kleppmann's critique):
+  1. Clock drift / NTP jumps: Redlock's safety relies on the TTL being respected by
+     the system clock. If an NTP adjustment causes clock to jump forward by even
+     a few hundred ms, the effective lock TTL shrinks unexpectedly. With large drift,
+     lock expires before the holder is done → two holders possible.
+     Redlock adds a drift margin (e.g., 10ms) but this is a guess, not a guarantee.
+
+  2. GC pause still breaks it: GC pause > effective TTL still causes the "A pauses,
+     lock expires, B acquires" scenario — Redlock does not prevent this.
+     Only fencing tokens prevent it.
+
+  3. Majority node failures: if 3 of 5 nodes are partitioned or crashed simultaneously,
+     Redlock refuses to grant any lock (availability drops). This is a safety/liveness tradeoff.
+
+ANTIREZ'S RESPONSE: Redlock is safe in practice because:
+  • NTP drift in well-operated DCs is < 1ms/sec.
+  • Design TTL with enough margin (10× expected drift).
+  • GC pauses > 30s are engineering failures, not algorithm failures.
+
+PRACTICAL RECOMMENDATION:
+  Cron deduplication, resource locking, leader election: single-node lock is fine.
+  Multi-region, HA requirement, can't tolerate even rare double-acquisition: Redlock.
+  Financial transactions, inventory deduction: use DB-level locking (SELECT FOR UPDATE)
+    or optimistic concurrency — don't rely on Redis locks at all.
+
+Existing implementations: Redisson (Java), go-redis/redis has Redlock helpers,
+  redsync (Go) is a clean Redlock implementation for production use.`,
+    followups: [
+      "Why does Redlock subtract elapsed acquisition time from the TTL? What goes wrong if you don't?",
+      "How would you test that your Redlock implementation is correct — what failure scenarios would you simulate?",
+    ],
+  },
+  {
+    id: "redis-q6d",
+    category: "Reliability",
+    difficulty: "Medium",
+    round: "Deep Dive",
+    asked_at: ["Google", "Amazon", "Uber", "Atlassian"],
+    question: "When should you NOT use a Redis distributed lock? What are the better alternatives?",
+    answer: `Distributed locks are often the first instinct for concurrency problems but frequently the wrong tool. Here's when to avoid them and what to use instead.
+
+DON'T USE A REDIS LOCK WHEN:
+
+1. The operation is idempotent:
+   If running the operation twice has the same effect as running it once, you don't need a lock.
+   Example: updating a user's profile photo URL. Whether one or two servers do it simultaneously, the end result is the same — the URL is set.
+   Better: just run it; the last writer wins and that's fine.
+
+2. The database can enforce uniqueness:
+   Example: prevent duplicate order IDs.
+   Don't acquire a Redis lock → check DB → insert. Use a UNIQUE constraint on the DB.
+   The DB will reject the duplicate atomically. No Redis needed, no lock TTL edge cases.
+   Better: DB unique constraint + catch duplicate key error.
+
+3. The critical section is a single DB write:
+   Use SELECT FOR UPDATE (row-level DB lock). It releases automatically on transaction commit/rollback, doesn't need a TTL, and is transactional with the write itself.
+   Better: SELECT FOR UPDATE inside a DB transaction.
+
+4. Conflicts are rare (read-modify-write with low contention):
+   Use optimistic concurrency: read version=5, write WHERE version=5, increment version.
+   If another writer modified the row, your write fails (version mismatch) → retry.
+   No lock held between read and write. Works well when collisions are infrequent.
+   Better: DB row version + conditional UPDATE.
+
+5. You need distributed coordination with strong guarantees:
+   Redis locks rely on TTL and wall-clock time — not truly safe under clock drift or long pauses.
+   Use ZooKeeper (Curator's InterProcessMutex) or etcd (using its transaction API) which are built on Raft consensus and provide true distributed coordination without clock dependency.
+   Better: etcd / ZooKeeper for critical leader election or exactly-once guarantees.
+
+WHEN REDIS LOCKS ARE THE RIGHT TOOL:
+  ✓ Preventing duplicate cron job execution across multiple server instances.
+  ✓ Rate-limiting access to an external API (one caller at a time per resource).
+  ✓ Coarse-grained resource locking (lock a "slot" in a scheduling system).
+  ✓ Best-effort deduplication where occasional duplicates are acceptable.
+
+THE RULE OF THUMB: if your correctness depends entirely on the lock never being held by two parties simultaneously, use DB-level locking or etcd. If your system can tolerate occasional duplicates or retries, Redis locks are lightweight and sufficient.`,
+    followups: [
+      "How does SELECT FOR UPDATE differ from a Redis lock in terms of deadlock behavior?",
+      "Can you implement optimistic concurrency in Redis itself (without a relational DB)?",
     ],
   },
   {
