@@ -22,6 +22,7 @@ import { DISTRICT_HLD, DISTRICT_LLD, DISTRICT_QNA } from "./district";
 import { BOOKMYSHOW_HLD, BOOKMYSHOW_LLD, BOOKMYSHOW_QNA } from "./bookmyshow";
 import { NVIDIA_HLD, NVIDIA_LLD, NVIDIA_QNA } from "./nvidia";
 import { KUBERNETES_HLD, KUBERNETES_LLD, KUBERNETES_QNA } from "./kubernetes";
+import { REDIS_HLD, REDIS_LLD, REDIS_QNA } from "./redis";
 
 // Registry — add new systems here only. No new page files needed.
 const REGISTRY = {
@@ -168,6 +169,12 @@ const REGISTRY = {
     hld: KUBERNETES_HLD,
     lld: KUBERNETES_LLD,
     qna: KUBERNETES_QNA,
+  },
+  redis: {
+    meta: { icon: "🔴", color: "#DC382D" },
+    hld: REDIS_HLD,
+    lld: REDIS_LLD,
+    qna: REDIS_QNA,
   },
 };
 

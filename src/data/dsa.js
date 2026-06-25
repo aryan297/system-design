@@ -2478,6 +2478,135 @@ func main() {
 }`,
       },
       {
+        id: "baseball-game",
+        title: "Baseball Game",
+        difficulty: "Easy",
+        leetcode: 682,
+        description:
+          "You are keeping score for a baseball game. Given a list of operations strings, each operation is one of: an integer (add that score), '+' (sum of last two scores), 'D' (double the last score), 'C' (remove the last score). Return the sum of all scores after all operations.",
+        examples: [
+          { input: 'ops = ["5","2","C","D","+"]',                         output: "30", explanation: 'Record: [5],[5,2],[5],[5,10],[5,10,15]. Sum = 30' },
+          { input: 'ops = ["5","-2","4","C","D","9","+","+"]', output: "27", explanation: 'Record evolves to [5,-2,-4,9,5,14]. Sum = 27' },
+        ],
+        approach:
+          "Use a stack to simulate the record. For integers push directly. For '+' push the sum of the last two. For 'D' push double the top. For 'C' pop the top. Sum all stack elements at the end.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import (
+	"fmt"
+	"strconv"
+)
+
+func calPoints(operations []string) int {
+	stack := []int{}
+
+	for _, op := range operations {
+		switch op {
+		case "+":
+			n := len(stack)
+			stack = append(stack, stack[n-1]+stack[n-2])
+		case "D":
+			stack = append(stack, stack[len(stack)-1]*2)
+		case "C":
+			stack = stack[:len(stack)-1]
+		default:
+			num, _ := strconv.Atoi(op)
+			stack = append(stack, num)
+		}
+	}
+
+	sum := 0
+	for _, v := range stack {
+		sum += v
+	}
+	return sum
+}
+
+func main() {
+	fmt.Println(calPoints([]string{"5", "2", "C", "D", "+"}))               // 30
+	fmt.Println(calPoints([]string{"5", "-2", "4", "C", "D", "9", "+", "+"})) // 27
+}`,
+      },
+      {
+        id: "remove-all-adjacent-duplicates",
+        title: "Remove All Adjacent Duplicates In String",
+        difficulty: "Easy",
+        leetcode: 1047,
+        description:
+          "Given a string s, repeatedly remove all adjacent duplicate letter pairs until no more pairs exist. Return the final string.",
+        examples: [
+          { input: 's = "abbaca"', output: '"ca"',   explanation: 'Remove "bb" → "aaca", remove "aa" → "ca"' },
+          { input: 's = "azxxzy"', output: '"ay"',   explanation: 'Remove "xx" → "azzy", remove "zz" → "ay"' },
+        ],
+        approach:
+          "Use the stack as the result builder. For each character: if the stack top equals it, pop (cancelling the pair); otherwise push. The stack contents at the end form the answer string.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func removeDuplicates(s string) string {
+	stack := []byte{}
+	for i := 0; i < len(s); i++ {
+		if len(stack) > 0 && stack[len(stack)-1] == s[i] {
+			stack = stack[:len(stack)-1]
+		} else {
+			stack = append(stack, s[i])
+		}
+	}
+	return string(stack)
+}
+
+func main() {
+	fmt.Println(removeDuplicates("abbaca")) // ca
+	fmt.Println(removeDuplicates("azxxzy")) // ay
+}`,
+      },
+      {
+        id: "backspace-string-compare",
+        title: "Backspace String Compare",
+        difficulty: "Easy",
+        leetcode: 844,
+        description:
+          "Given two strings s and t where '#' represents a backspace, return true if they are equal when both are typed into empty text editors.",
+        examples: [
+          { input: 's = "ab#c", t = "ad#c"', output: "true",  explanation: 'Both become "ac"' },
+          { input: 's = "ab##", t = "c#d#"', output: "true",  explanation: 'Both become ""' },
+          { input: 's = "a#c",  t = "b"',    output: "false", explanation: 's becomes "c", t stays "b"' },
+        ],
+        approach:
+          "Simulate typing each string into a stack: push regular characters, pop on '#' (if non-empty). Compare the two resulting stacks. An O(1)-space alternative walks both strings right-to-left tracking pending backspace counts.",
+        complexity: { time: "O(n)", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+func backspaceCompare(s string, t string) bool {
+	return process(s) == process(t)
+}
+
+func process(s string) string {
+	stack := []byte{}
+	for i := 0; i < len(s); i++ {
+		if s[i] == '#' {
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		} else {
+			stack = append(stack, s[i])
+		}
+	}
+	return string(stack)
+}
+
+func main() {
+	fmt.Println(backspaceCompare("ab#c", "ad#c")) // true
+	fmt.Println(backspaceCompare("ab##", "c#d#")) // true
+	fmt.Println(backspaceCompare("a#c", "b"))     // false
+}`,
+      },
+      {
         id: "min-stack",
         title: "Min Stack",
         difficulty: "Medium",
@@ -2635,6 +2764,50 @@ func main() {
 
 	fmt.Println(dailyTemperatures([]int{30, 60, 90}))
 	// Output: [1 1 0]
+}`,
+      },
+      {
+        id: "online-stock-span",
+        title: "Online Stock Span",
+        difficulty: "Medium",
+        leetcode: 901,
+        description:
+          "Design a class StockSpanner that collects daily stock prices and returns the span of the current price — the maximum number of consecutive days (including today) for which the price was less than or equal to today's price.",
+        examples: [
+          { input: "next(100), next(80), next(60), next(70), next(60), next(75), next(85)", output: "[1,1,1,2,1,4,6]", explanation: "85 spans 6 days back because 75,60,70,60,80 are all ≤ 85." },
+        ],
+        approach:
+          "Maintain a monotonic stack of (price, span) pairs. On each call, accumulate the span of all stack tops whose price is ≤ current (merging their spans into one), then push (price, accumulated_span). Each element is pushed and popped exactly once — amortised O(1).",
+        complexity: { time: "O(1) amortised", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+type StockSpanner struct {
+	stack [][2]int // [price, span]
+}
+
+func StockSpannerConstructor() StockSpanner {
+	return StockSpanner{}
+}
+
+func (s *StockSpanner) Next(price int) int {
+	span := 1
+	for len(s.stack) > 0 && s.stack[len(s.stack)-1][0] <= price {
+		span += s.stack[len(s.stack)-1][1]
+		s.stack = s.stack[:len(s.stack)-1]
+	}
+	s.stack = append(s.stack, [2]int{price, span})
+	return span
+}
+
+func main() {
+	sp := StockSpannerConstructor()
+	for _, p := range []int{100, 80, 60, 70, 60, 75, 85} {
+		fmt.Printf("next(%d) = %d\n", p, sp.Next(p))
+	}
+	// next(100)=1, next(80)=1, next(60)=1, next(70)=2,
+	// next(60)=1, next(75)=4, next(85)=6
 }`,
       },
       {
