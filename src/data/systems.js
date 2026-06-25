@@ -167,4 +167,11 @@ export const SYSTEMS = [
     description: "Container orchestration at scale — 5K-node clusters, image registry, declarative reconciliation, scheduling/auto-scaling, and a full Docker/K8s APM stack",
     color: "#326CE5",
   },
+  {
+    id: "redis",
+    name: "Redis",
+    icon: "🔴",
+    description: "In-memory data structure server — sub-ms latency, 10 data types, rate limiting, pub/sub, streams, cluster sharding, Sentinel HA",
+    color: "#DC382D",
+  },
 ];
