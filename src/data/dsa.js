@@ -8646,4 +8646,627 @@ func main() {
       },
     ],
   },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 1 — Mathematics & Complexity
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    id: "math-complexity",
+    icon: "∑",
+    title: "Math & Complexity",
+    problems: [
+      {
+        id: "time-complexity",
+        title: "Time Complexity",
+        difficulty: "Concept",
+        description:
+          "Time complexity measures how the runtime of an algorithm scales with input size n. We care about the dominant growth term and ignore constants. Standard interview expectation: state the worst-case O(·) for every solution you give.",
+        examples: [
+          { input: "Single loop: for i := 0; i < n; i++", output: "O(n)", explanation: "Each iteration is O(1); n iterations total" },
+          { input: "Nested loops: for i…n { for j…n { } }", output: "O(n²)", explanation: "Inner loop runs n times per outer iteration" },
+          { input: "Halving each step: binary search", output: "O(log n)", explanation: "Search space halves each step: n → n/2 → n/4 → … → 1 = log₂n steps" },
+          { input: "Merge sort — divide & conquer", output: "O(n log n)", explanation: "log n levels × O(n) merge work per level" },
+        ],
+        approach:
+          "Complexity class cheat-sheet (fastest to slowest):\n\nO(1)       — constant:     array index, hash lookup\nO(log n)   — logarithmic: binary search, balanced BST\nO(n)       — linear:      single scan\nO(n log n) — linearithmic: merge sort, heap sort\nO(n²)      — quadratic:   nested loops, insertion sort worst\nO(2ⁿ)      — exponential: subset enumeration, naive recursion\nO(n!)      — factorial:   permutation generation\n\nSimplification rules:\n• Drop multiplicative constants:   5n → O(n)\n• Drop lower-order terms:          n² + n → O(n²)\n• Add sequential independent blocks: O(n) + O(m) = O(n + m)\n• Multiply nested blocks:          O(n) inside O(n) → O(n²)",
+        complexity: { time: "varies by algorithm", space: "varies" },
+        code: `package main
+
+import "fmt"
+
+// O(1) — constant time, no loop
+func getFirst(arr []int) int { return arr[0] }
+
+// O(log n) — binary search: halves search space each step
+func binarySearch(arr []int, target int) int {
+\tlo, hi := 0, len(arr)-1
+\tfor lo <= hi {
+\t\tmid := (lo + hi) / 2
+\t\tif arr[mid] == target { return mid }
+\t\tif arr[mid] < target  { lo = mid + 1 } else { hi = mid - 1 }
+\t}
+\treturn -1
+}
+
+// O(n) — linear scan
+func linearSearch(arr []int, target int) int {
+\tfor i, v := range arr {
+\t\tif v == target { return i }
+\t}
+\treturn -1
+}
+
+// O(n²) — nested loops
+func hasDuplicate(arr []int) bool {
+\tfor i := 0; i < len(arr); i++ {
+\t\tfor j := i + 1; j < len(arr); j++ {
+\t\t\tif arr[i] == arr[j] { return true }
+\t\t}
+\t}
+\treturn false
+}
+
+func main() {
+\tarr := []int{1, 3, 5, 7, 9}
+\tfmt.Println(getFirst(arr))           // O(1)  → 1
+\tfmt.Println(binarySearch(arr, 5))    // O(log n) → 2
+\tfmt.Println(linearSearch(arr, 7))    // O(n)  → 3
+\tfmt.Println(hasDuplicate(arr))       // O(n²) → false
+}`,
+      },
+      {
+        id: "space-complexity",
+        title: "Space Complexity",
+        difficulty: "Concept",
+        description:
+          "Space complexity measures auxiliary memory consumed by an algorithm — extra space beyond the input itself. Includes stack frames for recursion, temporary arrays, hash maps, etc. In-place algorithms target O(1) auxiliary space.",
+        examples: [
+          { input: "Swapping with a temp variable", output: "O(1)", explanation: "Constant extra space regardless of input size" },
+          { input: "Creating a result array of size n", output: "O(n)", explanation: "Space grows linearly with input" },
+          { input: "Recursive fibonacci fib(n)", output: "O(n) stack", explanation: "Call stack depth = n frames; each frame is O(1)" },
+          { input: "Merge sort auxiliary array", output: "O(n)", explanation: "Needs scratch array of size n; O(log n) stack depth is dominated" },
+        ],
+        approach:
+          "Space complexity categories:\n\nO(1)      — in-place:    two-pointer, bit manipulation, cyclic sort\nO(log n)  — recursion depth of balanced divide-and-conquer\nO(n)      — linear:      hash map, extra array, recursion on linear input\nO(n²)     — 2D DP table, adjacency matrix\n\nKey interview points:\n• Two-pointer and sliding window → O(1) space\n• DFS on a tree → O(h) stack (O(n) worst skewed, O(log n) balanced)\n• Hash map converts O(n²) time → O(n) time at O(n) space cost (classic time–space trade-off)\n• 'In-place' means O(1) auxiliary; input array itself doesn't count",
+        complexity: { time: "N/A", space: "O(1) to O(n²) depending on algorithm" },
+        code: `package main
+
+import "fmt"
+
+// O(1) auxiliary space — in-place two-pointer reverse
+func reverseInPlace(arr []int) {
+\tl, r := 0, len(arr)-1
+\tfor l < r {
+\t\tarr[l], arr[r] = arr[r], arr[l]
+\t\tl++; r--
+\t}
+}
+
+// O(n) auxiliary space — allocates new array
+func reverseCopy(arr []int) []int {
+\tres := make([]int, len(arr))        // O(n) extra
+\tfor i, v := range arr {
+\t\tres[len(arr)-1-i] = v
+\t}
+\treturn res
+}
+
+// O(n) stack space — n recursive frames
+func factRecursive(n int) int {
+\tif n <= 1 { return 1 }
+\treturn n * factRecursive(n-1)
+}
+
+// O(1) space — iterative, no extra allocation
+func factIterative(n int) int {
+\tres := 1
+\tfor i := 2; i <= n; i++ { res *= i }
+\treturn res
+}
+
+func main() {
+\tarr := []int{1, 2, 3, 4, 5}
+\treverseInPlace(arr)
+\tfmt.Println(arr)                           // [5 4 3 2 1]  — O(1) space
+\tfmt.Println(reverseCopy([]int{1, 2, 3}))   // [3 2 1]      — O(n) space
+\tfmt.Println(factRecursive(5))              // 120          — O(n) stack
+\tfmt.Println(factIterative(5))              // 120          — O(1) space
+}`,
+      },
+      {
+        id: "asymptotic-analysis",
+        title: "Asymptotic Analysis — Big O, Ω, Θ",
+        difficulty: "Concept",
+        description:
+          "Asymptotic notation describes the limiting behavior of a function as input grows. Three bounds: Big O (upper / worst case), Big Ω (lower / best case), Big Θ (tight / exact order). Interviews almost always ask for worst-case Big O.",
+        examples: [
+          { input: "f(n) = 3n² + 5n + 2", output: "O(n²), Ω(n²), Θ(n²)", explanation: "n² dominates; all three bounds agree → tight bound" },
+          { input: "Linear search (best: found at index 0)", output: "Ω(1) best, O(n) worst", explanation: "Best case is instant; worst case scans the whole array" },
+          { input: "Insertion sort", output: "Ω(n) best, O(n²) worst, Θ(n²) average", explanation: "Best case on sorted array: only comparisons, no swaps → O(n)" },
+        ],
+        approach:
+          "Formal definitions — for sufficiently large n (∃ c, n₀ > 0):\n\n• f(n) = O(g(n))  — upper bound:   f(n) ≤ c·g(n) for all n ≥ n₀\n• f(n) = Ω(g(n)) — lower bound:   f(n) ≥ c·g(n) for all n ≥ n₀\n• f(n) = Θ(g(n)) — tight bound:   f = O(g) AND f = Ω(g)\n\nSimplification rules:\n• 5n² + 3n = O(n²)     → drop constants & lower terms\n• n·log n = O(n²)      → O is an upper bound, not necessarily tight\n• log₂n = Θ(log₁₀n)   → log base is a constant factor, ignored\n• n^a dominates n^b    when a > b\n• 2^n dominates n^k    for any polynomial n^k\n\nInterview tip: Always give worst-case O unless asked otherwise. State both time AND space.",
+        complexity: { time: "varies", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+// O(1) best, O(n) worst → NOT Θ(1) overall
+func findFirst(arr []int, target int) int {
+\tfor i, v := range arr {
+\t\tif v == target { return i }  // Ω(1) best case: first element
+\t}
+\treturn -1                        // O(n) worst case: not found
+}
+
+// Θ(n log n) — same complexity in best and worst case
+func mergeSort(arr []int) []int {
+\tif len(arr) <= 1 { return arr }
+\tmid := len(arr) / 2
+\tleft  := mergeSort(arr[:mid])
+\tright := mergeSort(arr[mid:])
+\treturn merge(left, right)
+}
+
+func merge(l, r []int) []int {
+\tres := make([]int, 0, len(l)+len(r))
+\ti, j := 0, 0
+\tfor i < len(l) && j < len(r) {
+\t\tif l[i] <= r[j] { res = append(res, l[i]); i++ } else { res = append(res, r[j]); j++ }
+\t}
+\tres = append(res, l[i:]...)
+\tres = append(res, r[j:]...)
+\treturn res
+}
+
+// Θ(n) — linear scan always visits all elements
+func sumAll(arr []int) int {
+\ttotal := 0
+\tfor _, v := range arr { total += v }
+\treturn total
+}
+
+func main() {
+\tarr := []int{3, 1, 4, 1, 5, 9, 2, 6}
+\tfmt.Println(mergeSort(arr))      // Θ(n log n)
+\tfmt.Println(findFirst(arr, 9))   // O(n) worst, Ω(1) best
+\tfmt.Println(sumAll(arr))         // Θ(n)
+}`,
+      },
+      {
+        id: "recurrence-relations",
+        title: "Recurrence Relations",
+        difficulty: "Concept",
+        description:
+          "A recurrence relation expresses T(n) — the cost to solve a problem of size n — in terms of T on smaller inputs. Used to analyze divide-and-conquer and recursive algorithms. Anchor with a base case T(1) = O(1).",
+        examples: [
+          { input: "Binary search: 1 recursive call on n/2, O(1) work", output: "T(n) = T(n/2) + O(1) → O(log n)", explanation: "Search space halves each time; constant comparison work per level" },
+          { input: "Merge sort: 2 calls on n/2, O(n) merge", output: "T(n) = 2T(n/2) + O(n) → O(n log n)", explanation: "Two recursive calls plus linear merge step; solved by Master Theorem Case 2" },
+          { input: "Fibonacci naive: 2 calls on n-1 and n-2", output: "T(n) = T(n-1) + T(n-2) + O(1) → O(2ⁿ)", explanation: "Exponential without memoization — overlapping subproblems recomputed" },
+          { input: "Quick sort (average): split ~half, O(n) partition", output: "T(n) = 2T(n/2) + O(n) → O(n log n) avg", explanation: "Worst case (sorted input) = T(n) = T(n-1) + O(n) → O(n²)" },
+        ],
+        approach:
+          "Common recurrences to memorize:\n\nT(n) = T(n/2) + O(1)   → O(log n)    binary search\nT(n) = T(n-1) + O(1)   → O(n)        tail recursion\nT(n) = 2T(n/2) + O(n)  → O(n log n)  merge sort\nT(n) = T(n-1) + O(n)   → O(n²)       insertion sort worst\nT(n) = 2T(n-1) + O(1)  → O(2ⁿ)       Tower of Hanoi\n\nSubstitution method (verify a guess):\n1. Guess T(n) = O(n log n)\n2. Substitute: T(n) = 2·(n/2·log(n/2)) + n\n               = n·log(n/2) + n\n               = n·(log n − 1) + n\n               = n·log n  ✓\n\nRecursion tree: draw levels 0,1,2,… — sum work per level, multiply by total levels.",
+        complexity: { time: "varies", space: "O(log n) to O(n) recursive stack" },
+        code: `package main
+
+import "fmt"
+
+// T(n) = 2T(n/2) + O(n) → O(n log n)  [merge sort]
+func mergeSort(arr []int) []int {
+\tif len(arr) <= 1 { return arr }
+\tmid := len(arr) / 2
+\tl := mergeSort(arr[:mid])
+\tr := mergeSort(arr[mid:])
+\treturn mergeHelper(l, r)
+}
+
+func mergeHelper(l, r []int) []int {
+\tres := make([]int, 0, len(l)+len(r))
+\ti, j := 0, 0
+\tfor i < len(l) && j < len(r) {
+\t\tif l[i] <= r[j] { res = append(res, l[i]); i++ } else { res = append(res, r[j]); j++ }
+\t}
+\treturn append(append(res, l[i:]...), r[j:]...)
+}
+
+// T(n) = T(n-1) + T(n-2) + O(1) → O(2ⁿ)  [naive fibonacci]
+func fibNaive(n int) int {
+\tif n <= 1 { return n }
+\treturn fibNaive(n-1) + fibNaive(n-2)
+}
+
+// T(n) = T(n-1) + O(1) → O(n)  [memoized fibonacci]
+func fibMemo(n int, memo map[int]int) int {
+\tif n <= 1 { return n }
+\tif v, ok := memo[n]; ok { return v }
+\tmemo[n] = fibMemo(n-1, memo) + fibMemo(n-2, memo)
+\treturn memo[n]
+}
+
+func main() {
+\tfmt.Println(mergeSort([]int{5, 2, 8, 1, 9, 3})) // [1 2 3 5 8 9]
+\tfmt.Println(fibNaive(10))                         // 55  — O(2¹⁰) calls
+\tfmt.Println(fibMemo(10, map[int]int{}))           // 55  — O(10) calls
+}`,
+      },
+      {
+        id: "master-theorem",
+        title: "Master Theorem",
+        difficulty: "Concept",
+        description:
+          "The Master Theorem solves T(n) = a·T(n/b) + f(n) directly, where a ≥ 1 (subproblem count), b > 1 (size-reduction factor), and f(n) is the non-recursive work. It covers virtually all divide-and-conquer algorithms.",
+        examples: [
+          { input: "Merge sort: T(n) = 2T(n/2) + n  →  a=2, b=2, f(n)=n", output: "Case 2 → Θ(n log n)", explanation: "n^(log₂2) = n = f(n), so Case 2 applies: balanced work" },
+          { input: "Binary search: T(n) = T(n/2) + 1  →  a=1, b=2, f(n)=1", output: "Case 2 → Θ(log n)", explanation: "n^(log₂1) = n⁰ = 1 = f(n), Case 2: Θ(1·log n)" },
+          { input: "Strassen matrix: T(n) = 7T(n/2) + n²  →  a=7, b=2, f(n)=n²", output: "Case 1 → Θ(n^log₂7) ≈ Θ(n^2.81)", explanation: "n^(log₂7)≈n^2.81 > n², so subproblem work dominates" },
+        ],
+        approach:
+          "Let c = log_b(a)  (the 'critical exponent').\nCompare f(n) to n^c:\n\nCase 1: f(n) = O(n^(c−ε))  for ε>0  → leaf work dominates → T(n) = Θ(n^c)\nCase 2: f(n) = Θ(n^c)               → balanced           → T(n) = Θ(n^c · log n)\nCase 3: f(n) = Ω(n^(c+ε)) for ε>0  → root work dominates → T(n) = Θ(f(n))\n         (+ regularity condition: a·f(n/b) ≤ k·f(n) for k<1)\n\nMnemonic: \"leaf heavy → Case 1, balanced → Case 2, root heavy → Case 3\"\n\nMaster theorem does NOT apply when:\n• f(n) is not polynomially related to n^c (e.g., n log n when c=1)\n• Subproblems have different sizes (use Akra-Bazzi or substitution instead)",
+        complexity: { time: "varies per case", space: "O(1)" },
+        code: `package main
+
+import (
+\t"fmt"
+\t"math"
+)
+
+// masterCase classifies T(n) = a·T(n/b) + n^fExp
+func masterCase(a, b, fExp float64) string {
+\tc := math.Log(a) / math.Log(b)   // c = log_b(a)
+\tconst eps = 1e-9
+\tswitch {
+\tcase fExp < c-eps:
+\t\treturn fmt.Sprintf("Case 1 → Θ(n^%.4g)  [leaves dominate]", c)
+\tcase math.Abs(fExp-c) < eps:
+\t\treturn fmt.Sprintf("Case 2 → Θ(n^%.4g · log n)  [balanced]", c)
+\tdefault:
+\t\treturn fmt.Sprintf("Case 3 → Θ(n^%.4g)  [root/f dominates]", fExp)
+\t}
+}
+
+func main() {
+\t// Merge sort:     a=2, b=2, f=n^1  → c=1
+\tfmt.Println(masterCase(2, 2, 1))   // Case 2 → Θ(n log n)
+
+\t// Binary search:  a=1, b=2, f=n^0  → c=0
+\tfmt.Println(masterCase(1, 2, 0))   // Case 2 → Θ(log n)
+
+\t// Karatsuba mult: a=3, b=2, f=n^1  → c=log₂3≈1.58
+\tfmt.Println(masterCase(3, 2, 1))   // Case 1 → Θ(n^1.585)
+
+\t// Strassen:       a=7, b=2, f=n^2  → c=log₂7≈2.81
+\tfmt.Println(masterCase(7, 2, 2))   // Case 1 → Θ(n^2.807)
+
+\t// T(n)=2T(n/2)+n²: a=2, b=2, f=n^2 → c=1
+\tfmt.Println(masterCase(2, 2, 2))   // Case 3 → Θ(n²)
+}`,
+      },
+      {
+        id: "amortized-analysis",
+        title: "Amortized Analysis",
+        difficulty: "Concept",
+        description:
+          "Amortized analysis gives the average cost per operation over a sequence of n operations — guaranteed, not probabilistic. It explains why dynamic array append is O(1) amortized even though occasional resizes are O(n).",
+        examples: [
+          { input: "Dynamic array: append n items (doubles capacity on full)", output: "O(1) amortized per append", explanation: "Total copies = n/2 + n/4 + … ≤ n. Spread over n appends → O(1) each." },
+          { input: "Stack: n pushes + multi-pop of all elements", output: "O(1) amortized per operation", explanation: "Each element pushed once, popped at most once → total ≤ 2n ops" },
+          { input: "Binary counter: increment n times", output: "O(1) amortized per increment", explanation: "Bit i flips every 2^i increments. Total flips ≤ 2n → O(1) amortized." },
+        ],
+        approach:
+          "Three methods:\n\n1. Aggregate method — simplest:\n   Compute total cost of n ops, divide by n.\n   Dynamic array: n appends cost O(n) total copies → O(1) each.\n\n2. Accounting method (banker's method):\n   Charge each op a 'credit' ≥ its actual cost.\n   Store excess credits to pay for future expensive ops.\n   Append charged 2 credits: 1 for itself + 1 saved for future copy.\n\n3. Potential method (physicist's method):\n   Φ(state) = stored potential energy.\n   Amortized cost = actual cost + ΔΦ.\n   For dynamic array: Φ = 2·size − capacity.\n   After doubling (expensive): size = n/2+1, cap = n → ΔΦ = −(n−2) offsets the O(n) copy.\n\nShortcut rule: if every element is touched a constant number of times across all n operations, total work is O(n) → amortized O(1) per op.",
+        complexity: { time: "O(1) amortized", space: "O(n)" },
+        code: `package main
+
+import "fmt"
+
+// Dynamic array — demonstrates amortized O(1) append
+type DynArr struct {
+\tdata      []int
+\tsize      int
+\tcap       int
+\ttotCopies int
+}
+
+func (d *DynArr) Append(v int) {
+\tif d.size == d.cap {
+\t\tnewCap := d.cap * 2
+\t\tif newCap == 0 { newCap = 1 }
+\t\tnewData := make([]int, newCap)
+\t\tcopy(newData, d.data[:d.size])    // O(n) — rare doubling
+\t\td.totCopies += d.size
+\t\td.data = newData
+\t\td.cap = newCap
+\t}
+\tif d.size < len(d.data) {
+\t\td.data[d.size] = v
+\t}
+\td.size++
+}
+
+func main() {
+\tda := &DynArr{}
+\tn := 16
+\tfor i := 0; i < n; i++ { da.Append(i) }
+\t// totCopies = 0+1+2+4+8 = 15 < n=16 → amortized O(1) per append
+\tfmt.Printf("n=%d appends, total element copies=%d (≤n, amortized O(1))\\n", n, da.totCopies)
+
+\t// Stack with multi-pop — amortized O(1) per op
+\tstack := []int{}
+\tfor i := 0; i < 5; i++ { stack = append(stack, i) } // 5 pushes
+\tpops := len(stack)
+\tstack = stack[:0]  // pop all at once — O(k) but total pushes = total pops
+\tfmt.Printf("Popped %d items — each element pushed & popped once → amortized O(1)\\n", pops)
+}`,
+      },
+      {
+        id: "bit-manipulation",
+        title: "Bit Manipulation",
+        difficulty: "Concept",
+        description:
+          "Bit manipulation operates on the binary representation of integers using bitwise operators. Essential for interview problems involving XOR tricks, bitmasks, powers of 2, and space-efficient state storage. Go operators: &, |, ^, &^ (AND-NOT), <<, >>.",
+        examples: [
+          { input: "n & 1", output: "0 if even, 1 if odd", explanation: "Checks the least significant bit (LSB)" },
+          { input: "n & (n-1)", output: "n with lowest set bit cleared", explanation: "n=12(1100), n-1=11(1011), AND=8(1000). Core of Kernighan bit-count." },
+          { input: "a ^ b ^ b", output: "a", explanation: "XOR with same value twice cancels. Basis of Single Number (LC 136)." },
+          { input: "n & (n-1) == 0  (n > 0)", output: "true iff n is a power of 2", explanation: "Powers of 2 have exactly one set bit; n-1 flips all lower bits." },
+        ],
+        approach:
+          "Core operations reference:\n\nCheck k-th bit (0-indexed)  | (n >> k) & 1      | 0 or 1\nSet k-th bit                | n | (1 << k)      | force bit k to 1\nClear k-th bit              | n &^ (1 << k)     | force bit k to 0  (Go: &^ = AND-NOT)\nToggle k-th bit             | n ^ (1 << k)      | flip bit k\nLowest set bit              | n & (-n)          | isolate rightmost 1\nClear lowest set bit        | n & (n-1)         | Kernighan; also checks power of 2\nPower of 2 check            | n>0 && n&(n-1)==0 |\nXOR swap (no temp)          | a^=b; b^=a; a^=b  |\n\nXOR properties to memorize:\n• a ^ 0 = a      identity\n• a ^ a = 0      self-inverse (pairs cancel)\n• commutative and associative\n\nCommon patterns:\n• Find single number in pairs → XOR all elements\n• Subset enumeration → iterate from 0 to (1<<n)-1\n• Fenwick tree → uses n & (-n) to find range",
+        complexity: { time: "O(1) per bitwise op; O(bits) for bit count", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+// Count set bits — Brian Kernighan's O(set bits) trick
+func countSetBits(n int) int {
+\tcount := 0
+\tfor n != 0 {
+\t\tn &= n - 1   // clear lowest set bit each iteration
+\t\tcount++
+\t}
+\treturn count
+}
+
+func isPowerOf2(n int) bool { return n > 0 && (n&(n-1)) == 0 }
+
+// Single Number (LC 136) — XOR all: pairs cancel, lone value survives
+func singleNumber(nums []int) int {
+\tres := 0
+\tfor _, v := range nums { res ^= v }
+\treturn res
+}
+
+// Bit manipulation helpers (0-indexed from right)
+func getBit(n, k int) int    { return (n >> k) & 1 }
+func setBit(n, k int) int    { return n | (1 << k) }
+func clearBit(n, k int) int  { return n &^ (1 << k) }  // &^ = AND-NOT in Go
+func toggleBit(n, k int) int { return n ^ (1 << k) }
+
+// Enumerate all subsets of indices 0..n-1
+func allSubsets(n int) [][]int {
+\tres := [][]int{}
+\tfor mask := 0; mask < (1 << n); mask++ {
+\t\tsubset := []int{}
+\t\tfor i := 0; i < n; i++ {
+\t\t\tif mask&(1<<i) != 0 { subset = append(subset, i) }
+\t\t}
+\t\tres = append(res, subset)
+\t}
+\treturn res
+}
+
+func main() {
+\tfmt.Println(countSetBits(13))                      // 13=1101 → 3
+\tfmt.Println(isPowerOf2(16), isPowerOf2(12))        // true false
+\tfmt.Println(singleNumber([]int{4, 1, 2, 1, 2}))   // 4
+
+\tn := 0b1010  // 10
+\tfmt.Printf("get bit 1: %d\\n", getBit(n, 1))        // 1
+\tfmt.Printf("set bit 0: %04b\\n", setBit(n, 0))      // 1011
+\tfmt.Printf("clear bit 3: %04b\\n", clearBit(n, 3)) // 0010
+\tfmt.Printf("toggle bit 2: %04b\\n", toggleBit(n, 2)) // 1110
+
+\tfmt.Println(allSubsets(3)) // 8 subsets of {0,1,2}
+}`,
+      },
+      {
+        id: "number-theory-basics",
+        title: "Number Theory & Modular Arithmetic",
+        difficulty: "Concept",
+        description:
+          "Number theory fundamentals used in coding interviews: modular arithmetic, modular exponentiation, Fermat's little theorem, and modular inverse. Critical for problems involving large numbers, combinations, and any result that must be returned 'mod 10^9+7'.",
+        examples: [
+          { input: "(a + b) % m", output: "((a%m) + (b%m)) % m", explanation: "Safe to reduce operands before addition" },
+          { input: "(a * b) % m with large a, b", output: "((a%m) * (b%m)) % m", explanation: "Reduces overflow; use int64 in Go for intermediate products" },
+          { input: "Standard modulus", output: "10^9 + 7 = 1_000_000_007", explanation: "Large prime → modular inverses exist; fits in int32; product of two fits in int64" },
+          { input: "Fermat's little theorem (p prime)", output: "a^(p-1) ≡ 1 (mod p)", explanation: "So a^(p-2) ≡ a⁻¹ (mod p) — gives modular inverse via fast exponentiation" },
+        ],
+        approach:
+          "Key modular arithmetic identities:\n\n(a + b) mod m = ((a mod m) + (b mod m)) mod m\n(a − b) mod m = ((a mod m) − (b mod m) + m) mod m   ← +m avoids negatives\n(a × b) mod m = ((a mod m) × (b mod m)) mod m\n(a / b) mod m = ((a mod m) × modInverse(b, m)) mod m\n\nModular exponentiation (fast power) — O(log exp):\n  Compute a^exp mod m via repeated squaring.\n  a^8 = ((a²)²)²  — 3 squarings instead of 7 multiplications.\n\nModular inverse:\n  When m is prime: inv(a) = a^(m-2) mod m  (Fermat's little theorem)\n  When m is not prime: extended Euclidean algorithm\n\nMOD = 10^9+7 properties:\n  • Prime → every non-zero element has a modular inverse\n  • 2 × (10^9+6) < 2^63 → safe to compute (a%m)*(b%m) in int64",
+        complexity: { time: "O(log n) for modpow", space: "O(1)" },
+        code: `package main
+
+import "fmt"
+
+const MOD = int64(1_000_000_007)
+
+// Fast modular exponentiation — O(log exp)
+func modPow(base, exp, mod int64) int64 {
+\tresult := int64(1)
+\tbase %= mod
+\tfor exp > 0 {
+\t\tif exp%2 == 1 { result = result * base % mod }
+\t\tbase = base * base % mod
+\t\texp /= 2
+\t}
+\treturn result
+}
+
+// Modular inverse via Fermat's little theorem (mod must be prime)
+func modInverse(a, mod int64) int64 { return modPow(a, mod-2, mod) }
+
+// nCr mod p — binomial coefficient under large prime modulus
+func nCr(n, r, mod int64) int64 {
+\tif r > n { return 0 }
+\tnum, den := int64(1), int64(1)
+\tfor i := int64(0); i < r; i++ {
+\t\tnum = num * ((n - i) % mod) % mod
+\t\tden = den * ((i + 1) % mod) % mod
+\t}
+\treturn num * modInverse(den, mod) % mod
+}
+
+func main() {
+\tfmt.Println(modPow(2, 10, MOD))          // 1024
+\tfmt.Println(modPow(2, 30, MOD))          // 1073741824
+
+\tinv3 := modInverse(3, MOD)
+\tfmt.Println(inv3)                         // 333333336
+\tfmt.Println(3*inv3%MOD)                  // 1  (verified)
+
+\tfmt.Println(nCr(10, 3, MOD))             // 120  = C(10,3)
+\tfmt.Println(nCr(20, 10, MOD))            // 184756
+
+\t// Safe subtraction (avoid negative results)
+\ta, b := int64(3), int64(7)
+\tfmt.Println((a - b + MOD) % MOD)         // 1000000003
+}`,
+      },
+      {
+        id: "prime-numbers",
+        title: "Prime Numbers & Sieve of Eratosthenes",
+        difficulty: "Concept",
+        description:
+          "Primality testing and prime generation are common interview building blocks. Two algorithms: O(√n) trial division to test a single number; Sieve of Eratosthenes to generate all primes up to N in O(N log log N) with O(N) space.",
+        examples: [
+          { input: "isPrime(97)", output: "true", explanation: "Check divisors 2…√97≈9.8: none divide 97" },
+          { input: "isPrime(100)", output: "false", explanation: "100 = 2×50 — fails at divisor 2" },
+          { input: "sieve(30)", output: "[2,3,5,7,11,13,17,19,23,29]", explanation: "All primes ≤ 30 via sieve" },
+          { input: "countPrimes(10)  (LC 204)", output: "4  (2,3,5,7)", explanation: "Classic sieve application — count primes strictly less than n" },
+        ],
+        approach:
+          "Primality test — O(√n):\n• 2 is the only even prime\n• Check divisibility by 2, then odd numbers 3,5,7,… up to √n\n• If no divisor found → prime\n• Why √n? If n = a×b and a ≤ b, then a ≤ √n\n\nSieve of Eratosthenes — O(N log log N), O(N) space:\n1. Boolean array sieve[0..N], all true\n2. Mark sieve[0] = sieve[1] = false\n3. For i from 2 to √N:\n   If sieve[i]: mark i², i²+i, i²+2i, … as false\n4. Remaining true indices are prime\n\nKey sieve optimization: start crossing out at i² (not 2i) — smaller multiples already marked by earlier primes.\n\nPrime factorization: divide by 2 while even, then odd factors up to √n, then the remainder (if > 1) is a prime factor.\n\nIf you need primality for many queries up to N: run sieve once, O(1) per query afterward.",
+        complexity: { time: "O(√n) single check / O(N log log N) sieve", space: "O(1) single / O(N) sieve" },
+        code: `package main
+
+import (
+\t"fmt"
+\t"math"
+)
+
+// O(√n) primality test
+func isPrime(n int) bool {
+\tif n < 2 { return false }
+\tif n == 2 { return true }
+\tif n%2 == 0 { return false }
+\tfor i := 3; i <= int(math.Sqrt(float64(n))); i += 2 {
+\t\tif n%i == 0 { return false }
+\t}
+\treturn true
+}
+
+// Sieve of Eratosthenes — O(N log log N)
+func sieve(n int) []int {
+\tis := make([]bool, n+1)
+\tfor i := range is { is[i] = true }
+\tis[0], is[1] = false, false
+\tfor i := 2; i*i <= n; i++ {
+\t\tif is[i] {
+\t\t\tfor j := i * i; j <= n; j += i { is[j] = false }
+\t\t}
+\t}
+\tprimes := []int{}
+\tfor i, v := range is {
+\t\tif v { primes = append(primes, i) }
+\t}
+\treturn primes
+}
+
+// Prime factorization — O(√n)
+func primeFactors(n int) []int {
+\tfactors := []int{}
+\tfor n%2 == 0 { factors = append(factors, 2); n /= 2 }
+\tfor i := 3; i*i <= n; i += 2 {
+\t\tfor n%i == 0 { factors = append(factors, i); n /= i }
+\t}
+\tif n > 1 { factors = append(factors, n) }
+\treturn factors
+}
+
+// LC 204 — count primes below n
+func countPrimes(n int) int {
+\tif n < 2 { return 0 }
+\treturn len(sieve(n - 1))
+}
+
+func main() {
+\tfmt.Println(isPrime(97), isPrime(100))  // true false
+\tfmt.Println(sieve(30))                  // [2 3 5 7 11 13 17 19 23 29]
+\tfmt.Println(primeFactors(360))          // [2 2 2 3 3 5]
+\tfmt.Println(countPrimes(10))            // 4
+}`,
+      },
+      {
+        id: "gcd-lcm",
+        title: "GCD & LCM",
+        difficulty: "Concept",
+        description:
+          "GCD (Greatest Common Divisor) is the largest integer dividing both a and b. LCM (Least Common Multiple) is the smallest positive integer divisible by both. The Euclidean algorithm computes GCD in O(log min(a,b)) — used in fraction reduction, coprimality checks, and scheduling problems.",
+        examples: [
+          { input: "gcd(48, 18)", output: "6", explanation: "gcd(48,18) → gcd(18,12) → gcd(12,6) → gcd(6,0) = 6" },
+          { input: "lcm(4, 6)", output: "12", explanation: "lcm = 4×6 / gcd(4,6) = 24/2 = 12" },
+          { input: "gcd(a, 0)", output: "a", explanation: "Base case of Euclidean algorithm" },
+          { input: "arrayGCD([12, 18, 24])", output: "6", explanation: "Fold pairwise: gcd(gcd(12,18), 24) = gcd(6,24) = 6" },
+        ],
+        approach:
+          "Euclidean algorithm:\n  gcd(a, b) = gcd(b, a % b)\n  Base case: gcd(a, 0) = a\n\nWhy it works: any d that divides a and b also divides (a mod b), so the GCD is preserved each step.\n\nTime: O(log min(a,b)). Worst case: consecutive Fibonacci numbers.\n\nLCM formula:\n  lcm(a, b) = (a / gcd(a, b)) × b\n  ← Divide a by gcd FIRST to prevent overflow before multiplying.\n\nExtended Euclidean:\n  Finds x, y such that: a·x + b·y = gcd(a, b)  (Bézout's identity)\n  Useful for modular inverse when modulus is not prime.\n\nCommon patterns:\n  • Reduce fraction p/q → divide both by gcd(p,q)\n  • Check coprimality → gcd(a,b) == 1\n  • Array GCD → fold with gcd function\n  • LCM of 1..n → product of highest prime powers ≤ n",
+        complexity: { time: "O(log min(a,b))", space: "O(log n) recursive / O(1) iterative" },
+        code: `package main
+
+import "fmt"
+
+// Euclidean GCD — recursive
+func gcd(a, b int) int {
+\tif b == 0 { return a }
+\treturn gcd(b, a%b)
+}
+
+// Iterative GCD — O(1) space
+func gcdIter(a, b int) int {
+\tfor b != 0 { a, b = b, a%b }
+\treturn a
+}
+
+// LCM — divide first to prevent overflow
+func lcm(a, b int) int { return (a / gcd(a, b)) * b }
+
+// GCD of a whole array — reduce pairwise
+func arrayGCD(nums []int) int {
+\tg := nums[0]
+\tfor _, v := range nums[1:] { g = gcd(g, v) }
+\treturn g
+}
+
+// Extended Euclidean — a*x + b*y = gcd(a,b)
+func extGCD(a, b int) (g, x, y int) {
+\tif b == 0 { return a, 1, 0 }
+\tg, x1, y1 := extGCD(b, a%b)
+\treturn g, y1, x1 - (a/b)*y1
+}
+
+func main() {
+\tfmt.Println(gcd(48, 18))                      // 6
+\tfmt.Println(gcdIter(48, 18))                  // 6
+\tfmt.Println(lcm(4, 6))                        // 12
+\tfmt.Println(lcm(12, 15))                      // 60
+\tfmt.Println(arrayGCD([]int{12, 18, 24}))      // 6
+
+\tg, x, y := extGCD(30, 20)
+\t// 30*x + 20*y = gcd(30,20)
+\tfmt.Printf("gcd=%d, x=%d, y=%d → 30*%d + 20*%d = %d\\n", g, x, y, x, y, 30*x+20*y)
+}`,
+      },
+    ],
+  },
 ];

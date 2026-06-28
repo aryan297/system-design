@@ -5,7 +5,7 @@ import CodeBlock from "../components/CodeBlock";
 import gopherImg from "../assets/gopher.png";
 import "./DSAPage.css";
 
-const DIFF_CLASS = { Easy: "diff-easy", Medium: "diff-medium", Hard: "diff-hard" };
+const DIFF_CLASS = { Easy: "diff-easy", Medium: "diff-medium", Hard: "diff-hard", Concept: "diff-concept" };
 
 // ── Template view ────────────────────────────────────────────────────────────
 function TemplateView({ categoryId }) {
@@ -142,7 +142,11 @@ export default function DSAPage() {
           {/* Header */}
           <div className="dsa-detail-header">
             <div className="dsa-detail-meta">
-              <span className="dsa-lc-badge">LC #{problem.leetcode}</span>
+              {problem.leetcode ? (
+                <span className="dsa-lc-badge">LC #{problem.leetcode}</span>
+              ) : (
+                <span className="dsa-lc-badge">Concept</span>
+              )}
               <span className={`dsa-diff dsa-diff--lg ${DIFF_CLASS[problem.difficulty]}`}>
                 {problem.difficulty}
               </span>
