@@ -24,10 +24,26 @@ export const SDI_CATEGORIES = [
             "Vertical scaling means adding CPU/RAM/disk to one machine — it's simple (no code changes, no distributed-systems complexity) but has a hard ceiling (biggest instance type), a single point of failure, and usually means downtime to resize. Horizontal scaling means adding more machines behind a load balancer — it has near-unlimited headroom and gives you fault tolerance for free, but it forces you to confront state: sessions, caches, and DB connections must now work across N nodes, which is where sticky sessions, distributed caches, and connection pool sizing come in. The decision tree: (1) Is the bottleneck CPU/memory on a stateless service? → horizontal, it's usually a small code change plus a load balancer. (2) Is it a database or something inherently stateful? → vertical first (it buys time cheaply), then look at read replicas / sharding as the real horizontal fix. (3) Do you need to survive a single node dying? → horizontal is mandatory regardless of cost, because vertical scaling never solves availability.",
         },
         keyPoints: [
-          "Vertical = bigger box (fast, simple, capped, single point of failure); horizontal = more boxes (elastic, fault-tolerant, but needs statelessness)",
-          "Stateless services (API/web tiers) horizontally scale almost for free behind a load balancer",
-          "Stateful systems (DBs, caches) need replication/sharding before they can scale out — vertical buys time",
-          "Horizontal scaling is the only real path to high availability — one big box is always one outage away from total downtime",
+          {
+            point: "Vertical = bigger box (fast, simple, capped, single point of failure); horizontal = more boxes (elastic, fault-tolerant, but needs statelessness)",
+            example: "AWS lets you bump an RDS instance from db.r5.large to db.r5.4xlarge in minutes (vertical); adding read replicas or sharding (horizontal) needs real re-architecting.",
+            bestApproach: "Design services stateless from day one so horizontal scaling stays available as an option even when you choose to scale vertically first for speed.",
+          },
+          {
+            point: "Stateless services (API/web tiers) horizontally scale almost for free behind a load balancer",
+            example: "An ALB + auto-scaling group in front of a Node.js API tier scales 2 → 200 instances on a CPU/RPS trigger with zero code changes.",
+            bestApproach: "Push all session/user state into Redis or the DB so any instance can serve any request — verify by killing a random instance under load and confirming nothing breaks.",
+          },
+          {
+            point: "Stateful systems (DBs, caches) need replication/sharding before they can scale out — vertical buys time",
+            example: "A Postgres primary bumped from db.r5.xlarge to db.r5.4xlarge buys 6 months before a sharding project becomes mandatory.",
+            bestApproach: "Treat vertical DB scaling as a deliberate, time-boxed stopgap — start the read-replica/sharding design before you're forced onto the largest instance size available.",
+          },
+          {
+            point: "Horizontal scaling is the only real path to high availability — one big box is always one outage away from total downtime",
+            example: "A single giant EC2 instance running the whole app goes dark during an AZ outage and takes the product down with it; a 3-AZ fleet of small instances doesn't.",
+            bestApproach: "Deploy at least 3 replicas spread across availability zones for anything customer-facing, even when one box could technically handle current load.",
+          },
         ],
         followUps: [
           "How would you make a stateful service horizontally scalable?",
@@ -51,10 +67,26 @@ export const SDI_CATEGORIES = [
             "Latency = time for a single unit of work to complete (p50/p95/p99 response time). Throughput = total units of work completed per second (RPS, messages/sec, rows/sec). They're related but not the same — a system can have low latency and low throughput (a fast single-threaded service with no concurrency) or high latency and high throughput (a batched pipeline that processes huge volumes but each item waits in a queue). The classic tension: batching writes to a database (e.g., buffering 1000 events before a single bulk INSERT) dramatically improves throughput — fewer round trips, better disk I/O patterns — but it directly increases latency for any individual event, which now waits for the batch to fill or a timeout to fire. Same story with Nagle's algorithm on TCP (batches small packets, adds latency to save bandwidth) or async logging (great throughput, but a log line might not be visible for seconds).",
         },
         keyPoints: [
-          "Latency = time per request (p50/p95/p99); throughput = requests per second — different axes, often plotted together",
-          "Little's Law ties them together: concurrency = throughput × latency — raising concurrency raises throughput until queueing inflates latency",
-          "Batching/buffering is the textbook example of trading latency for throughput",
-          "Always ask 'which one does the user/SLA actually care about?' before optimizing — they can pull in opposite directions",
+          {
+            point: "Latency = time per request (p50/p95/p99); throughput = requests per second — different axes, often plotted together",
+            example: "A payments API dashboard shows p99 = 180ms and 4,200 RPS side by side — two independent numbers describing the same system from different angles.",
+            bestApproach: "Track both as separate SLOs (e.g., 'p99 < 200ms' and 'sustain 5,000 RPS') instead of one combined 'performance' metric — they can move in opposite directions.",
+          },
+          {
+            point: "Little's Law ties them together: concurrency = throughput × latency — raising concurrency raises throughput until queueing inflates latency",
+            example: "A connection pool capped at 50 concurrent DB connections caps throughput at 50/avg_latency — raising the pool size raises throughput until the DB itself becomes the bottleneck.",
+            bestApproach: "Use Little's Law to size thread/connection pools deliberately from target throughput and measured latency, instead of guessing a pool size and tuning by trial and error.",
+          },
+          {
+            point: "Batching/buffering is the textbook example of trading latency for throughput",
+            example: "Buffering 1,000 analytics events before one bulk INSERT cuts DB round-trips 1000x but makes any single event wait up to the batch window before it's durable.",
+            bestApproach: "Make the batch size/timeout configurable and pick it from the SLA backwards — 'events must be visible within 2s' caps how long you're allowed to buffer.",
+          },
+          {
+            point: "Always ask 'which one does the user/SLA actually care about?' before optimizing — they can pull in opposite directions",
+            example: "A checkout API needs low p99 latency (user waiting); a nightly ETL job needs high throughput (no one's watching it run).",
+            bestApproach: "Write down the actual SLA in user-facing terms before touching code — 'fast enough to feel instant' vs 'cheap enough to process the full daily volume' lead to opposite designs.",
+          },
         ],
         followUps: [
           "What is Little's Law and how do you use it in capacity planning?",
@@ -78,11 +110,31 @@ export const SDI_CATEGORIES = [
             "Step 1 — measure: profile the current system; find out whether the bottleneck is the app tier (CPU-bound serialization), the database (lock contention, slow queries), or the network (payload size, connection churn). Don't guess. Step 2 — cheap wins: add a CDN/edge cache for anything cacheable (product images, near-static listings); add an in-memory or Redis cache in front of the DB for hot reads with a sensible TTL and an invalidation strategy. This alone often absorbs an order of magnitude of read traffic. Step 3 — database: add read replicas and route reads through a load balancer/proxy (e.g., ProxySQL, PgBouncer) — writes still go to the primary, reads fan out. Step 4 — app tier: make the service stateless (move sessions to Redis) so you can horizontally scale behind a load balancer with auto-scaling rules tied to CPU/RPS. Step 5 — protect the system: add rate limiting and circuit breakers so the 10x doesn't cascade into an outage if one dependency slips. Step 6 — re-measure and iterate — scaling is never 'done', it's a loop of measure → fix the biggest bottleneck → re-measure.",
         },
         keyPoints: [
-          "Always start with measurement/profiling — scaling the wrong layer wastes money and adds complexity for nothing",
-          "Caching (CDN + application cache) usually gives the biggest bang-for-buck for read-heavy systems",
-          "Read replicas decouple read scaling from write scaling — the primary stays the bottleneck only for writes",
-          "Statelessness is the prerequisite for horizontal auto-scaling — sessions/caches must move out of the app process",
-          "Add guardrails (rate limiting, circuit breakers, timeouts) — more traffic without protection just means a bigger blast radius when something breaks",
+          {
+            point: "Always start with measurement/profiling — scaling the wrong layer wastes money and adds complexity for nothing",
+            example: "A team added read replicas to fix slow responses, but profiling later showed the real bottleneck was JSON serialization on the app tier — the replicas changed nothing.",
+            bestApproach: "Run a profiler/APM (Datadog, pprof) under realistic load before proposing any scaling change, and require a flamegraph or query-time breakdown to justify the fix.",
+          },
+          {
+            point: "Caching (CDN + application cache) usually gives the biggest bang-for-buck for read-heavy systems",
+            example: "Adding a Redis cache in front of a product-listing endpoint with a 60s TTL cut DB read load by 95% with a single afternoon's work.",
+            bestApproach: "Cache the hottest, most-repeated reads first (Pareto: the top 20% of keys usually account for 80% of traffic) before reaching for read replicas or sharding.",
+          },
+          {
+            point: "Read replicas decouple read scaling from write scaling — the primary stays the bottleneck only for writes",
+            example: "Routing all SELECT queries through PgBouncer to 3 read replicas let read throughput scale to 10K RPS while the primary still only handled the original write volume.",
+            bestApproach: "Route reads through a proxy (PgBouncer, ProxySQL) that load-balances across replicas, and make replica lag observable so stale-read tolerance is a conscious choice, not a surprise.",
+          },
+          {
+            point: "Statelessness is the prerequisite for horizontal auto-scaling — sessions/caches must move out of the app process",
+            example: "An app storing user sessions in local memory breaks the moment auto-scaling adds a second instance — half the requests land on a server with no session.",
+            bestApproach: "Move sessions to Redis (or signed JWTs) before introducing auto-scaling — verify by load-testing against 2+ instances behind the LB, not just one.",
+          },
+          {
+            point: "Add guardrails (rate limiting, circuit breakers, timeouts) — more traffic without protection just means a bigger blast radius when something breaks",
+            example: "10x traffic with no circuit breaker on a flaky payment-provider call turned one slow dependency into a full outage as request threads piled up waiting on it.",
+            bestApproach: "Set explicit timeouts on every outbound call and wrap risky dependencies in a circuit breaker (Hystrix/resilience4j-style) before scaling traffic up, not after the first incident.",
+          },
         ],
         followUps: [
           "How do you keep a Redis cache consistent with the database on writes?",
@@ -106,10 +158,26 @@ export const SDI_CATEGORIES = [
             "Performance is a snapshot metric: latency and throughput measured at a specific load level (e.g., 'p99 is 50ms at 100 RPS'). Scalability is about the *shape of the curve* as load increases: does p99 stay near 50ms at 1,000 RPS and 10,000 RPS, or does it explode because of lock contention, connection pool exhaustion, or O(n²) behavior somewhere? A system can be blazing fast in a demo (low load, warm cache, single user) and completely unscalable (falls over the moment concurrent users show up — e.g., a single SQLite file with global write locks). Conversely a system can have so-so per-request performance but scale beautifully because it's embarrassingly parallel and stateless. The interview-winning framing: 'performance answers how fast right now; scalability answers what happens to that answer as N grows.'",
         },
         keyPoints: [
-          "Performance = a point-in-time measurement; scalability = how that measurement changes with load",
-          "A fast system can be unscalable (global locks, single-writer DB, in-memory session affinity)",
-          "A 'slower' system can scale better if it's stateless and horizontally distributable",
-          "Always ask 'at what load?' when someone claims a system is fast",
+          {
+            point: "Performance = a point-in-time measurement; scalability = how that measurement changes with load",
+            example: "'p99 is 50ms' is a performance number; 'p99 stays under 50ms from 100 RPS to 10,000 RPS' is a scalability claim — the first says nothing about the second.",
+            bestApproach: "Always report a latency/throughput number paired with the load it was measured at, and re-measure at 10x that load before declaring a system 'fast.'",
+          },
+          {
+            point: "A fast system can be unscalable (global locks, single-writer DB, in-memory session affinity)",
+            example: "A SQLite-backed app responds in 5ms for one user, but a global write lock serializes every write once 500 concurrent users show up.",
+            bestApproach: "Load-test for lock contention and single-writer bottlenecks specifically, not just average latency at low concurrency — concurrency, not raw speed, is what exposes scalability limits.",
+          },
+          {
+            point: "A 'slower' system can scale better if it's stateless and horizontally distributable",
+            example: "A 20ms-per-request stateless microservice that scales to 50 instances out-throughputs a 5ms single-instance monolith the moment load exceeds what one box can handle.",
+            bestApproach: "When comparing two designs, evaluate total system throughput at target scale, not per-request latency on a single node in isolation.",
+          },
+          {
+            point: "Always ask 'at what load?' when someone claims a system is fast",
+            example: "A demo showing 5ms response times with one test user says nothing about behavior at the 10,000-concurrent-user mark the product actually needs to hit.",
+            bestApproach: "Make 'at what load was this measured?' a standing question in design reviews and load-test reports — a latency number without a concurrency figure attached is incomplete.",
+          },
         ],
         followUps: [
           "How would you load-test to expose a scalability problem that a quick benchmark would miss?",
@@ -133,11 +201,31 @@ export const SDI_CATEGORIES = [
             "The interviewer isn't grading your arithmetic — they're grading whether you can translate a vague requirement into numbers that drive design decisions. A repeatable method: (1) Assume a user base — e.g., '100M users, 10% daily active = 10M DAU.' (2) Derive request volume — 'each DAU creates 1 short URL/day → 10M writes/day ≈ 116 writes/sec average; reads are typically 100x writes for a URL shortener → ~11,600 reads/sec.' Always note peak vs average (peak is often 2-5x average). (3) Derive storage — 'each record is ~500 bytes (URL + metadata); 10M/day × 365 × 5 years × 500B ≈ 9TB' — and round generously. (4) Derive bandwidth — requests/sec × payload size gives you ingress/egress estimates that inform CDN/cache decisions. (5) Sanity check — '11K reads/sec is well within what a cache + a few read replicas handles; 9TB fits comfortably in a sharded relational store or even a single beefy instance with room to grow.' The punch line you want to land: these numbers directly justify *why* you'll propose a cache (read:write ratio is 100:1) and a particular storage engine (data size fits X).",
         },
         keyPoints: [
-          "State your assumptions out loud — the interviewer cares about the reasoning chain, not the final digit",
-          "Convert daily/monthly numbers to per-second — that's the unit your architecture actually has to handle",
-          "Always distinguish average load from peak load (peak is commonly 2-5x average)",
-          "Use the resulting numbers to *justify* design choices ('100:1 read:write ratio → we need a cache')",
-          "Round aggressively to powers of ten — 86,400 seconds/day ≈ 10^5 is a useful shortcut",
+          {
+            point: "State your assumptions out loud — the interviewer cares about the reasoning chain, not the final digit",
+            example: "Saying '100M users, 10% DAU, 1 action/user/day' out loud lets the interviewer correct a wrong assumption mid-stream instead of silently judging a number they disagree with.",
+            bestApproach: "Narrate each assumption as a short, falsifiable sentence ('I'll assume X because Y') so the interviewer can redirect you in seconds rather than after you've built on a bad number.",
+          },
+          {
+            point: "Convert daily/monthly numbers to per-second — that's the unit your architecture actually has to handle",
+            example: "'10M writes/day' sounds huge; converted it's ~116 writes/sec — well within a single Postgres primary, which immediately simplifies the rest of the design.",
+            bestApproach: "Divide by 86,400 (seconds/day) as a reflex the moment any daily figure appears — the per-second number is what determines instance counts and database choice.",
+          },
+          {
+            point: "Always distinguish average load from peak load (peak is commonly 2-5x average)",
+            example: "An e-commerce API averaging 1,000 RPS can spike to 4,000+ RPS during a flash sale — sizing only for the average leaves zero headroom for the moment that actually matters.",
+            bestApproach: "State both numbers explicitly ('116 RPS average, ~500 RPS peak') and size auto-scaling/capacity for the peak figure, not the average.",
+          },
+          {
+            point: "Use the resulting numbers to *justify* design choices ('100:1 read:write ratio → we need a cache')",
+            example: "Deriving '11.6K reads/sec vs 116 writes/sec' directly motivates 'we need a cache and read replicas' as a conclusion, not an assumption pulled from a generic template.",
+            bestApproach: "Explicitly connect every estimation number to the design decision it drives — interviewers are scoring whether the math changes your architecture, not whether you can multiply.",
+          },
+          {
+            point: "Round aggressively to powers of ten — 86,400 seconds/day ≈ 10^5 is a useful shortcut",
+            example: "Approximating 86,400 as 10^5 turns '10M requests/day' into '10^7 / 10^5 = 100 RPS' as fast mental math, close enough (116 vs 100) for any architecture decision.",
+            bestApproach: "Memorize the handful of standard conversions (seconds/day ≈ 10^5, seconds/year ≈ 3×10^7) so unit conversion never becomes the bottleneck in your reasoning under time pressure.",
+          },
         ],
         followUps: [
           "How would peak traffic during a marketing campaign change your numbers?",
@@ -170,10 +258,26 @@ export const SDI_CATEGORIES = [
             "A monolith is one deployable unit: simple to develop, test, deploy, and debug (one stack trace, one transaction, no network between modules). Its weaknesses show up at scale: the whole thing scales together even if only one piece is hot, a bug in one module can take down the whole app, and large teams step on each other in one codebase/release train. Microservices split the system into independently deployable services: teams can move independently, each service scales on its own, and a failure can be contained — but you now pay for that with network latency between what used to be function calls, distributed transactions (sagas instead of ACID), service discovery, distributed tracing/observability, and a much heavier DevOps/infra bill. The senior answer: 'Start with a modular monolith — clean internal boundaries (domain modules, clear interfaces) — so that if/when you need to split it, you're extracting well-defined modules, not performing surgery on a ball of mud. Move to microservices when you have a *specific* pain (a hot module that needs independent scaling, a team that needs to ship independently) — not because it's trendy.' This is literally what Shopify, Segment, and (initially) Amazon did.",
         },
         keyPoints: [
-          "Monolith: simple ops, ACID transactions, easy debugging — but couples scaling, deploys, and team velocity together",
-          "Microservices: independent scaling/deploys/failure isolation — but you now own network latency, distributed transactions, service discovery, and observability",
-          "'Start with a modular monolith, split when you feel real pain' is the senior-level answer — not 'microservices because Netflix does it'",
-          "Conway's Law matters: your service boundaries will mirror your team boundaries whether you plan it or not",
+          {
+            point: "Monolith: simple ops, ACID transactions, easy debugging — but couples scaling, deploys, and team velocity together",
+            example: "A single Rails app with one Postgres database lets a 5-person startup ship features daily with one deploy pipeline and zero distributed-systems overhead.",
+            bestApproach: "Enforce clean internal module boundaries (domain folders, no cross-module DB access) from day one so the monolith stays extractable later instead of becoming a ball of mud.",
+          },
+          {
+            point: "Microservices: independent scaling/deploys/failure isolation — but you now own network latency, distributed transactions, service discovery, and observability",
+            example: "Splitting checkout into 8 services let Amazon's teams deploy independently, but every checkout request now crosses several network hops that didn't exist as function calls in the monolith.",
+            bestApproach: "Only split out a service when you have a specific, named pain (independent scaling need, independent deploy cadence for one team) — never split preemptively 'because microservices.'",
+          },
+          {
+            point: "'Start with a modular monolith, split when you feel real pain' is the senior-level answer — not 'microservices because Netflix does it'",
+            example: "Shopify deliberately stayed a modular Rails monolith for most of its core platform, extracting only Flash Sales infrastructure once it had a clear, measured independent-scaling need.",
+            bestApproach: "Default new products to a modular monolith and revisit the decision only when a specific module's scaling, team-ownership, or reliability needs diverge sharply from the rest.",
+          },
+          {
+            point: "Conway's Law matters: your service boundaries will mirror your team boundaries whether you plan it or not",
+            example: "A company with separate frontend and backend teams (not separate product teams) often ends up with a frontend-tier/backend-tier split in services that doesn't map to actual business domains.",
+            bestApproach: "Design team structure and service boundaries together — organize teams around business capabilities first, and let service boundaries follow, not the other way around.",
+          },
         ],
         followUps: [
           "How would you migrate a monolith to microservices without downtime? (Strangler Fig pattern)",
@@ -197,10 +301,26 @@ export const SDI_CATEGORIES = [
             "In a synchronous chain, checkout → inventory → shipping → notification means checkout's latency is the *sum* of all four, and its availability is the *product* of all four (if any one is down, checkout fails). Event-driven architecture flips this: checkout publishes an `OrderPlaced` event to a broker (Kafka/SNS/EventBridge) and returns immediately; inventory, shipping, and notification each subscribe and react independently, on their own schedule, with their own retry/backoff. Benefits: (1) temporal decoupling — consumers can be down and catch up later without checkout even noticing; (2) it's trivial to add a new consumer (e.g., analytics) without touching checkout's code; (3) natural buffering absorbs traffic spikes (the queue smooths bursts that would otherwise overload downstream services). The costs are real too: you trade strong consistency for eventual consistency (the user sees 'order placed' before shipping has actually been scheduled), debugging becomes harder (a single user action is now scattered across asynchronous logs that need correlation IDs and distributed tracing), and you must design for at-least-once delivery (idempotent consumers, dedup keys) because brokers can redeliver.",
         },
         keyPoints: [
-          "Sync chains couple latency (sum) and availability (product) across every hop — one slow link slows everything",
-          "Events decouple producer and consumer in time, deployment cadence, and failure domain",
-          "Trade-off: you give up strong consistency for resilience and independent scaling — eventual consistency becomes a UX concern, not just a backend detail",
-          "At-least-once delivery is the default for brokers — consumers must be idempotent (dedup keys, upserts) or they'll double-process",
+          {
+            point: "Sync chains couple latency (sum) and availability (product) across every hop — one slow link slows everything",
+            example: "A checkout calling inventory (50ms) then shipping (80ms) then notification (200ms) synchronously takes 330ms minimum, and a notification-service blip fails the entire checkout.",
+            bestApproach: "Map out the full synchronous call chain and ask 'does the user need to wait for this specific step?' for each hop — anything answered 'no' is a candidate to move behind an event.",
+          },
+          {
+            point: "Events decouple producer and consumer in time, deployment cadence, and failure domain",
+            example: "Uber's notification service can be redeployed or briefly down without affecting trip-matching, because it only reacts to a `trip.matched` event whenever it's able to.",
+            bestApproach: "Publish events for state transitions that other teams/services care about, and let each consumer own its own retry/backoff policy rather than the producer tracking delivery per consumer.",
+          },
+          {
+            point: "Trade-off: you give up strong consistency for resilience and independent scaling — eventual consistency becomes a UX concern, not just a backend detail",
+            example: "A user sees 'Order placed!' before the shipping service has actually scheduled the shipment — the UI must be designed to tolerate that few-hundred-millisecond gap gracefully.",
+            bestApproach: "Surface the eventual-consistency window in the UI explicitly (e.g., 'Confirming...' states) rather than pretending the system is instantaneous end-to-end.",
+          },
+          {
+            point: "At-least-once delivery is the default for brokers — consumers must be idempotent (dedup keys, upserts) or they'll double-process",
+            example: "A Kafka consumer crash-and-restart can redeliver an `OrderPlaced` event, and a non-idempotent inventory deduction would double-decrement stock for the same order.",
+            bestApproach: "Carry a unique event/message ID through to every consumer and use it as a dedup key (DB unique constraint or a Redis SETNX check) before applying any side-effecting action.",
+          },
         ],
         followUps: [
           "How do you guarantee exactly-once processing on top of an at-least-once broker?",
@@ -224,10 +344,26 @@ export const SDI_CATEGORIES = [
             "An API Gateway sits in front of all your services and centralizes concerns every request needs regardless of client: authentication/authorization, rate limiting, TLS termination, request routing, and basic request/response transformation. It's a single, generic front door. A Backend-for-Frontend goes further: it's a *dedicated* aggregation/orchestration layer per client type (one BFF for mobile, one for web, maybe one for partner APIs) that calls the underlying microservices and shapes the response exactly the way that client wants it — fewer round trips, payloads tailored to screen real estate and bandwidth (mobile gets a slimmed-down response; web gets the full one). The chattiness problem you're describing — client making 6 calls to render one screen — is *exactly* what a BFF solves: it does the fan-out server-side (where the network is fast) and returns one composed response. The gateway alone won't fix that because it's generic by design — it doesn't know that 'the mobile home screen needs user+orders+recommendations in one shot.' Layering: client → gateway (auth, rate limit, routing) → BFF (per-client composition) → microservices.",
         },
         keyPoints: [
-          "Gateway = shared, generic front door (auth, rate limiting, routing) — same for every client",
-          "BFF = per-client aggregation/orchestration shaped to that client's exact needs — solves chattiness and over-fetching",
-          "They're complementary, not competing — gateway handles cross-cutting concerns, BFF handles client-specific composition",
-          "Watch for the anti-pattern: business logic leaking into the BFF, turning it into a second monolith",
+          {
+            point: "Gateway = shared, generic front door (auth, rate limiting, routing) — same for every client",
+            example: "A Kong gateway terminates TLS and validates JWTs once for every request from mobile, web, and partner clients alike, before anything reaches a backend service.",
+            bestApproach: "Keep the gateway's logic generic and client-agnostic — if you find yourself adding 'if client == mobile' branches in the gateway, that logic belongs in a BFF instead.",
+          },
+          {
+            point: "BFF = per-client aggregation/orchestration shaped to that client's exact needs — solves chattiness and over-fetching",
+            example: "Netflix's mobile BFF composes catalog + recommendations + continue-watching into one response tailored to a small screen, instead of the client making 3 separate calls and assembling them itself.",
+            bestApproach: "Build one BFF per client family (not per individual client version) and have it call existing microservices read-only — never let it own its own source-of-truth data.",
+          },
+          {
+            point: "They're complementary, not competing — gateway handles cross-cutting concerns, BFF handles client-specific composition",
+            example: "A request flows client → gateway (auth, rate limit) → BFF (compose mobile home-screen payload) → 4 microservices in parallel — each layer doing a distinct job.",
+            bestApproach: "Layer them explicitly in your architecture diagram and resist merging their responsibilities even when it seems like a shortcut for a small team.",
+          },
+          {
+            point: "Watch for the anti-pattern: business logic leaking into the BFF, turning it into a second monolith",
+            example: "A BFF that starts validating discount-eligibility rules itself (instead of delegating to the pricing service) becomes a second place that logic can drift out of sync.",
+            bestApproach: "Restrict BFF code to composition, shaping, and caching — any rule that affects business outcomes belongs in the owning microservice, enforced via code review.",
+          },
         ],
         followUps: [
           "How do you avoid duplicating logic across multiple BFFs?",
@@ -251,11 +387,31 @@ export const SDI_CATEGORIES = [
             "A full rewrite ('big bang') is one of the riskiest moves in software — Netscape's multi-year rewrite famously let Internet Explorer eat their market share. The Strangler Fig pattern (named after the vine that slowly envelops a tree) avoids this: (1) Put a thin routing layer / facade (often the API gateway) in front of the monolith so all traffic flows through a single, controllable point. (2) Pick the *least risky, most isolated* capability first (e.g., 'send email notifications' rather than 'process payments') and rebuild it as a standalone service with its own datastore. (3) Update the facade to route that capability's traffic to the new service while everything else still goes to the monolith — the monolith and the new service coexist. (4) Use change-data-capture or dual-writes (carefully — see the dual-write consistency trap) to keep data in sync during the transition window. (5) Once the new service is proven in production, remove that code path from the monolith. (6) Repeat for the next capability. Over months or years, the monolith 'shrinks' until it's an empty husk you can retire. The key discipline: each step is independently shippable and reversible — if a new service misbehaves, flip the facade's routing back to the monolith instantly.",
         },
         keyPoints: [
-          "Never do a big-bang rewrite on a business-critical system — the Netscape rewrite is the canonical cautionary tale",
-          "A routing facade (gateway) is the lever that lets you redirect traffic incrementally and revert instantly",
-          "Extract the lowest-risk, most-isolated capability first to build confidence and muscle memory",
-          "Data synchronization during the transition (CDC / dual writes) is usually the hardest part — harder than the code split",
-          "Each migration step should be independently shippable AND reversible — that's what makes it 'safe'",
+          {
+            point: "Never do a big-bang rewrite on a business-critical system — the Netscape rewrite is the canonical cautionary tale",
+            example: "Netscape's multi-year ground-up rewrite shipped no improvements to users for years while Internet Explorer ate their market share out from under them.",
+            bestApproach: "Reject any migration plan whose first deliverable is more than a few weeks away — insist on incremental, independently-shippable extractions instead.",
+          },
+          {
+            point: "A routing facade (gateway) is the lever that lets you redirect traffic incrementally and revert instantly",
+            example: "Routing `/notifications/*` to a new service while everything else still hits the monolith lets you flip that one route back in seconds if the new service misbehaves.",
+            bestApproach: "Stand up the facade/gateway as the very first step of any strangler-fig migration, even before the first capability is extracted — it's the safety net for everything after.",
+          },
+          {
+            point: "Extract the lowest-risk, most-isolated capability first to build confidence and muscle memory",
+            example: "Extracting 'send email notifications' first (low blast radius if it breaks) before touching 'process payments' lets the team validate the extraction pattern safely.",
+            bestApproach: "Rank candidate capabilities by blast radius if they fail, and order extractions from lowest to highest risk rather than by perceived technical interest.",
+          },
+          {
+            point: "Data synchronization during the transition (CDC / dual writes) is usually the hardest part — harder than the code split",
+            example: "Dual-writing orders to both the monolith's DB and a new orders-service DB risks the two silently drifting apart if one write succeeds and the other fails.",
+            bestApproach: "Prefer CDC (change-data-capture, e.g. Debezium reading the monolith's write-ahead log) over application-level dual writes — it guarantees a single source of truth during the transition.",
+          },
+          {
+            point: "Each migration step should be independently shippable AND reversible — that's what makes it 'safe'",
+            example: "If the new inventory service starts returning wrong stock counts in production, flipping the facade's routing back to the monolith should be a config change, not a rollback deploy.",
+            bestApproach: "Treat 'can we revert this step in under 5 minutes without a deploy' as a hard requirement for every extraction, not a nice-to-have.",
+          },
         ],
         followUps: [
           "How do you keep the monolith's database and the new service's database consistent during the transition?",
@@ -279,10 +435,26 @@ export const SDI_CATEGORIES = [
             "Layered (n-tier): presentation → business logic → data access, each layer only talks to the one below. Simple to understand and test in isolation; the classic default for CRUD apps. Risk: 'sinkhole anti-pattern' where layers just pass data through with no added value. Event-driven: producers emit events, consumers react asynchronously (covered above) — fits systems that need to scale independently and tolerate eventual consistency. CQRS (Command Query Responsibility Segregation): split the *write model* (optimized for consistency/validation) from the *read model* (optimized for fast, denormalized queries) — often paired with event sourcing. Fits systems where read and write patterns are wildly different (e.g., a write is one order, but the read is 50 different dashboards slicing that data differently). Microkernel (plug-in architecture): a minimal core with pluggable extensions — fits products that need deep customization per customer (IDEs, browsers with extensions, Salesforce-style platforms). The interview move isn't reciting definitions — it's mapping the *forces* in the prompt ('reads and writes have very different shapes' → CQRS; 'we need third parties to extend this' → microkernel; 'simple CRUD, small team' → layered) to the pattern that resolves them.",
         },
         keyPoints: [
-          "Layered/n-tier: simple, testable, the right default for straightforward CRUD — watch for the 'sinkhole' anti-pattern",
-          "CQRS: split read/write models when their shapes and scaling needs diverge sharply — usually paired with event sourcing",
-          "Microkernel/plugin: minimal core + extensions, for products that must be deeply customizable by others",
-          "Don't recite definitions — map the *forces* in the problem statement to the pattern that resolves them",
+          {
+            point: "Layered/n-tier: simple, testable, the right default for straightforward CRUD — watch for the 'sinkhole' anti-pattern",
+            example: "A typical Spring Boot app with controller → service → repository layers is easy for a new engineer to navigate and unit-test each layer in isolation.",
+            bestApproach: "Default to a layered structure for CRUD-shaped features, but periodically audit for sinkhole layers (a 'service' method that just calls the repository with no added logic) and collapse them.",
+          },
+          {
+            point: "CQRS: split read/write models when their shapes and scaling needs diverge sharply — usually paired with event sourcing",
+            example: "LinkedIn's feed writes go through a validation/storage path while reads are served from a separately-scaled, heavily denormalized, pre-ranked store.",
+            bestApproach: "Reach for CQRS only once you can point to a measured divergence between read and write shape/scale — applying it to a simple CRUD resource just doubles your code for no benefit.",
+          },
+          {
+            point: "Microkernel/plugin: minimal core + extensions, for products that must be deeply customizable by others",
+            example: "VS Code's core editor is small; almost all functionality (language support, themes, debuggers) ships as extensions running against a stable plugin API.",
+            bestApproach: "Define a narrow, stable extension API surface early — the cost of a microkernel architecture is mostly in designing and committing to that interface contract.",
+          },
+          {
+            point: "Don't recite definitions — map the *forces* in the problem statement to the pattern that resolves them",
+            example: "Hearing 'reads and writes have wildly different access patterns' should trigger 'CQRS' in your head, not a memorized definition recited regardless of fit.",
+            bestApproach: "Practice stating the force in the prompt out loud before naming a pattern ('reads need denormalized speed, writes need strict validation, so I'd split the models') — that ordering is the actual skill.",
+          },
         ],
         followUps: [
           "When would you combine CQRS with event sourcing, and what does that buy you?",
@@ -315,10 +487,26 @@ export const SDI_CATEGORIES = [
             "CAP theorem (Brewer's theorem): in a distributed system, you can only guarantee two of Consistency, Availability, and Partition tolerance at once. But partition tolerance isn't really optional — networks *will* partition, so in practice the choice is CP (stay consistent, refuse requests you can't safely answer) vs AP (stay available, risk serving stale data) *during* a partition. The oversimplification critique: CAP only describes behavior *during* a network partition, which is a relatively rare event. The more useful everyday question is 'when there's no partition, do you trade consistency for lower latency?' — which is exactly what PACELC adds: 'else, Latency vs Consistency.' So a system is fully described as PA/EL (available during partitions, low-latency normally — e.g., Cassandra, DynamoDB) or PC/EC (consistent during partitions, willing to pay latency for it normally — e.g., traditional RDBMS with synchronous replication, HBase). The interview-winning move is naming PACELC unprompted — it signals you know CAP is necessary-but-incomplete.",
         },
         keyPoints: [
-          "CAP only binds during a network partition — pick C (refuse to answer if you can't be sure) or A (answer anyway, possibly with stale data)",
-          "Partition tolerance is not optional in a real distributed system — so CAP really reduces to 'CP or AP when partitioned'",
-          "PACELC extends CAP: even with no partition, you trade Latency vs Consistency — this is the trade-off you face *most* of the time",
-          "Classify real systems as PA/EL (Cassandra, DynamoDB) or PC/EC (traditional RDBMS, HBase, Spanner-ish systems) to show depth",
+          {
+            point: "CAP only binds during a network partition — pick C (refuse to answer if you can't be sure) or A (answer anyway, possibly with stale data)",
+            example: "During a network split, a CP store like HBase returns an error rather than risk an inconsistent read; an AP store like Cassandra answers from whichever replica it can reach.",
+            bestApproach: "Decide CP vs AP per data type, not per system — inventory counts might need CP while user preferences can stay AP, even within the same product.",
+          },
+          {
+            point: "Partition tolerance is not optional in a real distributed system — so CAP really reduces to 'CP or AP when partitioned'",
+            example: "Any multi-region deployment will eventually see a network partition between regions — assuming it 'won't happen' is how teams get paged for a split-brain incident.",
+            bestApproach: "Design the partition-handling behavior explicitly during architecture review ('if region A and B can't talk, what happens?') rather than discovering it during an actual outage.",
+          },
+          {
+            point: "PACELC extends CAP: even with no partition, you trade Latency vs Consistency — this is the trade-off you face *most* of the time",
+            example: "A normally-functioning multi-region DB still must choose: wait for cross-region replica acks (consistent, slower) or return immediately from the local replica (fast, possibly stale).",
+            bestApproach: "State your PACELC position explicitly in design docs ('PA/EL: available during partitions, low-latency normally') so the trade-off is a documented decision, not an implicit accident.",
+          },
+          {
+            point: "Classify real systems as PA/EL (Cassandra, DynamoDB) or PC/EC (traditional RDBMS, HBase, Spanner-ish systems) to show depth",
+            example: "DynamoDB defaults to PA/EL (eventually-consistent, fast reads) but offers an opt-in strongly-consistent read mode that shifts a specific query toward PC/EC.",
+            bestApproach: "Memorize 2-3 reference systems per quadrant so you can classify any new system you encounter by analogy instead of reasoning from scratch every time.",
+          },
         ],
         followUps: [
           "Where does Google Spanner fit on the PACELC spectrum, and how does it cheat the trade-off?",
@@ -342,10 +530,26 @@ export const SDI_CATEGORIES = [
             "Strong consistency: every read reflects the most recent write, system-wide, the instant it commits — required for things like account balances, inventory counts, and seat reservations where stale reads cause real-world harm (double-booking, overdraft). It costs latency (often a quorum round-trip) and can reduce availability during partitions. Eventual consistency: writes propagate asynchronously; readers may see stale data for a window, but all replicas *converge* to the same value once propagation finishes — perfectly fine for profile pictures, like counts, view counts, search indexes. It buys you low latency and high availability. Causal consistency sits in between: it doesn't guarantee everyone sees updates instantly, but it *does* guarantee that if event B happened because of event A, no one ever sees B without having seen A first — critical for things like comment threads (you should never see a reply before the comment it replies to) or chat apps. The skill being tested is: can you look at a feature and say 'this needs strong / this can tolerate eventual / this needs causal ordering specifically' instead of defaulting to 'just make everything strongly consistent' (which kills your availability and latency).",
         },
         keyPoints: [
-          "Strong consistency = always-fresh reads, at the cost of latency/availability — reserve it for money, inventory, anything where staleness causes real harm",
-          "Eventual consistency = converges over time, cheap and available — perfect for likes, views, profile data, search indexes",
-          "Causal consistency = preserves cause-and-effect ordering without requiring global freshness — the right fit for comment threads, chat, collaborative editing",
-          "The senior move is matching the model to the feature's actual tolerance for staleness — not picking one model for the whole system",
+          {
+            point: "Strong consistency = always-fresh reads, at the cost of latency/availability — reserve it for money, inventory, anything where staleness causes real harm",
+            example: "A bank transfer reads the account balance with a quorum read before debiting, ensuring no two concurrent transfers both see the same stale balance and overdraw the account.",
+            bestApproach: "Use SELECT FOR UPDATE or a quorum read only on the specific operations where staleness causes real-world harm — not as a blanket setting for the whole database.",
+          },
+          {
+            point: "Eventual consistency = converges over time, cheap and available — perfect for likes, views, profile data, search indexes",
+            example: "A YouTube view counter shown as '1.2M views' might lag the true count by a few seconds across replicas — invisible to any single viewer and harmless either way.",
+            bestApproach: "Default high-volume, low-stakes counters and metadata to eventual consistency, and make the convergence window (seconds, not minutes) an explicit, monitored SLO.",
+          },
+          {
+            point: "Causal consistency = preserves cause-and-effect ordering without requiring global freshness — the right fit for comment threads, chat, collaborative editing",
+            example: "A Slack thread must never show a reply before the message it's replying to, even though the rest of the channel can lag by a moment without anyone noticing.",
+            bestApproach: "Tag causally-related writes (a reply references its parent's version/timestamp) so the read path can enforce 'never show B before A' even under eventual replication.",
+          },
+          {
+            point: "The senior move is matching the model to the feature's actual tolerance for staleness — not picking one model for the whole system",
+            example: "Amazon's cart stays eventually consistent (never lose an item) while checkout's payment step uses strong consistency (never double-charge) — two models, one product.",
+            bestApproach: "Make consistency model a per-feature design decision documented alongside the data model, not a single database-wide setting applied uniformly.",
+          },
         ],
         followUps: [
           "How would you implement read-your-own-writes consistency on top of an eventually-consistent store?",
@@ -369,10 +573,26 @@ export const SDI_CATEGORIES = [
             "Two canonical availability patterns: (1) Failover — active-passive: a standby replica takes over when the primary fails (simple, but the failover itself causes a brief outage and risks losing in-flight data); active-active: multiple nodes serve traffic simultaneously, so losing one doesn't interrupt service at all (harder — needs conflict resolution and careful data replication, but no failover gap). (2) Replication — master-slave (one writer, many readers — simple, but the master is still a single point of failure for writes) vs master-master (multiple writable nodes — eliminates that SPOF but opens the door to write conflicts that need resolution, e.g., last-write-wins or CRDTs). Beyond these two big levers: health checks + automated failover (detect failure in seconds, not minutes of paging a human), redundancy at *every* layer (load balancers, DNS, even across availability zones/regions — a redundant app tier behind a single-AZ database is still a SPOF), graceful degradation (serve a cached/stale response or a reduced feature set instead of a hard error when a dependency is down), and circuit breakers (stop hammering a failing dependency so it can recover, and so your own thread pool doesn't exhaust). The 'nines' framing matters in interviews: each additional nine is roughly an order of magnitude harder and more expensive — know the napkin math (99.9% ≈ 8.7 hrs/yr down, 99.99% ≈ 52 min/yr, 99.999% ≈ 5 min/yr).",
         },
         keyPoints: [
-          "Memorize the 'nines' table — it's the fastest way to show you understand what the ask actually costs (99.9%≈8.7h/yr, 99.99%≈52min/yr, 99.999%≈5min/yr)",
-          "Active-active eliminates failover gaps entirely but requires conflict resolution; active-passive is simpler but has a recovery window",
-          "Redundancy must exist at *every* layer — DNS, load balancer, app, cache, database, even the AZ/region — one weak link caps the whole chain",
-          "Graceful degradation (serve something instead of nothing) often buys more perceived availability than raw uptime numbers do",
+          {
+            point: "Memorize the 'nines' table — it's the fastest way to show you understand what the ask actually costs (99.9%≈8.7h/yr, 99.99%≈52min/yr, 99.999%≈5min/yr)",
+            example: "Telling leadership '99.99% means we can be down a total of 52 minutes across the whole year' reframes a vague ask into a concrete, achievable (or alarming) target.",
+            bestApproach: "Translate every availability target into its yearly/monthly downtime budget in the very first conversation, before any architecture discussion starts.",
+          },
+          {
+            point: "Active-active eliminates failover gaps entirely but requires conflict resolution; active-passive is simpler but has a recovery window",
+            example: "An active-active multi-region setup keeps serving traffic instantly if one region dies; an active-passive setup has a 30-90 second gap while the standby is promoted.",
+            bestApproach: "Choose active-passive by default for stateful services unless you've specifically solved write-conflict resolution — active-active's complexity isn't worth it without that.",
+          },
+          {
+            point: "Redundancy must exist at *every* layer — DNS, load balancer, app, cache, database, even the AZ/region — one weak link caps the whole chain",
+            example: "A fully redundant 3-AZ app tier behind a single-AZ database still goes down completely the moment that one AZ has an outage.",
+            bestApproach: "Walk the full request path layer by layer and ask 'what's the replica count here?' for each — your overall availability is bounded by the least-redundant layer.",
+          },
+          {
+            point: "Graceful degradation (serve something instead of nothing) often buys more perceived availability than raw uptime numbers do",
+            example: "Showing a product page with cached/stale recommendations when the recommendations service is down feels 'up' to the user, even though one dependency technically failed.",
+            bestApproach: "Identify which dependencies are 'enhancing' vs 'essential' for each user-facing flow, and build a fallback path for every enhancing one.",
+          },
         ],
         followUps: [
           "How do you test that your failover actually works before you need it in production?",
@@ -396,10 +616,26 @@ export const SDI_CATEGORIES = [
             "Master-slave (single-leader): all writes go to one master; it replicates (sync or async) to read replicas. Sync replication guarantees no data loss on failover but adds write latency (you wait for replicas to ack); async replication is fast but a master crash can lose the last few un-replicated writes. Either way, the master remains a single point of failure for writes — promoting a replica to master takes time (detection + election + DNS/connection updates) during which writes are unavailable. Master-master (multi-leader): multiple nodes accept writes and replicate to each other — no SPOF for writes, lower write latency for geographically distributed users (write to your nearest node). The cost: concurrent writes to the same record on different masters *will* conflict (e.g., two regions both update the same user's email simultaneously). Resolution strategies include last-write-wins (simple, but silently discards one update), version vectors (detect conflicts, surface them to the application), and CRDTs (conflict-free replicated data types — mathematically guaranteed to merge without conflict, but limited to certain data shapes like counters and sets). The interview answer should name the failure mode of *each* choice and tie the pick to the actual access pattern — 'if writes are naturally partitioned by region (each user's data is written from one region), master-master with regional ownership avoids most conflicts entirely.'",
         },
         keyPoints: [
-          "Master-slave: simple, consistent, but the master is a SPOF for writes and failover has a real recovery window",
-          "Master-master: no write SPOF and lower latency for distributed writers, but introduces conflicts that must be resolved (LWW, version vectors, CRDTs)",
-          "Sync replication = safer but slower; async replication = faster but risks losing the last few writes on a crash",
-          "Best answer ties the choice to the *access pattern* — e.g., regionally-partitioned ownership sidesteps most multi-master conflicts",
+          {
+            point: "Master-slave: simple, consistent, but the master is a SPOF for writes and failover has a real recovery window",
+            example: "A Postgres primary crashing triggers a 10-30 second window where writes fail entirely while a replica is promoted and DNS/connections are updated.",
+            bestApproach: "Automate failover detection and promotion (Patroni, RDS Multi-AZ) rather than relying on a human to notice and promote a replica manually during an incident.",
+          },
+          {
+            point: "Master-master: no write SPOF and lower latency for distributed writers, but introduces conflicts that must be resolved (LWW, version vectors, CRDTs)",
+            example: "Two regions both updating the same user's email within milliseconds of each other produces a genuine conflict that last-write-wins resolves by silently discarding one update.",
+            bestApproach: "Partition write ownership by a natural key (e.g., each user's data is always written from their home region) so multi-master conflicts become rare instead of routine.",
+          },
+          {
+            point: "Sync replication = safer but slower; async replication = faster but risks losing the last few writes on a crash",
+            example: "A financial ledger uses synchronous replication (wait for replica ack) specifically so a primary crash can never silently lose a committed transaction.",
+            bestApproach: "Reserve synchronous replication for data where losing the last few seconds of writes is unacceptable — use async everywhere else to keep write latency low.",
+          },
+          {
+            point: "Best answer ties the choice to the *access pattern* — e.g., regionally-partitioned ownership sidesteps most multi-master conflicts",
+            example: "CockroachDB avoids classic multi-master conflicts by using Raft consensus per data range, so there's always exactly one leaseholder for any given range at a time.",
+            bestApproach: "Before picking a replication topology, map out who actually writes which rows and from where — the access pattern usually makes the right topology obvious.",
+          },
         ],
         followUps: [
           "What is a CRDT and what kinds of data can/can't be modeled as one?",
@@ -423,10 +659,26 @@ export const SDI_CATEGORIES = [
             "Read Uncommitted: transactions can see other transactions' *uncommitted* changes — allows dirty reads (you might read data that gets rolled back a moment later, i.e., data that never 'really' existed). Almost never used in practice. Read Committed (Postgres/Oracle default): you only ever see committed data, but if you read the same row twice in one transaction, it might have changed in between (non-repeatable read) because each statement takes a fresh snapshot. Repeatable Read (MySQL/InnoDB default): your transaction sees a consistent snapshot for its whole duration — re-reading the same row always returns the same value — but new rows matching your filter can appear between queries (phantom reads), e.g., a range query returns 10 rows, then 12 on a re-run because someone inserted two more. Serializable: the strictest — transactions behave *as if* they ran one at a time, sequentially; prevents dirty reads, non-repeatable reads, and phantoms. The cost is real: it requires either heavy locking (which serializes contended workloads and tanks throughput) or optimistic concurrency control with abort-and-retry (which wastes work under contention). The practical answer: 'Read Committed is the right default for most OLTP — it's fast and prevents the worst anomaly (dirty reads). I reach for Serializable (or explicit row locks / SELECT FOR UPDATE) only for the specific operations where a race genuinely causes business harm — like decrementing inventory or transferring money — not for the whole system.'",
         },
         keyPoints: [
-          "Each level is defined by which anomalies it allows: dirty read → non-repeatable read → phantom read, in increasing strictness",
-          "Read Committed (Postgres default) is the pragmatic default for most OLTP — fast, and prevents the worst anomaly (dirty reads)",
-          "Serializable prevents everything but can crater throughput — apply it surgically (specific transactions), not globally",
-          "SELECT FOR UPDATE / explicit row locks often solve the *specific* race you're worried about more cheaply than raising the global isolation level",
+          {
+            point: "Each level is defined by which anomalies it allows: dirty read → non-repeatable read → phantom read, in increasing strictness",
+            example: "Read Uncommitted would let a fraud-check transaction read another transaction's not-yet-committed (possibly-to-be-rolled-back) balance update — a dirty read that's almost never acceptable.",
+            bestApproach: "Memorize the anomaly each level prevents (not just the level names) so you can reason from 'which anomaly would hurt us here' to the right isolation level directly.",
+          },
+          {
+            point: "Read Committed (Postgres default) is the pragmatic default for most OLTP — fast, and prevents the worst anomaly (dirty reads)",
+            example: "Most CRUD applications (user profiles, content management) run fine at Read Committed because non-repeatable reads within a single transaction rarely matter for their workload.",
+            bestApproach: "Leave the database at its default isolation level (usually Read Committed) and only raise it for specific transactions that have a proven race condition.",
+          },
+          {
+            point: "Serializable prevents everything but can crater throughput — apply it surgically (specific transactions), not globally",
+            example: "Running an entire e-commerce checkout flow at Serializable isolation can cause heavy lock contention and abort-retry storms during a flash sale.",
+            bestApproach: "Scope Serializable (or explicit locking) to the smallest possible transaction boundary around the specific race-prone operation, not the whole request handler.",
+          },
+          {
+            point: "SELECT FOR UPDATE / explicit row locks often solve the *specific* race you're worried about more cheaply than raising the global isolation level",
+            example: "A targeted `SELECT ... FOR UPDATE` on the inventory row during checkout fixed a double-sell bug without touching the database's global isolation setting.",
+            bestApproach: "Reach for `SELECT FOR UPDATE` on the specific contended row before reaching for Serializable isolation — it's cheaper and easier to reason about.",
+          },
         ],
         followUps: [
           "How does Postgres implement Repeatable Read using MVCC instead of locking?",
@@ -459,10 +711,26 @@ export const SDI_CATEGORIES = [
             "Relational databases give you a fixed schema, ACID transactions, joins, and a mature query language — ideal when your data has clear relationships that you need to query flexibly and consistently (orders ↔ customers ↔ payments; anything where 'this number must always add up' matters). NoSQL is an umbrella for very different things: document stores (MongoDB — flexible nested schemas, good for content/catalogs), key-value stores (Redis/DynamoDB — blazing-fast lookups by key, great for sessions/caches), wide-column stores (Cassandra/HBase — write-heavy, time-series, massive scale with eventual consistency), and graph databases (Neo4j — relationship-heavy data like social graphs or fraud networks). The honest framing: relational databases *can* scale (sharding, read replicas, Vitess/Citus) — the difference is that many NoSQL stores are *designed scale-out from day one* and trade away joins/transactions/strict schema to get there more easily operationally. So the real questions are: 'does my data have relationships I need to query across?' (→ relational), 'is my access pattern simple key lookups at extreme scale?' (→ key-value/wide-column), 'does my schema change shape per record?' (→ document), 'am I querying relationships themselves (friends-of-friends)?' (→ graph). Many real systems are polyglot — Postgres for orders, Redis for sessions, Elasticsearch for search — picked per *workload*, not as a single system-wide religion.",
         },
         keyPoints: [
-          "'NoSQL scales better' is largely a myth — well-sharded Postgres/MySQL handle enormous scale; the real difference is what you give up to get there easily",
-          "Pick based on data shape and access pattern: relationships/joins → relational; flexible nested docs → document; pure key lookups at scale → key-value/wide-column; relationship traversal → graph",
-          "ACID transactions are relational DBs' superpower — don't give them up for a 'NoSQL is modern' vibe when you actually need them",
-          "Polyglot persistence (different stores for different workloads) is normal and often the *right* senior answer",
+          {
+            point: "'NoSQL scales better' is largely a myth — well-sharded Postgres/MySQL handle enormous scale; the real difference is what you give up to get there easily",
+            example: "Vitess (sharded MySQL) powers YouTube's metadata at massive scale, proving a relational store can scale horizontally given the right sharding layer.",
+            bestApproach: "Justify a NoSQL choice by data shape and access pattern, never by a 'NoSQL scales, SQL doesn't' claim — that claim alone should be treated as a red flag in a design review.",
+          },
+          {
+            point: "Pick based on data shape and access pattern: relationships/joins → relational; flexible nested docs → document; pure key lookups at scale → key-value/wide-column; relationship traversal → graph",
+            example: "A product catalog with category-specific varying attributes fits MongoDB's flexible schema far more naturally than a relational table full of nullable columns.",
+            bestApproach: "Write out your top 5 actual queries before picking a database family — let the queries, not the entity diagram, decide.",
+          },
+          {
+            point: "ACID transactions are relational DBs' superpower — don't give them up for a 'NoSQL is modern' vibe when you actually need them",
+            example: "A double-entry ledger (every debit has a matching credit) genuinely needs multi-row ACID transactions — modeling it in a document store invites real correctness bugs.",
+            bestApproach: "Keep money, inventory, and anything needing multi-row invariants in a relational store, even in an otherwise polyglot architecture.",
+          },
+          {
+            point: "Polyglot persistence (different stores for different workloads) is normal and often the *right* senior answer",
+            example: "A single e-commerce product reasonably uses Postgres for orders, Redis for sessions, and Elasticsearch for search — three stores, each matched to its workload.",
+            bestApproach: "Don't force a single database to serve every workload in a system — introduce a second store only when a specific workload's access pattern genuinely doesn't fit the first.",
+          },
         ],
         followUps: [
           "How would you model a social graph in a relational database, and why might that get painful at scale?",
@@ -486,10 +754,26 @@ export const SDI_CATEGORIES = [
             "First, exhaust simpler options — better indexes, query optimization, read replicas, caching, archiving cold data — sharding is a one-way door that adds massive operational complexity, so it should be the *last* resort, not the first idea. When you do need it: (1) Pick a shard key — the column you'll partition by. The best key is the one most queries already filter by (e.g., `customer_id` if 90% of queries are 'get this customer's orders') — that makes most queries single-shard. A bad key (e.g., `created_at`) forces most queries to fan out across every shard. (2) Choose a partitioning scheme: range-based (shard A = IDs 1-1M, shard B = 1M-2M — simple, but creates hotspots when new data always lands on the newest shard); hash-based (hash(key) % N — spreads load evenly, but makes range queries and resharding painful); directory-based (a lookup service maps keys to shards — flexible and supports resharding, but the directory itself becomes a critical dependency). (3) Accept the new costs: cross-shard joins don't exist anymore — you either denormalize data so joins aren't needed, or do the join in the application by querying multiple shards and merging; cross-shard transactions need sagas or two-phase commit; resharding (adding shard N+1) is operationally hard — consistent hashing minimizes how much data must move when you do. The interview-winning instinct is naming *what breaks* (joins, transactions, resharding) just as confidently as naming the scheme.",
         },
         keyPoints: [
-          "Sharding is a last resort — exhaust indexing, caching, replicas, and archiving first; it's a one-way door operationally",
-          "Shard key choice is the single most important decision — pick the column your dominant query already filters by",
-          "Range sharding is simple but hotspot-prone; hash sharding balances load but kills range queries; directory-based is flexible but adds a dependency",
-          "Naming what *breaks* after sharding (cross-shard joins, transactions, resharding pain) shows more depth than naming the scheme itself",
+          {
+            point: "Sharding is a last resort — exhaust indexing, caching, replicas, and archiving first; it's a one-way door operationally",
+            example: "A team facing slow order queries fixed it with a missing composite index and archiving orders older than 2 years to cold storage — sharding was never needed.",
+            bestApproach: "Require a written justification showing indexing/caching/replicas/archiving were tried and measured before approving a sharding project.",
+          },
+          {
+            point: "Shard key choice is the single most important decision — pick the column your dominant query already filters by",
+            example: "Instagram shards by user ID because 'get this user's posts' is the dominant query — a `created_at` shard key would have forced almost every query to fan out across all shards.",
+            bestApproach: "List your top 3 queries by frequency before choosing a shard key, and pick the key that makes the most frequent query single-shard.",
+          },
+          {
+            point: "Range sharding is simple but hotspot-prone; hash sharding balances load but kills range queries; directory-based is flexible but adds a dependency",
+            example: "Range-sharding orders by creation date concentrates all new writes on the single 'latest' shard — a classic hotspot that hash sharding would have avoided.",
+            bestApproach: "Default to hash-based sharding for write-heavy workloads unless you specifically need efficient range scans, in which case accept the hotspot risk and mitigate with time-bucketed sub-keys.",
+          },
+          {
+            point: "Naming what *breaks* after sharding (cross-shard joins, transactions, resharding pain) shows more depth than naming the scheme itself",
+            example: "After sharding orders by customer_id, a 'top 10 products this week across all customers' report now requires querying every shard and merging results in the application.",
+            bestApproach: "Before sharding, inventory every cross-cutting query (reports, admin tools, analytics) that will break, and design a scatter-gather or separate analytics pipeline for them upfront.",
+          },
         ],
         followUps: [
           "What is consistent hashing and how does it minimize data movement when resharding?",
@@ -513,10 +797,26 @@ export const SDI_CATEGORIES = [
             "Cache-aside (lazy loading): app checks the cache first; on a miss, reads from the DB and populates the cache; writes go to the DB and either invalidate or update the cache entry. Most common pattern — simple, resilient to cache failures (just falls through to the DB), but has a window where cache and DB can disagree, and a 'thundering herd' risk where a popular key's expiry causes many requests to simultaneously hit the DB. Write-through: every write goes to the cache *and* the DB synchronously — readers always see fresh data, but writes are slower (two systems must ack) and you're caching data that might never be read (wasted memory). Write-behind (write-back): writes go to the cache immediately and are asynchronously flushed to the DB later — very fast writes, but a cache crash before the flush means real data loss, so it's only appropriate when some loss is tolerable (metrics, analytics counters) or the cache itself is durable (Redis with AOF). For a product catalog specifically: cache-aside with a TTL is the right default — reads vastly outnumber writes, staleness for a few seconds/minutes is harmless for product descriptions, and a cache outage degrades gracefully (falls through to the DB) rather than catastrophically.",
         },
         keyPoints: [
-          "Cache-aside: app-managed, resilient to cache failure, most common default — but has a staleness window and thundering-herd risk",
-          "Write-through: always-fresh reads, slower writes, risks caching data nobody reads — fits read-heavy + consistency-sensitive workloads",
-          "Write-behind: fastest writes, real data-loss risk on crash — only for tolerant or durable-cache scenarios",
-          "Always pair caching with an eviction policy (LRU/LFU/TTL) and a plan for the thundering-herd problem (request coalescing, jittered TTLs, locks)",
+          {
+            point: "Cache-aside: app-managed, resilient to cache failure, most common default — but has a staleness window and thundering-herd risk",
+            example: "A product catalog cache that goes down simply falls through to Postgres for every request — slower, but the site stays up rather than erroring out.",
+            bestApproach: "Default new caches to cache-aside with a sane TTL (seconds to minutes depending on staleness tolerance) unless a specific requirement calls for write-through or write-behind.",
+          },
+          {
+            point: "Write-through: always-fresh reads, slower writes, risks caching data nobody reads — fits read-heavy + consistency-sensitive workloads",
+            example: "A user-profile cache updated synchronously on every profile edit guarantees the next read is always fresh, at the cost of every edit waiting on two systems instead of one.",
+            bestApproach: "Use write-through only for data that's both frequently read AND where staleness is unacceptable — for everything else the extra write latency isn't worth paying.",
+          },
+          {
+            point: "Write-behind: fastest writes, real data-loss risk on crash — only for tolerant or durable-cache scenarios",
+            example: "A view-counter using write-behind to Redis batches increments and flushes to Postgres every few seconds — losing a few seconds of counts on a crash is an acceptable trade.",
+            bestApproach: "Reserve write-behind for metrics/counters where occasional small data loss is truly tolerable, and use a durable cache (Redis with AOF) if even that risk needs reducing.",
+          },
+          {
+            point: "Always pair caching with an eviction policy (LRU/LFU/TTL) and a plan for the thundering-herd problem (request coalescing, jittered TTLs, locks)",
+            example: "A hot product page's cache entry expiring exactly at noon caused 10,000 simultaneous requests to hit Postgres at once during a flash sale — a classic thundering herd.",
+            bestApproach: "Add jitter to TTLs (e.g., 300s ± 30s randomized) and use request coalescing (a lock so only one request repopulates a missing key while others wait) for any high-traffic cache key.",
+          },
         ],
         followUps: [
           "How do you prevent a thundering herd when a hot cache key expires?",
@@ -540,10 +840,26 @@ export const SDI_CATEGORIES = [
             "Normalization (splitting data into related tables, e.g., `posts`, `authors`, `comments`, `tags`, `post_tags`) eliminates duplication — an author's name lives in exactly one row, so updating it updates it everywhere instantly, and you can never have it disagree with itself. The cost is that reading a 'complete' view (a post with its author, comments, and tags) requires joins across 4-5 tables, which gets expensive at scale. Denormalization (duplicating data to avoid joins, e.g., storing `author_name` directly on the `posts` row, or pre-computing a `comment_count`) makes specific reads dramatically faster and simpler — at the cost of needing to keep duplicates in sync on every write (if an author changes their display name, you now must update every post they've written, or accept staleness). The senior framing: start normalized (correctness is cheap to get right early, expensive to retrofit later); denormalize *specific, measured* hot paths once you can show that joins are the actual bottleneck — and do it consciously, with a clear plan for keeping the duplicated data in sync (background jobs, event-driven updates, or accepting bounded staleness). Document databases push this further by *encouraging* denormalization/embedding by default — which is great for read performance on self-contained documents, but painful the moment you need to query or update the embedded data independently.",
         },
         keyPoints: [
-          "Normalize first — it makes write-side correctness close to free; you only pay at read time (joins)",
-          "Denormalize deliberately and selectively — for *measured* hot read paths, with an explicit plan for keeping duplicates in sync",
-          "Every denormalized field is a promise you must keep on every future write — that promise has an ongoing maintenance cost",
-          "Document databases bias toward embedding by default — great for self-contained reads, painful for independent updates to embedded data",
+          {
+            point: "Normalize first — it makes write-side correctness close to free; you only pay at read time (joins)",
+            example: "Storing an author's name only once in the `authors` table means a name change updates instantly everywhere, with zero risk of disagreement between rows.",
+            bestApproach: "Start every new schema fully normalized (3NF), and treat any deviation as a deliberate, documented exception rather than a default.",
+          },
+          {
+            point: "Denormalize deliberately and selectively — for *measured* hot read paths, with an explicit plan for keeping duplicates in sync",
+            example: "Reddit denormalizes vote counts onto post rows (avoiding a COUNT(*) over millions of votes per page load) and reconciles them with a periodic background job.",
+            bestApproach: "Denormalize only after profiling shows a specific join is the bottleneck, and pair every denormalized field with an explicit sync mechanism (trigger, event consumer, or background job) from day one.",
+          },
+          {
+            point: "Every denormalized field is a promise you must keep on every future write — that promise has an ongoing maintenance cost",
+            example: "A denormalized `author_name` on every post becomes stale the moment an author changes their display name, unless every post-write path also updates it.",
+            bestApproach: "Document each denormalized field's 'source of truth' and update path explicitly in the schema comments so future engineers don't accidentally write around it.",
+          },
+          {
+            point: "Document databases bias toward embedding by default — great for self-contained reads, painful for independent updates to embedded data",
+            example: "Embedding comments inside a MongoDB blog-post document makes reading a post fast, but updating a single comment requires rewriting the whole document.",
+            bestApproach: "Embed data that's always read together and rarely updated independently; reference (separate collection + ID) data that needs its own update lifecycle or is queried on its own.",
+          },
         ],
         followUps: [
           "How would you keep a denormalized `comment_count` field accurate under concurrent writes?",
@@ -576,10 +892,26 @@ export const SDI_CATEGORIES = [
             "REST: resource-oriented over HTTP, leans on standard verbs/status codes, is naturally cacheable (GET is cacheable by CDNs/browsers for free), has the widest tooling and team familiarity — but suffers from over-fetching (client gets the whole resource even if it needs 2 fields) and under-fetching (client must make N follow-up calls to assemble a view), and versioning tends to be clunky (`/v1/`, `/v2/`). GraphQL: client specifies exactly the fields it needs in a single query — eliminates over/under-fetching and is brilliant when different clients (mobile vs web vs partner) need different shapes from the same underlying data. The costs: caching is much harder (no more free GET caching — everything is a POST to one endpoint), the N+1 query problem moves to the resolver layer (solved with DataLoader-style batching), and a poorly-designed schema lets clients construct expensive queries that hurt your backend (needs query cost analysis/depth limiting). gRPC: binary protocol over HTTP/2, code-generated strongly-typed clients/servers from `.proto` files, supports streaming (unary, server-streaming, client-streaming, bidirectional) — extremely fast and efficient, ideal for internal service-to-service calls where both ends are your own code. The costs: not browser-native (needs gRPC-Web + a proxy), harder to debug than JSON-over-HTTP (binary wire format, needs `grpcurl`), and the tight coupling via generated code means schema changes ripple across services. The senior answer names all three and where each actually wins — not a single winner.",
         },
         keyPoints: [
-          "REST: simple, cacheable, universally understood — but prone to over/under-fetching and clunky versioning",
-          "GraphQL: client-shaped responses eliminate over/under-fetching — at the cost of caching, N+1-at-the-resolver, and query-cost governance",
-          "gRPC: fast, strongly-typed, streaming-capable — best for internal service-to-service calls; weak on browser support and debuggability",
-          "Real systems mix all three by *boundary* — gRPC internally, GraphQL/REST at the client-facing edge — rather than picking one for everything",
+          {
+            point: "REST: simple, cacheable, universally understood — but prone to over/under-fetching and clunky versioning",
+            example: "A mobile client fetching `/users/123` gets back 40 fields when it only needs 3 (name, avatar, status) — classic over-fetching that wastes mobile bandwidth.",
+            bestApproach: "Use REST for simple, cacheable resource APIs and partner-facing endpoints where broad tooling support and HTTP caching semantics matter more than payload precision.",
+          },
+          {
+            point: "GraphQL: client-shaped responses eliminate over/under-fetching — at the cost of caching, N+1-at-the-resolver, and query-cost governance",
+            example: "A GraphQL query naively resolving `posts { author { name } }` can trigger one DB query per post for the author — the N+1 problem, fixed with DataLoader batching.",
+            bestApproach: "Adopt GraphQL for client-facing APIs with genuinely diverse client needs (web vs mobile vs partner), and budget engineering time for DataLoader batching and query-cost/depth limiting from day one.",
+          },
+          {
+            point: "gRPC: fast, strongly-typed, streaming-capable — best for internal service-to-service calls; weak on browser support and debuggability",
+            example: "Netflix uses gRPC for low-latency, strongly-typed calls between hundreds of internal services written in different languages, sharing a single .proto contract.",
+            bestApproach: "Default to gRPC for internal service-to-service calls where both ends are your own code; avoid it at the browser-facing edge without a gRPC-Web proxy layer.",
+          },
+          {
+            point: "Real systems mix all three by *boundary* — gRPC internally, GraphQL/REST at the client-facing edge — rather than picking one for everything",
+            example: "Netflix runs gRPC internally but exposes a GraphQL-Federation-style API at the client edge, because each layer has a different consumer with different needs.",
+            bestApproach: "Pick the protocol per architectural boundary (internal service mesh vs client-facing edge) rather than mandating one protocol company-wide.",
+          },
         ],
         followUps: [
           "How do you solve the N+1 problem in a GraphQL resolver?",
@@ -603,11 +935,31 @@ export const SDI_CATEGORIES = [
             "Why a queue at all: it breaks the synchronous chain (covered in event-driven architecture) — the producer doesn't wait for slow consumers, a burst of orders gets buffered instead of overwhelming downstream services, and a crashed consumer can restart and pick up where it left off instead of losing work. Kafka: a distributed log — messages are appended to partitioned, replicated topics and *retained* (not deleted on consumption), so multiple independent consumer groups can each read the full stream at their own pace, and you can replay history (reprocess the last 24 hours after fixing a bug). It shines for high-throughput event streaming, log aggregation, and stream processing — but has a steeper operational curve (Zookeeper/KRaft, partition rebalancing, consumer group management). RabbitMQ: a traditional message broker with rich routing (exchanges: direct, topic, fanout, headers) and strong per-message delivery guarantees (acks, dead-letter queues, priority queues) — fits complex routing topologies and task-queue patterns (worker pools) better than Kafka does, at lower throughput ceilings. SQS (or managed equivalents): fully-managed, nearly zero ops, simple at-least-once delivery with visibility timeouts — the right call when you want 'just works' over fine-grained control, and your routing needs are simple. The real interview signal is matching 'replay + high-throughput streaming' → Kafka, 'complex routing + strict per-message semantics' → RabbitMQ, 'minimal ops + simple task queue' → SQS.",
         },
         keyPoints: [
-          "Queues decouple producer/consumer in time and failure domain, absorb bursts, and enable retries — that's the 'why' before the 'which'",
-          "Kafka: retained, replayable, partitioned log — best for high-throughput streaming and multiple independent consumers",
-          "RabbitMQ: rich routing + strong per-message guarantees — best for complex topologies and worker-pool task queues",
-          "SQS/managed: near-zero ops, simple semantics — best when you want to stop thinking about infrastructure",
-          "All of them are at-least-once by default — your consumers must be idempotent regardless of which you pick",
+          {
+            point: "Queues decouple producer/consumer in time and failure domain, absorb bursts, and enable retries — that's the 'why' before the 'which'",
+            example: "Order placement publishes to a queue and returns instantly; a traffic spike just makes the queue longer instead of timing out the order API.",
+            bestApproach: "Justify the queue's existence by naming the specific burst/decoupling/retry problem it solves before picking a vendor — the 'why' should survive even if the 'which' changes later.",
+          },
+          {
+            point: "Kafka: retained, replayable, partitioned log — best for high-throughput streaming and multiple independent consumers",
+            example: "LinkedIn's Kafka topics retain events so search-indexing, recommendations, and analytics can each consume the same page-view stream independently, at their own pace.",
+            bestApproach: "Reach for Kafka when multiple independent consumer groups need the same event stream, or when you need to replay history after fixing a downstream bug.",
+          },
+          {
+            point: "RabbitMQ: rich routing + strong per-message guarantees — best for complex topologies and worker-pool task queues",
+            example: "A task queue routing 'high-priority' vs 'low-priority' jobs to different worker pools via topic exchanges is a natural fit for RabbitMQ's routing model.",
+            bestApproach: "Pick RabbitMQ when you need complex routing logic (priority queues, topic-based fan-out) or strict per-message ack/dead-letter semantics that Kafka doesn't model as naturally.",
+          },
+          {
+            point: "SQS/managed: near-zero ops, simple semantics — best when you want to stop thinking about infrastructure",
+            example: "A small team building an MVP uses SQS for background email sending instead of standing up and operating a Kafka cluster they don't have headcount to run.",
+            bestApproach: "Default to a managed queue (SQS/Cloud Tasks) unless you have a specific, named need (replay, complex routing, extreme throughput) that justifies the added operational ownership.",
+          },
+          {
+            point: "All of them are at-least-once by default — your consumers must be idempotent regardless of which you pick",
+            example: "An SQS message redelivered after a worker times out (but actually finished) would double-send a welcome email without an idempotency check.",
+            bestApproach: "Build idempotency (dedup keys, upserts) into every consumer as a non-negotiable baseline, regardless of which queue technology is chosen.",
+          },
         ],
         followUps: [
           "How does Kafka achieve ordering guarantees, and what does that imply about your partition key choice?",
@@ -631,10 +983,26 @@ export const SDI_CATEGORIES = [
             "Long polling: client sends a request; the server holds it open until there's new data (or a timeout) and responds, then the client immediately re-requests. It's a hack on top of plain HTTP — works everywhere, needs no special infra — but wastes connections and adds latency (there's always a request/response round trip per update), and at scale you're holding open huge numbers of HTTP connections. Server-Sent Events (SSE): a single long-lived HTTP connection where the *server* streams events to the client as plain text (`text/event-stream`); the browser's `EventSource` API handles reconnection automatically. It's one-directional (server → client only), simple to implement (it's just HTTP — works through existing proxies/load balancers/firewalls without special handling), and perfect for status updates, live feeds, notifications — anything where the client doesn't need to talk back on the same channel. WebSockets: a full-duplex, persistent TCP-like connection established via an HTTP upgrade handshake — both sides can send messages anytime, with minimal per-message overhead. It's the right (and often only sane) choice for chat, multiplayer games, collaborative editing — anything genuinely bidirectional and low-latency. The cost: it needs special infrastructure handling (load balancers must support sticky connections or a shared pub/sub backplane like Redis to fan out messages across server instances), and it's overkill (and harder to scale/debug) for problems that are really one-directional. For 'push order status to the browser' specifically — that's one-directional, server→client — SSE is the simplest correct tool; reaching for WebSockets here is solving a one-way problem with a two-way hammer.",
         },
         keyPoints: [
-          "Match mechanism to *data direction*: one-way server→client → SSE; truly bidirectional → WebSockets; legacy compatibility fallback → long polling",
-          "SSE is just HTTP — auto-reconnect built into the browser, works through normal infrastructure, far simpler to operate than WebSockets",
-          "WebSockets need a fan-out story across server instances (sticky LB sessions or a shared pub/sub backplane) — that's real infra cost",
-          "Don't reach for the most powerful tool by default — a one-directional problem solved with WebSockets is needless complexity",
+          {
+            point: "Match mechanism to *data direction*: one-way server→client → SSE; truly bidirectional → WebSockets; legacy compatibility fallback → long polling",
+            example: "A live order-status tracker only needs the server to push updates — SSE is the simplest correct tool; a chat app needs both directions, so WebSockets fit.",
+            bestApproach: "Ask 'does the client ever need to send data on this same channel mid-stream?' first — a 'no' answer should rule out WebSockets immediately.",
+          },
+          {
+            point: "SSE is just HTTP — auto-reconnect built into the browser, works through normal infrastructure, far simpler to operate than WebSockets",
+            example: "A delivery-tracking page using `EventSource` reconnects automatically after a brief network blip with zero custom reconnection code.",
+            bestApproach: "Prefer SSE over WebSockets whenever the data flow is one-directional — it needs no special load-balancer configuration and degrades gracefully through existing infra.",
+          },
+          {
+            point: "WebSockets need a fan-out story across server instances (sticky LB sessions or a shared pub/sub backplane) — that's real infra cost",
+            example: "A chat app with 10 WebSocket server instances needs a Redis pub/sub backplane so a message from a user on server A reaches a recipient connected to server B.",
+            bestApproach: "Plan the cross-instance fan-out mechanism (Redis pub/sub, or a dedicated routing layer) as part of the initial WebSocket design, not as a fix after the first multi-instance bug.",
+          },
+          {
+            point: "Don't reach for the most powerful tool by default — a one-directional problem solved with WebSockets is needless complexity",
+            example: "A team building a one-way notification feed chose WebSockets 'to be safe' and then had to build sticky-session load balancing they didn't actually need for SSE.",
+            bestApproach: "Start with the simplest mechanism that satisfies the data-direction requirement, and only escalate to WebSockets when a genuine bidirectional need appears.",
+          },
         ],
         followUps: [
           "How would you scale WebSocket connections across multiple server instances?",
@@ -658,10 +1026,26 @@ export const SDI_CATEGORIES = [
             "The smell here is a request handler doing real work (transcoding — CPU-heavy, slow, possibly minutes long) inside the synchronous request/response cycle, where HTTP timeouts, connection limits, and thread-pool exhaustion are all working against you. The fix follows a standard shape: (1) the API handler does the *minimum necessary* synchronously — validate the upload, store the raw file, write a `VideoUploaded` job/event, and return `202 Accepted` with a job ID immediately; (2) a pool of background workers (consuming from a queue) picks up the job and does the actual transcoding, retrying on failure with backoff, completely decoupled from any HTTP request's lifetime; (3) the client finds out when it's done via polling a status endpoint, a WebSocket/SSE push, or a webhook/email notification — whichever fits the UX. This pattern generalizes: anything slow (image/video processing, PDF generation, ML inference, bulk exports), anything that calls flaky external systems (sending emails, calling third-party APIs, webhooks), or anything that doesn't gate the user's immediate next action should move to the background. The discipline question to ask of every endpoint: 'does the user need to wait for this to *complete*, or just for it to be *durably accepted*?' If it's the latter, get it off the request path.",
         },
         keyPoints: [
-          "The question to ask per-operation: does the user need the result *now*, or just confirmation it was *accepted*? If the latter — go async",
-          "Standard shape: validate + enqueue fast (return 202), process in background workers, notify via poll/push/webhook on completion",
-          "Background workers need their own retry/backoff/dead-letter strategy — decoupled from any single HTTP request's lifetime",
-          "Generalizes to: anything slow (transcoding, exports, ML), anything flaky (emails, third-party calls), anything non-blocking for the user's next step",
+          {
+            point: "The question to ask per-operation: does the user need the result *now*, or just confirmation it was *accepted*? If the latter — go async",
+            example: "A user uploading a video doesn't need the transcoded result instantly — they need confirmation 'upload received' instantly, which is a much cheaper promise to keep.",
+            bestApproach: "Add this question as a standing checklist item in API design reviews — any endpoint doing real work synchronously should justify why it can't be split into accept-fast + process-later.",
+          },
+          {
+            point: "Standard shape: validate + enqueue fast (return 202), process in background workers, notify via poll/push/webhook on completion",
+            example: "YouTube's upload endpoint returns 'processing' the instant bytes land, while a worker fleet transcodes into a dozen resolutions over the following minutes.",
+            bestApproach: "Return a job ID with the 202 response so the client has something concrete to poll or subscribe to for completion status.",
+          },
+          {
+            point: "Background workers need their own retry/backoff/dead-letter strategy — decoupled from any single HTTP request's lifetime",
+            example: "A transcoding worker that crashes mid-job should retry from a checkpoint or restart cleanly, without the original HTTP request (long gone) being involved at all.",
+            bestApproach: "Design worker retry/backoff and dead-letter handling as a standalone concern, tested independently of the API layer that originally enqueued the job.",
+          },
+          {
+            point: "Generalizes to: anything slow (transcoding, exports, ML), anything flaky (emails, third-party calls), anything non-blocking for the user's next step",
+            example: "Sending a welcome email synchronously during signup means a flaky SMTP provider can fail the entire signup request — moving it to a queue decouples the two.",
+            bestApproach: "Audit every external/third-party call in a request handler and ask 'would a 5-second outage here be acceptable to fail the whole request?' — if not, make it async.",
+          },
         ],
         followUps: [
           "How would the client find out when the video is ready — and what are the trade-offs between polling, WebSockets, and webhooks?",
@@ -694,10 +1078,26 @@ export const SDI_CATEGORIES = [
             "Round robin: requests go to servers in fixed rotation — dead simple, but assumes every request costs the same and every server is equally capable; one slow request (or one underpowered box) creates an uneven pile-up that round robin is blind to. Least connections: routes to whichever server currently has the fewest active connections — adapts to real-time load and handles uneven request costs much better, at the cost of needing the LB to track connection state. Weighted round robin / weighted least connections: lets you assign servers different capacities (a bigger box gets more traffic) — essential in heterogeneous fleets (mixed instance types during a gradual upgrade). IP hash (or consistent hashing on some request attribute): routes the same client to the same server consistently — gives you 'sticky sessions' for free (useful if a service keeps in-memory state per user), but can create hotspots if one IP (e.g., behind a corporate NAT) generates disproportionate traffic, and it complicates scaling the backend fleet up/down because the hash space shifts. The 'obvious choice goes wrong' scenario: round robin on a fleet where one endpoint (say, `/export`) is 100x more expensive than `/health` — round robin happily sends export requests evenly, but if they cluster on certain servers by chance, those servers get disproportionately loaded while round robin metrics show 'perfectly even' distribution by *request count*, hiding the real imbalance in *resource cost*.",
         },
         keyPoints: [
-          "Round robin assumes equal-cost requests and equal-capacity servers — both assumptions break in real systems",
-          "Least connections adapts to real-time load — the safer general-purpose default for heterogeneous workloads",
-          "IP/consistent hashing buys session affinity for free — at the cost of potential hotspots and harder elastic scaling",
-          "Always separate 'requests distributed evenly' from 'load distributed evenly' — they're not the same thing when request costs vary",
+          {
+            point: "Round robin assumes equal-cost requests and equal-capacity servers — both assumptions break in real systems",
+            example: "A fleet mixing `/health` pings and expensive `/export` requests under round robin shows 'perfectly even' request counts while some servers are actually far more loaded.",
+            bestApproach: "Default away from plain round robin for any API with heterogeneous endpoint costs — measure request-cost variance before assuming round robin is good enough.",
+          },
+          {
+            point: "Least connections adapts to real-time load — the safer general-purpose default for heterogeneous workloads",
+            example: "HAProxy and Envoy both recommend least-connections or weighted-least-request as the default for HTTP backends precisely because request costs vary in practice.",
+            bestApproach: "Set least-connections (or weighted-least-request) as your load balancer's default algorithm unless you have a specific reason (session affinity) to deviate.",
+          },
+          {
+            point: "IP/consistent hashing buys session affinity for free — at the cost of potential hotspots and harder elastic scaling",
+            example: "Routing by client IP sends every request from a large corporate NAT to the same backend, overloading that one server while others sit idle.",
+            bestApproach: "Use IP hashing only when you genuinely need sticky sessions and have moved session state to a shared store as the longer-term fix instead.",
+          },
+          {
+            point: "Always separate 'requests distributed evenly' from 'load distributed evenly' — they're not the same thing when request costs vary",
+            example: "A load balancer dashboard showing even request counts per server can mask one server being pinned at 90% CPU from a cluster of expensive requests it happened to receive.",
+            bestApproach: "Monitor per-server resource utilization (CPU, latency) alongside request-count distribution — request-count parity alone is an incomplete health signal.",
+          },
         ],
         followUps: [
           "How does a load balancer detect an unhealthy backend, and what happens to in-flight requests when it does?",
@@ -721,10 +1121,26 @@ export const SDI_CATEGORIES = [
             "Retries with backoff handle *transient* blips well — a single dropped packet, a momentary GC pause. But when a dependency is *genuinely* struggling (overloaded, degraded, down), every retry is one more request piling onto an already-drowning service — across thousands of your own callers, that's a self-inflicted DDoS on your dependency (and, via thread/connection pool exhaustion, on yourself too — this is how cascading failures happen). A circuit breaker adds a state machine on top: Closed (normal — requests flow through, failures are counted); when failures cross a threshold (e.g., 50% of the last 20 requests failed), it trips to Open (every request fails *immediately*, without even attempting the call — this is the 'fail fast' that protects both you and the dependency); after a cooldown period it moves to Half-Open (lets a small trickle of requests through as a probe — if they succeed, close the circuit and resume normal traffic; if they fail, reopen and wait longer). This gives the struggling dependency breathing room to recover instead of being kept underwater by a constant stream of retries, and it protects *your* service from exhausting its own resources waiting on a dependency that isn't going to answer. The combination that actually works in production is: timeouts (don't wait forever) + retries with backoff and jitter (handle transient blips) + circuit breaker (stop hammering a truly broken dependency) + fallback (serve a cached/default response when the circuit is open).",
         },
         keyPoints: [
-          "Retries alone can amplify load on a struggling dependency — turning a partial outage into a total one (self-inflicted thundering herd)",
-          "Circuit breaker states: Closed (normal, counting failures) → Open (fail fast, no calls attempted) → Half-Open (probe with a trickle, decide to close or reopen)",
-          "'Fail fast' protects both the struggling dependency (gives it room to recover) and your own service (stops thread/connection pool exhaustion)",
-          "The full resilience stack is layered: timeouts + backoff-with-jitter retries + circuit breaker + fallback — each solves a different failure mode",
+          {
+            point: "Retries alone can amplify load on a struggling dependency — turning a partial outage into a total one (self-inflicted thundering herd)",
+            example: "Netflix postmortems describe a slow internal service whose retried callers filled their own thread pools waiting on it, eventually taking down the whole site.",
+            bestApproach: "Cap total retry attempts per request and always pair retries with a circuit breaker — never let retries run unbounded against a struggling dependency.",
+          },
+          {
+            point: "Circuit breaker states: Closed (normal, counting failures) → Open (fail fast, no calls attempted) → Half-Open (probe with a trickle, decide to close or reopen)",
+            example: "After 50% of the last 20 fraud-check calls fail, the breaker trips Open — subsequent calls fail instantly for 30 seconds before a single probe request tests recovery.",
+            bestApproach: "Tune the failure-rate threshold and cooldown duration from real traffic patterns (not defaults) — too sensitive trips on normal blips, too lax doesn't protect anything.",
+          },
+          {
+            point: "'Fail fast' protects both the struggling dependency (gives it room to recover) and your own service (stops thread/connection pool exhaustion)",
+            example: "An Open circuit breaker returns an error in microseconds instead of waiting out a 30-second timeout, freeing the calling service's threads immediately.",
+            bestApproach: "Measure your circuit breaker's 'fail fast' latency in production dashboards — it should be near-zero, confirming no thread is wasted waiting on a known-broken dependency.",
+          },
+          {
+            point: "The full resilience stack is layered: timeouts + backoff-with-jitter retries + circuit breaker + fallback — each solves a different failure mode",
+            example: "A payment call with no timeout, no breaker, and no fallback turned one slow third-party API into a full checkout outage — each missing layer compounded the failure.",
+            bestApproach: "Treat all four layers as a checklist for every external dependency call, not an either/or choice — each catches a different failure mode the others miss.",
+          },
         ],
         followUps: [
           "How would you choose the failure-rate threshold and cooldown duration for a circuit breaker?",
@@ -748,10 +1164,26 @@ export const SDI_CATEGORIES = [
             "With naive modulo hashing, the server responsible for a key is `hash(key) % N`. The moment N changes — you add a server to handle more load, or one crashes — almost *every* key now maps to a different server than before, because the modulo result shifts for nearly all inputs. For a cache, that's catastrophic: a near-total cache wipe right when you're scaling up (i.e., right when you can least afford a stampede of cache misses hammering your database). Consistent hashing fixes this by hashing both servers *and* keys onto the same circular space (a 'ring', typically 0 to 2^32-1): a key is owned by the first server clockwise from its position on the ring. When you add a server, it only takes over the keys in the arc between itself and the next server counter-clockwise — everything else stays put; roughly only `K/N` keys move (K = total keys, N = number of servers), not nearly all of them. When a server is removed, only its keys redistribute to its neighbor. The remaining wrinkle — uneven load if servers land unluckily close together on the ring — is solved with *virtual nodes*: each physical server is hashed to many points on the ring (e.g., 100-500 virtual nodes each), smoothing out the distribution so no single server gets an unlucky concentration of key ranges.",
         },
         keyPoints: [
-          "`hash(key) % N` reshuffles ~all keys when N changes — the worst possible behavior exactly when you're scaling (cache stampede risk)",
-          "Consistent hashing places servers and keys on a ring; a key belongs to the next server clockwise — adding/removing a server only moves ~K/N keys",
-          "Virtual nodes (each physical server hashed to many ring positions) smooth out uneven load that plain consistent hashing can still produce",
-          "This is the mechanism behind Dynamo-style databases, CDNs, and distributed caches — knowing it cold signals real distributed-systems depth",
+          {
+            point: "`hash(key) % N` reshuffles ~all keys when N changes — the worst possible behavior exactly when you're scaling (cache stampede risk)",
+            example: "Adding one server to a 4-node modulo-hashed cache (4→5) remaps roughly 80% of keys, causing a flood of cache misses right when you're trying to add capacity.",
+            bestApproach: "Never use plain `hash(key) % N` for anything that resizes (caches, sharded stores) — use consistent hashing from the very first implementation, not as a later fix.",
+          },
+          {
+            point: "Consistent hashing places servers and keys on a ring; a key belongs to the next server clockwise — adding/removing a server only moves ~K/N keys",
+            example: "Adding a 5th node to a consistent-hash ring of 4 only remaps the keys in the arc the new node claims — roughly 20% of keys move, not 80%.",
+            bestApproach: "Implement consistent hashing using an established library (e.g., Ketama-style) rather than rolling your own ring math — the edge cases (wraparound, tie-breaking) are easy to get subtly wrong.",
+          },
+          {
+            point: "Virtual nodes (each physical server hashed to many ring positions) smooth out uneven load that plain consistent hashing can still produce",
+            example: "Without virtual nodes, an unlucky ring placement can give one physical server a disproportionately large arc; 100-500 virtual nodes per server smooths this out statistically.",
+            bestApproach: "Use 100+ virtual nodes per physical server as a starting point, and monitor per-node load to confirm the distribution is actually even in practice.",
+          },
+          {
+            point: "This is the mechanism behind Dynamo-style databases, CDNs, and distributed caches — knowing it cold signals real distributed-systems depth",
+            example: "Cassandra, DynamoDB, and Riak all use consistent hashing with virtual nodes, directly descended from Amazon's 2007 Dynamo paper.",
+            bestApproach: "When asked to design any horizontally-partitioned store or cache, name consistent hashing with virtual nodes by default rather than waiting to be prompted.",
+          },
         ],
         followUps: [
           "How do virtual nodes affect the rebalancing cost when a server is added or removed?",
@@ -775,10 +1207,26 @@ export const SDI_CATEGORIES = [
             "The checklist, roughly in the order I'd scan a design doc for them: (1) Timeouts — every network call needs one; 'no timeout' means a single hung dependency can occupy a thread/connection forever, and enough hung threads exhausts your pool, taking down requests that have nothing to do with the slow dependency. (2) Retries with exponential backoff *and jitter* — backoff prevents synchronized retry storms, jitter prevents many clients from retrying in lockstep and re-creating the storm anyway. (3) Circuit breakers — stop calling a dependency that's clearly failing, both to protect it and yourself (detailed above). (4) Bulkheads — partition your resources (separate thread pools / connection pools per dependency) so that one slow dependency can't starve calls to a healthy one; named after ship compartments that contain flooding to one section. (5) Fallbacks / graceful degradation — when a dependency is unavailable, can you serve a cached value, a default, or a reduced experience instead of a hard error? (6) Idempotency — if you retry a write operation, does doing it twice cause harm (double-charging a card)? If yes, you need idempotency keys before retries are safe at all. The single most important question to ask: 'what happens when this dependency is *slow* — not down, just slow?' Most outages are caused by slow dependencies (which look healthy to simple up/down health checks) silently exhausting resources, not by clean, fast failures.",
         },
         keyPoints: [
-          "The stack, in order: timeouts → retries (backoff + jitter) → circuit breakers → bulkheads → fallbacks → idempotency",
-          "Bulkheads (separate resource pools per dependency) stop one slow dependency from starving calls to healthy ones",
-          "'Slow' is the dangerous failure mode, not 'down' — slow dependencies pass health checks while quietly exhausting your thread/connection pools",
-          "Idempotency keys are a prerequisite for safe retries on any write — otherwise a retry can cause real-world double effects (double charge, double email)",
+          {
+            point: "The stack, in order: timeouts → retries (backoff + jitter) → circuit breakers → bulkheads → fallbacks → idempotency",
+            example: "A design doc missing timeouts on its fraud-check call is the single highest-priority gap to flag — every other layer is moot if a call can hang forever.",
+            bestApproach: "Review design docs against this exact ordered checklist, flagging the first missing layer rather than listing all gaps unprioritized — timeouts first, always.",
+          },
+          {
+            point: "Bulkheads (separate resource pools per dependency) stop one slow dependency from starving calls to healthy ones",
+            example: "Separate thread pools for the fraud-check API and the shipping API mean a slow fraud-check call can't exhaust the threads needed to serve shipping calls.",
+            bestApproach: "Give each external dependency its own thread/connection pool sized to its expected concurrency, rather than sharing one pool across all outbound calls.",
+          },
+          {
+            point: "'Slow' is the dangerous failure mode, not 'down' — slow dependencies pass health checks while quietly exhausting your thread/connection pools",
+            example: "AWS postmortems repeatedly cite 'a dependency became slow, not unavailable' as the root cause of cascading incidents that simple up/down health checks missed entirely.",
+            bestApproach: "Chaos-test for injected latency (not just hard failures) on every critical dependency before shipping — a service that handles 'down' gracefully can still fall over on 'slow.'",
+          },
+          {
+            point: "Idempotency keys are a prerequisite for safe retries on any write — otherwise a retry can cause real-world double effects (double charge, double email)",
+            example: "A payment API without idempotency keys can double-charge a card when a client retries after a timeout that actually succeeded server-side.",
+            bestApproach: "Require every write endpoint accepting client-driven retries to accept and enforce an idempotency key before retries are enabled at the client level.",
+          },
         ],
         followUps: [
           "How would you implement a bulkhead in practice — separate thread pools, separate processes, or something else?",
@@ -811,10 +1259,26 @@ export const SDI_CATEGORIES = [
             "High-Level Design rounds hand you something broad ('design Twitter', 'design a ride-sharing app') and grade your ability to: ask clarifying questions to scope the problem, identify the core entities and APIs, choose the right storage and communication patterns, estimate scale, and reason about trade-offs (consistency vs availability, SQL vs NoSQL, sync vs async) — the output is usually a box-and-arrow diagram and a narrated set of decisions. Low-Level Design rounds hand you something narrower and deeper ('design a parking lot', 'design an elevator system', 'design a rate limiter as a library', 'design Splitwise') and grade: can you identify the right classes/interfaces and their responsibilities (single responsibility, not god-objects), do you reach for the right design patterns *because they fit* (not because you memorized GoF), can you model state transitions and concurrency correctly, and can you write code that's actually extensible (adding a new vehicle type or a new payment method shouldn't require rewriting half the system). The biggest mistake candidates make is treating LLD like a coding interview (just write a working class) — the bar is *design quality*: extensibility, separation of concerns, and the ability to explain *why* you modeled it this way and what would change if a new requirement showed up.",
         },
         keyPoints: [
-          "HLD = system decomposition, data flow, scale, trade-offs (boxes and arrows); LLD = object/class design, interfaces, patterns, state, concurrency (code-level)",
-          "LLD is graded on extensibility and separation of concerns — not 'does it compile', but 'can I add a feature without rewriting half of it'",
-          "Design patterns should appear because they *fit the forces in the problem* — naming a pattern just to show you know it is a red flag, not a strength",
-          "Always narrate the 'why' — interviewers are grading your reasoning trail at least as much as the artifact you produce",
+          {
+            point: "HLD = system decomposition, data flow, scale, trade-offs (boxes and arrows); LLD = object/class design, interfaces, patterns, state, concurrency (code-level)",
+            example: "An HLD round for 'design Twitter' ends with services and data stores on a whiteboard; an LLD round for 'design a parking lot' ends with class diagrams and method signatures.",
+            bestApproach: "Calibrate your output format to the round type from the first minute — diagram boxes-and-arrows for HLD, sketch classes/interfaces for LLD — don't mix the two.",
+          },
+          {
+            point: "LLD is graded on extensibility and separation of concerns — not 'does it compile', but 'can I add a feature without rewriting half of it'",
+            example: "A `Vehicle` interface with pluggable fee strategies lets a new vehicle type be added with one new class; a hardcoded if/else chain requires editing existing code everywhere.",
+            bestApproach: "Pressure-test your own LLD design mid-interview by asking 'what changes if a new requirement X shows up?' — if the answer touches many existing classes, redesign before moving on.",
+          },
+          {
+            point: "Design patterns should appear because they *fit the forces in the problem* — naming a pattern just to show you know it is a red flag, not a strength",
+            example: "Reaching for Strategy because 'pricing varies by lot and might add new types' is earned; reaching for Strategy because it sounds impressive is not.",
+            bestApproach: "State the variability/coupling problem in one sentence before naming any pattern — if you can't state the problem, don't reach for the pattern.",
+          },
+          {
+            point: "Always narrate the 'why' — interviewers are grading your reasoning trail at least as much as the artifact you produce",
+            example: "Saying 'I'm modeling Spot as owning its own status rather than having ParkingLot track it centrally, because spot state changes are local and frequent' shows reasoning, not just output.",
+            bestApproach: "Practice narrating design decisions out loud as you make them, not just presenting the finished diagram — the trail is what's actually being graded.",
+          },
         ],
         followUps: [
           "How would you demonstrate extensibility in a 45-minute LLD interview without writing a full implementation?",
@@ -838,10 +1302,26 @@ export const SDI_CATEGORIES = [
             "Core entities: `Vehicle` (abstract, with subclasses `Car`, `Motorcycle`, `Truck` — each knows its size requirement); `ParkingSpot` (has a type/size, an occupied flag, and a reference to the vehicle currently parked); `Level` (owns a collection of spots, knows how many free spots of each type remain — ideally maintained as counters, not by scanning); `ParkingLot` (owns levels, exposes `parkVehicle()` / `unparkVehicle()`, is the entry point gates talk to); `Ticket` (records entry time, assigned spot, vehicle — the receipt that ties a parking session together); `Gate`/`EntryPanel`/`ExitPanel` (the physical interaction points). Two design decisions are where this round is actually won: (1) Spot assignment — don't hardcode 'find the first free spot'; define a `SpotAssignmentStrategy` interface (nearest-to-entrance, by-vehicle-size-fit, load-balance-across-levels) so the lot owner can change policy without touching `ParkingLot`'s code — Strategy pattern, applied because the *forces* (different lots want different assignment policies) call for it. (2) Pricing — same idea: a `PricingStrategy` interface lets you support flat-rate, hourly, dynamic/surge pricing as interchangeable plug-ins. (3) Concurrency — `parkVehicle` must atomically check-and-reserve a spot; without locking (or an atomic compare-and-swap on the spot's state), two cars arriving simultaneously can both be assigned the same spot — exactly the kind of race condition an LLD interviewer is listening for you to mention unprompted.",
         },
         keyPoints: [
-          "Model domain nouns as classes with single, clear responsibilities — `Vehicle`, `Spot`, `Level`, `ParkingLot`, `Ticket`, each owning exactly one concern",
-          "Use Strategy for anything that varies by policy (spot assignment, pricing) — makes the system extensible without modifying core classes (Open/Closed Principle in action)",
-          "Maintain free-spot counts incrementally (counters updated on park/unpark) rather than scanning — an easy win interviewers notice",
-          "Call out the concurrency race in spot assignment unprompted — 'two cars arrive simultaneously, both must not get the same spot' is exactly the kind of detail that separates strong answers",
+          {
+            point: "Model domain nouns as classes with single, clear responsibilities — `Vehicle`, `Spot`, `Level`, `ParkingLot`, `Ticket`, each owning exactly one concern",
+            example: "Giving `Ticket` sole ownership of `entry_time` (not duplicating it on `Vehicle` or `Spot`) makes fee calculation unambiguous — there's exactly one place to look.",
+            bestApproach: "For each class you sketch, state its single responsibility in one sentence — if you can't, it's likely doing too much and should be split.",
+          },
+          {
+            point: "Use Strategy for anything that varies by policy (spot assignment, pricing) — makes the system extensible without modifying core classes (Open/Closed Principle in action)",
+            example: "Defining a `SpotAssignmentStrategy` interface lets a mall add a 'EV-charging-priority' policy without touching `ParkingLot`'s existing code at all.",
+            bestApproach: "Identify the 1-2 genuinely variable policies in the problem (pricing, assignment) and isolate exactly those behind interfaces — don't Strategy-ify everything.",
+          },
+          {
+            point: "Maintain free-spot counts incrementally (counters updated on park/unpark) rather than scanning — an easy win interviewers notice",
+            example: "A `Level` object decrementing a `freeSpotCount` integer on every park is O(1); scanning all spots to count free ones on every display refresh is O(n) and visibly slower at scale.",
+            bestApproach: "Default to incremental counters for any 'how many X are available' display value mentioned in the prompt — call it out explicitly as a deliberate choice.",
+          },
+          {
+            point: "Call out the concurrency race in spot assignment unprompted — 'two cars arrive simultaneously, both must not get the same spot' is exactly the kind of detail that separates strong answers",
+            example: "An atomic compare-and-swap on a spot's status (`UPDATE spots SET status='OCCUPIED' WHERE id=X AND status='FREE'`) prevents two simultaneous arrivals from both claiming the last spot.",
+            bestApproach: "Mention the race condition and your fix for it before the interviewer asks — proactively naming concurrency issues is a stronger signal than answering when prompted.",
+          },
         ],
         followUps: [
           "How would you support reservations made in advance, on top of this design?",
@@ -865,10 +1345,26 @@ export const SDI_CATEGORIES = [
             "Algorithm choice — four candidates worth naming and ranking: Fixed window counter (simplest — count requests in discrete windows like '12:00:00-12:01:00'; the flaw is burst-at-the-boundary: a user can send N requests at 12:00:59 and another N at 12:01:00, doubling the intended limit in two seconds). Sliding window log (store a timestamp per request, count how many fall in the trailing window — perfectly accurate, but memory cost grows with request volume). Sliding window counter (a clever hybrid — weight the previous window's count by how much it overlaps the current sliding window; nearly as accurate as the log approach with fixed, small memory — this is what most production systems actually use). Token bucket (tokens refill at a fixed rate into a bucket of fixed capacity; a request consumes a token or is rejected — naturally allows controlled bursts up to the bucket size, which fixed/sliding windows don't model well). For a *library* meant to be dropped into many services, I'd default to token bucket (intuitive mental model, naturally supports bursts, simple to implement) or sliding window counter (smoother, no burst allowance) depending on whether bursts should be allowed. The harder problem — and the one that actually distinguishes a strong answer — is distribution: if your service runs on 10 instances, each holding its own in-memory counter, a user can get 10x the intended limit by hitting different instances. The fix is centralizing the counter state in a shared, fast store (Redis) and using atomic operations (`INCR` + `EXPIRE`, or a Lua script for token-bucket logic) so that check-and-increment happens as one atomic unit — without that atomicity, you reintroduce the exact race condition the rate limiter exists to prevent.",
         },
         keyPoints: [
-          "Name and rank the algorithms: fixed window (simple, boundary-burst flaw) → sliding log (accurate, memory-heavy) → sliding window counter (the production sweet spot) → token bucket (naturally models controlled bursts)",
-          "The real design challenge isn't the algorithm — it's making counters *consistent across instances* without that becoming the new bottleneck",
-          "Redis + atomic operations (INCR/EXPIRE or a Lua script) solves the distributed state problem — and the atomicity itself is the crux (a non-atomic check-then-increment reintroduces the race)",
-          "As a *library*, expose the algorithm as a pluggable strategy — different endpoints often need different limits and different burst tolerances",
+          {
+            point: "Name and rank the algorithms: fixed window (simple, boundary-burst flaw) → sliding log (accurate, memory-heavy) → sliding window counter (the production sweet spot) → token bucket (naturally models controlled bursts)",
+            example: "A fixed-window limiter lets a user send 2x the intended limit by timing requests at 11:59:59 and 12:00:00 — two separate windows, double the allowed volume in one second.",
+            bestApproach: "Default to sliding-window-counter or token-bucket for any production rate limiter — only use fixed-window for genuinely low-stakes, rough throttling.",
+          },
+          {
+            point: "The real design challenge isn't the algorithm — it's making counters *consistent across instances* without that becoming the new bottleneck",
+            example: "Ten API server instances each holding an in-memory counter let a client get 10x the intended limit simply by hitting different instances round-robin.",
+            bestApproach: "Centralize limiter state in Redis from the start — don't prototype with in-memory counters and plan to 'fix it later,' since the distributed-state problem is the actual design.",
+          },
+          {
+            point: "Redis + atomic operations (INCR/EXPIRE or a Lua script) solves the distributed state problem — and the atomicity itself is the crux (a non-atomic check-then-increment reintroduces the race)",
+            example: "A separate GET-then-SET in application code lets two concurrent requests both read 'under limit' and both proceed, exceeding the limit — a single Lua EVAL prevents this.",
+            bestApproach: "Implement the check-and-decrement as one atomic Redis Lua script, never as two separate round trips, regardless of how rare the race seems.",
+          },
+          {
+            point: "As a *library*, expose the algorithm as a pluggable strategy — different endpoints often need different limits and different burst tolerances",
+            example: "A login endpoint might need a strict, no-burst limit (prevent credential stuffing) while a search endpoint can tolerate bursts via token bucket.",
+            bestApproach: "Design the library's public API around a `RateLimitStrategy` interface configured per-route, rather than hardcoding one global algorithm for every endpoint.",
+          },
         ],
         followUps: [
           "How would a Lua script in Redis make the token-bucket check-and-decrement atomic?",
@@ -892,10 +1388,26 @@ export const SDI_CATEGORIES = [
             "Core classes: `Elevator` (current floor, direction, door state, a queue of destination requests, and — critically — modeled as an explicit state machine: Idle → MovingUp/MovingDown → DoorsOpening → DoorsOpen → DoorsClosing → back to Idle or moving; this prevents the classic bug of 'doors open while moving'); `ElevatorController`/`ElevatorSystem` (owns all elevators, receives floor calls, and delegates to a scheduler); `Request` (floor + direction — an external hall call vs an internal car-button press, which behave slightly differently); `SchedulingStrategy` (the pluggable brain — given the current state of all elevators and a new request, decide which elevator should serve it). The scheduling decision is where the design is won or lost: a naive 'nearest elevator' strategy ignores direction (an elevator one floor away but moving *away* from the caller is a worse choice than one three floors away moving *toward* them) — the real algorithm (similar to SCAN/elevator-disk-scheduling algorithms from OS theory) scores each elevator by: is it idle (best case — can be redirected freely), is it already moving toward the request in the same direction (good — minimal detour), or is it moving away (worst — would need to finish its current run first). Defining `SchedulingStrategy` as an interface means you can swap in 'minimize wait time' vs 'minimize energy use' vs 'priority floors for VIP access cards' without touching `Elevator` or `ElevatorController` — that pluggability, plus the explicit state machine preventing invalid states, is exactly what an interviewer is listening for.",
         },
         keyPoints: [
-          "Model the elevator itself as an explicit state machine (Idle/MovingUp/MovingDown/DoorsOpen/...) — this single decision prevents a whole class of 'impossible state' bugs",
-          "Separate 'elevator state' from 'which elevator answers this call' — the latter is a pluggable `SchedulingStrategy`, not a pile of if-statements inside `Elevator`",
-          "A good scheduling heuristic scores by direction-and-proximity (idle > moving toward in same direction > moving away) — borrowed from OS disk-scheduling (SCAN/LOOK algorithms)",
-          "Distinguish hall calls (floor + direction, from outside) from car calls (just a floor, from inside) — they carry different information and are handled slightly differently",
+          {
+            point: "Model the elevator itself as an explicit state machine (Idle/MovingUp/MovingDown/DoorsOpen/...) — this single decision prevents a whole class of 'impossible state' bugs",
+            example: "Without an explicit state machine, a bug could let an elevator receive a new destination while DoorsOpen, causing it to move with doors ajar — the state machine makes that transition illegal by construction.",
+            bestApproach: "Enumerate every valid state and every valid transition between them before writing any scheduling logic — treat invalid transitions as compile-time or runtime errors, not silently ignored cases.",
+          },
+          {
+            point: "Separate 'elevator state' from 'which elevator answers this call' — the latter is a pluggable `SchedulingStrategy`, not a pile of if-statements inside `Elevator`",
+            example: "A `MinimizeWaitTimeStrategy` and an `EnergyEfficientStrategy` can both implement the same `SchedulingStrategy` interface, swappable without touching `Elevator`'s state machine code.",
+            bestApproach: "Keep `Elevator` ignorant of scheduling policy entirely — it should only expose its current state and accept destination requests, never decide whether it 'should' take a given call.",
+          },
+          {
+            point: "A good scheduling heuristic scores by direction-and-proximity (idle > moving toward in same direction > moving away) — borrowed from OS disk-scheduling (SCAN/LOOK algorithms)",
+            example: "An elevator one floor away but moving down is a worse pick for an upward call than one three floors away already moving up — naive nearest-elevator logic gets this backwards.",
+            bestApproach: "Score every elevator on (idle/same-direction/opposite-direction) before distance, and only use distance as a tiebreaker within the same direction-category.",
+          },
+          {
+            point: "Distinguish hall calls (floor + direction, from outside) from car calls (just a floor, from inside) — they carry different information and are handled slightly differently",
+            example: "A hall call of 'floor 5, going up' lets the scheduler match an elevator already heading up past floor 5; a car call from inside just says 'go to floor 8' with no direction ambiguity.",
+            bestApproach: "Model `HallCall` and `CarCall` as distinct request types in your class diagram rather than collapsing them into one generic `Request` — the direction field on hall calls is load-bearing for scheduling.",
+          },
         ],
         followUps: [
           "How would you handle a power outage or emergency mode (e.g., all elevators must go to the ground floor)?",
@@ -919,10 +1431,26 @@ export const SDI_CATEGORIES = [
             "Patterns exist to resolve specific recurring forces — naming the force *first* and then the pattern is what reads as senior; naming the pattern first and retrofitting a justification reads as memorization. Quick force-to-pattern map worth having ready: 'this behavior needs to vary independently and be swapped at runtime' → Strategy (pricing, spot assignment, scheduling — all from the examples above); 'object construction is complex or needs to vary by type/config' → Factory / Builder (creating different `Vehicle` or `Notification` subtypes from a config flag, or building a complex object step-by-step); 'many parts need to react to one thing changing, without tight coupling' → Observer (an elevator's arrival notifying floor displays, an order-status change notifying multiple subscribers — though in distributed systems this often becomes an event bus instead); 'exactly one instance must coordinate shared state' → Singleton (genuinely rare in well-designed systems — usually a sign that state should be passed explicitly instead; interviewers often consider reflexive Singleton use a yellow flag because it introduces global mutable state and makes testing harder); 'you need to add behavior to objects without subclassing every combination' → Decorator (pricing add-ons, middleware chains). The discipline: state the problem ('different vehicle types need different fee calculations and new types will be added later') *before* naming the pattern ('...so I'd use Strategy here') — that ordering is the entire signal an interviewer is listening for.",
         },
         keyPoints: [
-          "Name the force/problem first, the pattern second — 'I need X to vary independently, so I'd use Strategy' beats 'I'll use Strategy here'",
-          "Strategy: swap behavior at runtime. Factory/Builder: complex/varying construction. Observer: loose-coupled reactions to change. Decorator: compose behavior without subclass explosion",
-          "Singleton is the pattern most often misused — reflexive use is a yellow flag (global mutable state, hard to test); ask 'could this just be passed explicitly instead?'",
-          "If you can't articulate what breaks *without* the pattern, you probably don't need it — that's the test for whether it genuinely fits",
+          {
+            point: "Name the force/problem first, the pattern second — 'I need X to vary independently, so I'd use Strategy' beats 'I'll use Strategy here'",
+            example: "'Different vehicle types need different fee calculations, and new types will be added' is the force; 'so I'd use Strategy' is the conclusion that should follow it, not precede it.",
+            bestApproach: "Rehearse stating the problem-then-pattern sentence structure out loud before interviews — it's a verbal habit, not just a design principle, and it has to be automatic under pressure.",
+          },
+          {
+            point: "Strategy: swap behavior at runtime. Factory/Builder: complex/varying construction. Observer: loose-coupled reactions to change. Decorator: compose behavior without subclass explosion",
+            example: "A `NotificationFactory` that builds Email/SMS/Push objects from a config flag is Factory; a `Logger` that many unrelated components react to (without being tightly coupled to it) edges toward Observer.",
+            bestApproach: "Keep a one-line mental map of force→pattern (like this list) ready to recall, but always verify the specific problem actually matches before applying it.",
+          },
+          {
+            point: "Singleton is the pattern most often misused — reflexive use is a yellow flag (global mutable state, hard to test); ask 'could this just be passed explicitly instead?'",
+            example: "A `ConfigManager` Singleton accessed globally throughout a codebase makes unit tests fragile — swapping it for dependency-injected config makes each test isolated and explicit.",
+            bestApproach: "Default to passing shared objects explicitly via constructor injection; reach for Singleton only when you can articulate why explicit passing genuinely doesn't work here.",
+          },
+          {
+            point: "If you can't articulate what breaks *without* the pattern, you probably don't need it — that's the test for whether it genuinely fits",
+            example: "Asked 'why Strategy for spot assignment?', a strong answer is 'without it, adding a new assignment policy means editing ParkingLot's core method' — a concrete, specific breakage.",
+            bestApproach: "Before committing to any pattern in an interview, silently ask yourself 'what exactly breaks if I don't use this?' — if the answer is vague, reconsider.",
+          },
         ],
         followUps: [
           "Give an example where Observer is the wrong choice and an event bus / message queue would serve better.",
@@ -946,10 +1474,26 @@ export const SDI_CATEGORIES = [
             "Core entities: `User`, `Group` (a set of users), `Expense` (amount, payer, a list of `Split`s — each split says 'this user owes this amount', supporting equal/exact/percentage split strategies — Strategy pattern again, because split styles vary and new ones get added), and `Settlement` (a record of an actual payment between two users that reduces a balance). The key modeling decision: don't store 'Alice owes Bob $20' as mutable rows you update in place — store immutable `Expense` records (the source of truth, an audit trail that never changes) and *derive* current balances by summing splits across all expenses minus settlements. This makes the system auditable (you can always answer 'why do I owe this much?' by replaying the expense history) and avoids a whole class of bugs where balance-update code drifts out of sync with the expenses that justified it. The interesting algorithmic piece: naively, if Alice owes Bob $20 and Bob owes Charlie $20, the app could show two separate debts — but the *simplified* view should realize Alice can just pay Charlie directly, netting Bob out entirely. This is the 'simplify debts' problem: build a graph where edges are net pairwise balances, then greedily match the largest creditor with the largest debtor repeatedly until all balances are zero — minimizing the total number of transactions needed to settle the whole group. Surfacing that you know this is a real, named sub-problem (not just 'sum up the numbers') is what separates a strong Splitwise answer from a mediocre one.",
         },
         keyPoints: [
-          "Model `Expense` as an immutable source-of-truth record; *derive* balances from it rather than mutating stored balances directly — gives you an audit trail and prevents drift bugs",
-          "Use Strategy for split types (equal / exact amounts / percentages / shares) — new split styles are a near-certain future requirement",
-          "The 'simplify debts' sub-problem (minimize the number of settlement transactions via greedy max-creditor/max-debtor matching) is the algorithmic heart of this question — name it explicitly",
-          "Group balances should be computed incrementally/cached, not recomputed from the full expense history on every page load, once the group has real history",
+          {
+            point: "Model `Expense` as an immutable source-of-truth record; *derive* balances from it rather than mutating stored balances directly — gives you an audit trail and prevents drift bugs",
+            example: "If a user disputes 'why do I owe $40?', replaying their expense history answers it directly; a mutated running-balance field can't explain itself after the fact.",
+            bestApproach: "Never write directly to a 'balance' field — always insert a new immutable Expense/Settlement record and derive balances via a (cached) aggregation over the full history.",
+          },
+          {
+            point: "Use Strategy for split types (equal / exact amounts / percentages / shares) — new split styles are a near-certain future requirement",
+            example: "Splitwise added 'split by shares' (e.g., 2 shares vs 1 share) years after launch — a Strategy-based split model absorbs that as a new class, not a rewrite.",
+            bestApproach: "Define a `SplitStrategy` interface with a single `computeSplits(amount, participants)` method up front, even if you only implement equal-split initially.",
+          },
+          {
+            point: "The 'simplify debts' sub-problem (minimize the number of settlement transactions via greedy max-creditor/max-debtor matching) is the algorithmic heart of this question — name it explicitly",
+            example: "Splitwise's real 'simplify debts' toggle collapses a tangled mesh of pairwise IOUs into the minimum number of actual payments needed to settle the whole group.",
+            bestApproach: "Implement simplify-debts as a separate, optional computation over the derived balance graph — never bake it into the core balance-calculation logic, since users may want both views.",
+          },
+          {
+            point: "Group balances should be computed incrementally/cached, not recomputed from the full expense history on every page load, once the group has real history",
+            example: "A group with 5,000 expenses recomputing the full balance sum on every page load adds real, avoidable latency compared to maintaining a running cached balance updated per new expense.",
+            bestApproach: "Cache per-pair balances and update them incrementally on each new Expense/Settlement event, falling back to full recomputation only for audits or cache invalidation.",
+          },
         ],
         followUps: [
           "How would you handle a user editing or deleting an expense after settlements have already happened against it?",
@@ -982,10 +1526,26 @@ export const SDI_CATEGORIES = [
             "The single biggest differentiator between strong and weak HLD performances isn't the final diagram — it's whether the candidate *grounds* the design in explicit requirements before drawing anything. The opening sequence that works: (1) Functional scope — 'Twitter is huge; should I focus on posting + timeline + follow, or include DMs, search, trends, ads too?' (forces the interviewer to hand you a bounded problem, and shows you understand that 'design Twitter' is not actually a spec). (2) Scale — 'roughly how many users, how many posts/day, what's the read:write ratio?' (this single question often *is* the design — a 100:1 read:write ratio screams 'cache and pre-compute timelines'; a write-heavy system screams 'partition and queue'). (3) Non-functional priorities — 'should this favor consistency or availability if there's a partition? Is sub-second latency critical, or is eventual-consistency-with-good-UX acceptable?' (this tells you which trade-offs you're allowed to make later without re-litigating them). Skipping this and jumping straight to boxes-and-arrows is the single most common reason strong engineers underperform in these rounds — not because their design is bad, but because the interviewer can't tell *if* it's good without knowing what it was supposed to optimize for. Two minutes of scoping questions can be worth more to your score than ten minutes of diagramming.",
         },
         keyPoints: [
-          "Scope functional requirements out loud first — 'design Twitter' is not a spec; turning it into one is itself a graded skill",
-          "Ask for scale (users, requests/day, read:write ratio) — that single ratio often determines your entire architecture direction",
-          "Ask which non-functional property to optimize (consistency vs availability, latency vs throughput) — it licenses every trade-off you'll make later",
-          "An ungrounded design can't be graded — scoping isn't stalling, it's the part of the round that makes the rest of it evaluable",
+          {
+            point: "Scope functional requirements out loud first — 'design Twitter' is not a spec; turning it into one is itself a graded skill",
+            example: "Asking 'should I focus on posting + timeline + follow, or include DMs and trends too?' turns an impossibly broad prompt into a bounded, achievable 45-minute design.",
+            bestApproach: "Open every HLD round with 2-3 scoping questions before drawing anything — treat the interviewer's answers as the actual spec you're designing against.",
+          },
+          {
+            point: "Ask for scale (users, requests/day, read:write ratio) — that single ratio often determines your entire architecture direction",
+            example: "A 100:1 read:write ratio immediately justifies aggressive caching and pre-computed timelines; a write-heavy system instead points toward partitioning and queuing.",
+            bestApproach: "Make 'what's the read:write ratio?' a reflexive question in literally every HLD round — it's the single highest-leverage number you can extract early.",
+          },
+          {
+            point: "Ask which non-functional property to optimize (consistency vs availability, latency vs throughput) — it licenses every trade-off you'll make later",
+            example: "Hearing 'eventual consistency is fine, but sub-second latency is critical' immediately rules out synchronous cross-region quorum writes from the design.",
+            bestApproach: "Get an explicit answer on the primary non-functional priority before designing, and refer back to it every time you justify a trade-off later in the round.",
+          },
+          {
+            point: "An ungrounded design can't be graded — scoping isn't stalling, it's the part of the round that makes the rest of it evaluable",
+            example: "A candidate who scopes for 8 minutes then designs a focused, defensible system often scores higher than one who diagrams 15 boxes for 'all of Twitter' with no clear priorities.",
+            bestApproach: "Budget the first 15-20% of the round explicitly for scoping, and treat skipping it as a real risk to your score, not a time-saving shortcut.",
+          },
         ],
         followUps: [
           "How do you handle an interviewer who says 'just use your best judgment, keep going'?",
@@ -1009,10 +1569,26 @@ export const SDI_CATEGORIES = [
             "Core flow: `POST /shorten {longUrl}` → returns a short code; `GET /{code}` → 30x redirect to the long URL. The decisions that actually distinguish a strong answer: (1) Code generation — base62-encoding an auto-incrementing ID is simple and collision-free but creates a central bottleneck (one counter) and makes URLs guessable/sequential (a privacy/abuse concern); hashing the long URL (MD5/SHA, truncated) avoids the central counter but creates collisions you must detect and handle (append a salt and retry); a pre-generated pool of random codes handed out by a dedicated key-generation service avoids both problems at the cost of an extra moving part. Naming this trade-off explicitly is the single highest-value thing you can do in this question. (2) Redirect type — 301 (permanent) lets browsers cache the redirect, reducing load on your service dramatically, but makes click analytics impossible (the browser never asks you again after the first visit); 302 (temporary) hits your service every time, enabling analytics, at higher load. This is a real trade-off with a business answer, not a technical one — 'do we need click analytics?' decides it. (3) Read:write ratio — shortenings are rare, redirects are extremely frequent (often 100:1 or higher) — this should visibly drive your design toward heavy caching (the long URL for a hot short code should almost never require a database hit) and toward optimizing the read path above all else. (4) Storage — a simple key-value mapping (short code → long URL) fits a key-value store perfectly; you rarely need relational features here, which is itself worth saying (shows you're matching the store to the access pattern, not defaulting to Postgres-for-everything).",
         },
         keyPoints: [
-          "Code generation is the crux: base62(counter) [simple, central bottleneck, guessable] vs hash-with-collision-handling vs pre-generated key pool — name the trade-off, don't just pick one silently",
-          "301 vs 302 redirect is a real business trade-off (caching/load vs analytics capability) — frame it as a question for the product, not a technical default",
-          "The read:write ratio (often >100:1) should visibly steer your design toward aggressive caching on the read path — say so explicitly",
-          "Recognize this is a key-value access pattern — defaulting to a relational store here would be a (minor) signal you're not matching storage to access pattern",
+          {
+            point: "Code generation is the crux: base62(counter) [simple, central bottleneck, guessable] vs hash-with-collision-handling vs pre-generated key pool — name the trade-off, don't just pick one silently",
+            example: "Sequential base62 IDs make `bit.ly/abc123` followed by `bit.ly/abc124` guessable as adjacent links — a privacy concern a pre-generated random key pool avoids.",
+            bestApproach: "State the code-generation trade-off explicitly even if you pick the simple option — 'I'll use base62(counter) for simplicity, accepting that codes are sequential/guessable' shows awareness either way.",
+          },
+          {
+            point: "301 vs 302 redirect is a real business trade-off (caching/load vs analytics capability) — frame it as a question for the product, not a technical default",
+            example: "Choosing 301 lets browsers cache the redirect (less server load) but means a repeat visitor's second click never hits your server, so you can't count it.",
+            bestApproach: "Ask the interviewer 'do we need click analytics?' before defaulting to one redirect code — let the answer decide, rather than picking 301 or 302 by habit.",
+          },
+          {
+            point: "The read:write ratio (often >100:1) should visibly steer your design toward aggressive caching on the read path — say so explicitly",
+            example: "bit.ly's real traffic skews heavily toward a small set of trending links — a cache sized for the 'currently hot' subset absorbs the vast majority of redirect traffic.",
+            bestApproach: "Size your cache around the Pareto-distributed access pattern (a small fraction of links get most clicks) rather than trying to cache the entire link space uniformly.",
+          },
+          {
+            point: "Recognize this is a key-value access pattern — defaulting to a relational store here would be a (minor) signal you're not matching storage to access pattern",
+            example: "Every lookup is an exact-match `short_code → long_url` — DynamoDB or any key-value store fits this perfectly, with no need for relational joins.",
+            bestApproach: "Name the access pattern (exact-match key lookup) explicitly and let it justify the storage choice, rather than defaulting to Postgres out of habit.",
+          },
         ],
         followUps: [
           "How would you handle custom short codes that users choose themselves?",
@@ -1036,10 +1612,26 @@ export const SDI_CATEGORIES = [
             "Naively, 'find nearby drivers' looks like `SELECT * FROM drivers WHERE distance(location, rider_location) < 5km` — this is a disaster at scale: it requires scanning huge numbers of rows, recomputing distance for each, and it has to run *continuously* as both rider and drivers move every few seconds. The real architecture: (1) Geospatial indexing — divide the map into cells using geohashing (encode lat/long into a string where nearby locations share string prefixes — 'find nearby' becomes 'find matching prefixes', a much cheaper operation) or quad-trees (recursively divide regions into quadrants, denser areas get finer subdivision). Either lets you answer 'who's in this region' in roughly constant time instead of scanning everything. (2) A real-time location pipeline — each driver's app streams location updates (every few seconds) into a system that updates their geospatial cell membership; this is itself a high-throughput write problem (millions of location pings per second in a big city) that benefits from a message queue and in-memory store (Redis supports geospatial commands like `GEOADD`/`GEORADIUS` natively, which is why many real systems use it for exactly this). (3) Matching logic — once you have a candidate set of nearby drivers, you still need to *rank* them: distance alone isn't enough — factor in driver rating, whether they're heading in a compatible direction, ETA (which depends on real road networks, not straight-line distance), and fairness (so the same driver isn't always picked). (4) The handoff — once matched, you need a reliable state machine for the ride lifecycle (requested → matched → driver-en-route → in-progress → completed) with timeouts and re-matching if a driver doesn't respond. Naming geospatial indexing unprompted is the single biggest signal in this question — most candidates default to a relational 'nearby query' and miss that it's fundamentally the wrong tool.",
         },
         keyPoints: [
-          "The crux is geospatial search at scale — naive distance queries over a relational table don't survive contact with real traffic; name geohashing or quad-trees explicitly",
-          "Treat location updates as a high-throughput streaming problem (queue + in-memory geospatial store like Redis GEO commands), not as simple row updates",
-          "Matching is ranking, not just filtering — distance, driver rating, direction compatibility, ETA (road-network-aware), and fairness all factor in",
-          "Model the ride lifecycle as an explicit state machine with timeouts and re-matching — 'driver doesn't respond' is a normal case, not an edge case, at this scale",
+          {
+            point: "The crux is geospatial search at scale — naive distance queries over a relational table don't survive contact with real traffic; name geohashing or quad-trees explicitly",
+            example: "A `SELECT * WHERE distance(...) < 5km` query scanning millions of driver rows every few seconds for every rider request would collapse the database almost immediately.",
+            bestApproach: "Name geohashing or quad-tree indexing in the first few minutes of this question — most candidates default to a relational nearby-query and lose significant credit for missing it.",
+          },
+          {
+            point: "Treat location updates as a high-throughput streaming problem (queue + in-memory geospatial store like Redis GEO commands), not as simple row updates",
+            example: "Millions of driver GPS pings per second in a major city would overwhelm a relational table doing row UPDATEs — Redis GEOADD handles this as an in-memory, high-throughput operation.",
+            bestApproach: "Route location pings through a queue into an in-memory geospatial store (Redis GEO commands or a custom geohash index), never directly as synchronous writes to a relational primary.",
+          },
+          {
+            point: "Matching is ranking, not just filtering — distance, driver rating, direction compatibility, ETA (road-network-aware), and fairness all factor in",
+            example: "The single nearest driver might be heading the opposite direction with a 15-minute road-network ETA, while a slightly farther driver heading toward the rider has a 4-minute ETA.",
+            bestApproach: "Score candidate drivers as a weighted combination of factors (not distance alone) and explicitly call out road-network ETA as distinct from straight-line distance.",
+          },
+          {
+            point: "Model the ride lifecycle as an explicit state machine with timeouts and re-matching — 'driver doesn't respond' is a normal case, not an edge case, at this scale",
+            example: "If a matched driver doesn't accept within 10-15 seconds, the system must automatically re-match to the next-best driver rather than leaving the rider waiting indefinitely.",
+            bestApproach: "Design the matched→driver-en-route transition with an explicit timeout and automatic re-matching fallback from the start, not as an afterthought bolted on later.",
+          },
         ],
         followUps: [
           "How would you handle the 'thundering herd' of ride requests during a surge event (e.g., a concert ending)?",
@@ -1063,10 +1655,26 @@ export const SDI_CATEGORIES = [
             "Fan-out-on-write (push model): when a user posts, immediately write that post into the pre-computed feed/inbox of every follower. Reading a feed is then just 'fetch my pre-built list' — extremely fast, O(1)-ish. The cost shows up on the write side: a celebrity with 50M followers triggers 50M writes for a single post — a 'thundering herd' / hot-write problem that can overwhelm the system, and most of that fan-out work may be wasted (many followers won't check their feed before the post is buried by newer ones anyway). Fan-out-on-read (pull model): store posts once; when a user opens their feed, query all the people they follow, merge and rank results on the fly. Writes are trivial (O(1) — just store the post), but reads become expensive — a user following 5,000 accounts triggers a 5,000-way fan-in merge on every feed load, and that cost is paid on the much more frequent operation (people check feeds far more often than celebrities post). The production answer is a hybrid: fan-out-on-write for the vast majority of users (whose follower counts are modest, so the write cost is small and the read stays fast), and fan-out-on-read for celebrity/high-follower accounts (compute their contribution to a follower's feed at read time, merging it with the follower's pre-computed feed from everyone else). This hybrid is the single most-cited 'aha' answer in feed-design interviews — naming it (and explaining *why* — the asymmetry between celebrity post frequency and follower check frequency) is what separates a strong answer from a merely-correct one.",
         },
         keyPoints: [
-          "Fan-out-on-write: fast reads (pre-computed), but write amplification is brutal for high-follower accounts ('thundering herd' on every celebrity post)",
-          "Fan-out-on-read: trivial writes, but expensive reads — and reads happen far more often than celebrity posts, so you're optimizing the wrong side",
-          "The hybrid (push for normal users, pull-and-merge for celebrities) is the canonical 'I've thought about this deeply' answer — name it and explain the asymmetry that motivates it",
-          "Ranking (not just chronological ordering) is a second major sub-problem — ML-based relevance scoring is its own system that this design must leave room to plug into",
+          {
+            point: "Fan-out-on-write: fast reads (pre-computed), but write amplification is brutal for high-follower accounts ('thundering herd' on every celebrity post)",
+            example: "A celebrity with 50M followers posting once triggers 50M individual feed-list writes — most of which may never even be viewed before being buried by newer posts.",
+            bestApproach: "Apply fan-out-on-write only below a follower-count threshold (e.g., 100K) where the write cost stays manageable and the read-speed benefit is worth it.",
+          },
+          {
+            point: "Fan-out-on-read: trivial writes, but expensive reads — and reads happen far more often than celebrity posts, so you're optimizing the wrong side",
+            example: "A user following 5,000 accounts triggers a 5,000-way fan-in merge on every single feed load if pure pull is used — paid on the much more frequent operation.",
+            bestApproach: "Reserve pure fan-out-on-read for the rare high-follower-count accounts where push would be prohibitively expensive, not as the default for all users.",
+          },
+          {
+            point: "The hybrid (push for normal users, pull-and-merge for celebrities) is the canonical 'I've thought about this deeply' answer — name it and explain the asymmetry that motivates it",
+            example: "Twitter's real fanout service pre-computes timelines for most users via Redis-backed structures, while high-follower accounts are merged in at read time instead.",
+            bestApproach: "Explicitly state the asymmetry that motivates the hybrid — celebrities post rarely but have huge fan-out cost; followers check feeds constantly but each celebrity-merge is cheap per-read.",
+          },
+          {
+            point: "Ranking (not just chronological ordering) is a second major sub-problem — ML-based relevance scoring is its own system that this design must leave room to plug into",
+            example: "A feed showing engagement-ranked posts (not pure recency) needs a separate ranking service that scores candidate posts before final ordering — distinct from the fan-out mechanism itself.",
+            bestApproach: "Design the feed-assembly pipeline with an explicit ranking stage as a pluggable step, even if you default to chronological ordering for the core design.",
+          },
         ],
         followUps: [
           "How would you define the threshold for 'celebrity' that triggers the pull-model treatment?",
@@ -1090,10 +1698,26 @@ export const SDI_CATEGORIES = [
             "Two-phase commit (2PC) doesn't survive in microservices — it requires a coordinator to hold locks across all participants until everyone agrees to commit, which means any one slow/down service blocks all the others, defeating the entire point of splitting into independent services. The Saga pattern instead breaks the flow into a chain of local transactions, each of which is atomic *within its own service*, with the overall consistency achieved through choreography or orchestration: Choreography — each service publishes an event when it completes its step, and the next service subscribes and reacts (Order service creates a pending order → publishes `OrderCreated` → Inventory service reserves stock → publishes `InventoryReserved` → Payment service charges the card → publishes `PaymentCompleted` → Order service marks the order confirmed). It's decentralized and avoids a single point of control, but the overall flow's logic is scattered across services, making it hard to see 'what's the whole process' in one place. Orchestration — a central saga orchestrator explicitly calls each service in sequence and tracks the state of the whole flow — easier to understand, monitor, and debug (one place to look), at the cost of that orchestrator becoming a coordination hot-spot. Either way, the *crucial* design element is compensating transactions: if payment fails after inventory was reserved, you must explicitly run `ReleaseInventory` (and `CancelOrder`) — there's no automatic rollback like in a database transaction; you design the 'undo' for every step up front, as a first-class part of the design, not an afterthought. This is the single biggest mental shift from monolith thinking: consistency becomes something you *design and code for explicitly*, not something the database guarantees for free.",
         },
         keyPoints: [
-          "2PC doesn't survive microservices — its locking model defeats the independence that's the entire point of the split",
-          "Saga = a chain of local transactions + compensating transactions — choreography (event-driven, decentralized) vs orchestration (central coordinator, easier to observe)",
-          "Compensating transactions must be designed explicitly for every step — there's no automatic rollback; 'how do we undo this?' is a first-class design question, not an afterthought",
-          "This is the core mental shift from monolith to microservices: consistency moves from 'the database guarantees it' to 'we design and code for it' — eventual, not atomic",
+          {
+            point: "2PC doesn't survive microservices — its locking model defeats the independence that's the entire point of the split",
+            example: "A 2PC coordinator holding locks across orders, inventory, and payment services means any one slow service blocks all three from committing — the exact coupling microservices were meant to remove.",
+            bestApproach: "Rule out 2PC for any cross-service transaction by default in microservices architectures, and reach for Saga as the standard alternative from the start.",
+          },
+          {
+            point: "Saga = a chain of local transactions + compensating transactions — choreography (event-driven, decentralized) vs orchestration (central coordinator, easier to observe)",
+            example: "An orchestrated saga has one `OrderSagaCoordinator` explicitly calling inventory, then payment, then shipping in sequence — easy to see the whole flow in one place.",
+            bestApproach: "Default to orchestration for sagas with more than 2-3 steps (easier to debug and monitor); choreography can work for simpler, 2-step flows where decentralization's benefits outweigh visibility loss.",
+          },
+          {
+            point: "Compensating transactions must be designed explicitly for every step — there's no automatic rollback; 'how do we undo this?' is a first-class design question, not an afterthought",
+            example: "If payment fails after inventory was reserved, an explicit `ReleaseInventory` compensating action must run — there's no database-level rollback spanning both services.",
+            bestApproach: "Design the compensating action for every saga step at the same time as the forward action, and give compensations their own retry/idempotency handling as a first-class subsystem.",
+          },
+          {
+            point: "This is the core mental shift from monolith to microservices: consistency moves from 'the database guarantees it' to 'we design and code for it' — eventual, not atomic",
+            example: "A monolith's single transaction either fully commits or fully rolls back automatically; a saga can get stuck in a partially-completed state that someone must explicitly detect and resolve.",
+            bestApproach: "Build saga state tracking and stuck-saga alerting into the system from day one — assume partial failures will happen in production and design observability for them upfront.",
+          },
         ],
         followUps: [
           "What's the 'outbox pattern' and how does it prevent a service from publishing an event for a transaction that later rolls back?",
@@ -1125,10 +1749,26 @@ export const SDI_CATEGORIES = [
             "Latency ladder (orders of magnitude, not exact figures): L1 cache ~1ns, main memory ~100ns, SSD random read ~100µs, network round trip same-datacenter ~0.5ms, disk seek ~10ms, network round trip cross-continent ~150ms. The takeaway to *say out loud*: 'memory is ~100,000x faster than disk, and a same-datacenter round trip is ~100x faster than a cross-continent one — that's why caching and regional deployment are the two biggest levers in any design.' Availability ladder: 99% ≈ 3.65 days down/year, 99.9% (\"three nines\") ≈ 8.7 hours/year, 99.99% (\"four nines\") ≈ 52 minutes/year, 99.999% (\"five nines\") ≈ 5 minutes/year — each additional nine is roughly an order of magnitude harder and more expensive to achieve. Scale shortcuts: 1 million requests/day ≈ 11.6 requests/sec on average (10^6 ÷ 86,400 ≈ 11.6 — memorize 'seconds per day ≈ 10^5'); peak load is commonly 2-5x average load — always mention you're accounting for it. Storage shortcuts: 1 character ≈ 1 byte (UTF-8 ASCII), a UUID ≈ 16 bytes (36-char string form ≈ 36 bytes), a typical JSON API response row ≈ 0.5-2KB — useful for back-of-envelope storage estimates.",
         },
         keyPoints: [
-          "Latency ladder: memory ≈ 100,000x faster than disk; same-DC round trip ≈ 100x faster than cross-continent — say this to justify caching and regional deployment",
-          "Availability ladder: 99.9% ≈ 8.7h/yr down, 99.99% ≈ 52min/yr, 99.999% ≈ 5min/yr — each nine costs roughly 10x more",
-          "Scale shortcut: seconds-per-day ≈ 10^5, so 1M req/day ≈ 11.6 RPS average — and always multiply by 2-5x for peak",
-          "These numbers exist to let you reason live, not to be recited — use them to *justify* a design choice in the same breath",
+          {
+            point: "Latency ladder: memory ≈ 100,000x faster than disk; same-DC round trip ≈ 100x faster than cross-continent — say this to justify caching and regional deployment",
+            example: "Citing 'main memory is ~100,000x faster than a disk seek' directly justifies why a Redis cache in front of a database is the highest-leverage first move for a slow read path.",
+            bestApproach: "Keep this ladder memorized well enough to recite the relative multiples (not exact numbers) under pressure — the ratios are what justify design decisions, not the precise nanosecond figures.",
+          },
+          {
+            point: "Availability ladder: 99.9% ≈ 8.7h/yr down, 99.99% ≈ 52min/yr, 99.999% ≈ 5min/yr — each nine costs roughly 10x more",
+            example: "Telling a stakeholder '99.99% means 52 minutes of downtime budget for the whole year' turns an abstract SLA target into a concrete operational constraint.",
+            bestApproach: "Convert any availability target mentioned in an interview into its yearly downtime budget out loud immediately — it shows you understand what the number actually costs to achieve.",
+          },
+          {
+            point: "Scale shortcut: seconds-per-day ≈ 10^5, so 1M req/day ≈ 11.6 RPS average — and always multiply by 2-5x for peak",
+            example: "Converting '50M requests/day' to '~580 RPS average, ~2,000 RPS at peak' in seconds lets you immediately judge whether a single service tier can handle it.",
+            bestApproach: "Practice this conversion until it's instant mental math — being able to convert daily figures to RPS without pausing is a fluency signal interviewers notice.",
+          },
+          {
+            point: "These numbers exist to let you reason live, not to be recited — use them to *justify* a design choice in the same breath",
+            example: "Saying '11.6K reads/sec vs 116 writes/sec — that 100:1 ratio is why I'd add a cache' connects the math directly to the architecture decision in one breath.",
+            bestApproach: "Never state an estimation number without immediately following it with the design decision it justifies — a number alone proves arithmetic, not design judgment.",
+          },
         ],
         followUps: [],
         example:
@@ -1146,10 +1786,26 @@ export const SDI_CATEGORIES = [
             "Relational (Postgres/MySQL): pick when you need ACID transactions, complex queries/joins across well-defined relationships, and a schema that's mostly stable. Strength: correctness guarantees and query flexibility. Watch-out: scaling writes requires sharding, which removes the cross-shard join/transaction guarantees you picked it for. Document (MongoDB/DynamoDB-document-mode): pick when records are naturally self-contained and their shape varies or evolves often (user profiles, content/CMS, product catalogs with category-specific fields). Watch-out: querying/updating deeply nested or embedded data gets awkward fast. Key-Value (Redis/DynamoDB/Memcached): pick for blazing-fast lookups by a known key — sessions, caches, feature flags, rate-limit counters. Watch-out: no querying by value, no relationships — it's a hashmap, treat it like one. Wide-Column (Cassandra/HBase/ScyllaDB): pick for write-heavy, time-series, or massive-scale append-style data with simple, partition-key-driven access patterns (chat messages, IoT telemetry, event logs). Watch-out: secondary-index queries and ad-hoc analytics are painful — you must design around your access pattern up front. Graph (Neo4j/Neptune): pick when the *relationships themselves* are the primary thing you query (social graphs, recommendation engines, fraud-ring detection — 'friends of friends who also did X'). Watch-out: overkill for data where relationships are shallow or rarely traversed.",
         },
         keyPoints: [
-          "Relational → joins + ACID + stable-ish schema. Document → self-contained, evolving-shape records. Key-Value → pure fast lookups by key.",
-          "Wide-Column → write-heavy/time-series/append-only at massive scale, simple access patterns. Graph → relationships ARE the query.",
-          "Every family is a trade — name what you're giving up, not just what you're gaining ('I'm choosing document for flexibility, accepting that cross-record queries get harder')",
-          "Polyglot persistence (one store per workload) is normal in real systems — don't feel pressure to pick exactly one for an entire design",
+          {
+            point: "Relational → joins + ACID + stable-ish schema. Document → self-contained, evolving-shape records. Key-Value → pure fast lookups by key.",
+            example: "An orders-customers-payments domain with strict relational integrity needs fits Postgres; a product catalog with category-specific fields fits MongoDB.",
+            bestApproach: "Run through this exact one-glance table mentally before answering any 'which database' question — it should take under 30 seconds to land on a family.",
+          },
+          {
+            point: "Wide-Column → write-heavy/time-series/append-only at massive scale, simple access patterns. Graph → relationships ARE the query.",
+            example: "Discord's billions of chat messages (append-heavy, partitioned by channel) fit Cassandra/ScyllaDB; a fraud-ring detection query ('friends of friends who also did X') fits Neo4j.",
+            bestApproach: "Reach for wide-column only when your access pattern is genuinely simple (partition key + sort key); reach for graph only when relationship traversal is the primary query, not an occasional join.",
+          },
+          {
+            point: "Every family is a trade — name what you're giving up, not just what you're gaining ('I'm choosing document for flexibility, accepting that cross-record queries get harder')",
+            example: "Choosing MongoDB for catalog flexibility means accepting that 'find all products where related_accessory.price > $50' becomes an awkward, slow query.",
+            bestApproach: "State the cost side of every database choice explicitly in the same sentence as the benefit — it demonstrates you're not just pattern-matching to a buzzword.",
+          },
+          {
+            point: "Polyglot persistence (one store per workload) is normal in real systems — don't feel pressure to pick exactly one for an entire design",
+            example: "A single e-commerce product uses Postgres (orders), MongoDB (catalog), Redis (sessions), Cassandra (logs), and Neo4j (recommendations) — five stores, each fit to its workload.",
+            bestApproach: "Default to naming the right store per workload in a design rather than forcing the whole system onto one database 'to keep things simple.'",
+          },
         ],
         followUps: [],
         example:
@@ -1167,10 +1823,26 @@ export const SDI_CATEGORIES = [
             "Strong consistency — use when staleness causes tangible harm: account balances, inventory/seat counts, anything where two readers disagreeing could cause a double-spend or double-booking. Cost: higher latency (often a quorum round trip), reduced availability during partitions. Eventual consistency — use when staleness is invisible or harmless for the relevant time window: like counts, view counts, follower counts, search index freshness, profile updates. Cost: a (usually short) window where different readers see different answers — and you must design the UX to tolerate it gracefully. Causal consistency — use when *ordering* matters more than absolute freshness: comment threads, chat messages, collaborative editing — you must never see a reply before the message it replies to, even if you're fine seeing it a few seconds 'late'. Read-your-own-writes — a special, frequently-needed guarantee: a user should always see *their own* update immediately, even if the system is eventually consistent for everyone else (classic fix: route a user's reads to the same replica their write went to, for a short window after writing).",
         },
         keyPoints: [
-          "The one-question filter: 'what's the real-world cost of showing stale data here?' — that answer picks your model",
-          "Strong: money, inventory, safety. Eventual: social metrics, profiles, search freshness. Causal: anything with cause-and-effect ordering (threads, chat).",
-          "Read-your-own-writes is the guarantee users notice the most and complain about loudest when it's missing — design for it explicitly even in eventually-consistent systems",
-          "Don't pick one model for the whole system — mix per-feature based on each feature's actual tolerance for staleness",
+          {
+            point: "The one-question filter: 'what's the real-world cost of showing stale data here?' — that answer picks your model",
+            example: "Showing a stale follower count costs nothing real; showing a stale '1 seat left' on a flight booking costs an actual double-sale — same question, opposite answers.",
+            bestApproach: "Ask this exact question for every new feature's data model before defaulting to strong consistency 'to be safe' — safety has a real latency/availability cost too.",
+          },
+          {
+            point: "Strong: money, inventory, safety. Eventual: social metrics, profiles, search freshness. Causal: anything with cause-and-effect ordering (threads, chat).",
+            example: "A bank balance (strong), a like count (eventual), and a comment-reply thread (causal) might all coexist on one screen with three different consistency guarantees.",
+            bestApproach: "Tag each data field in your schema with its required consistency model during design, rather than discovering the mismatch after a staleness bug ships.",
+          },
+          {
+            point: "Read-your-own-writes is the guarantee users notice the most and complain about loudest when it's missing — design for it explicitly even in eventually-consistent systems",
+            example: "A user who just posted a comment and doesn't see it on refresh (because they hit a lagging replica) files a bug report immediately — even though every other user's view is technically fine.",
+            bestApproach: "Route a user's reads to the same replica their write went to for a short window post-write (sticky routing or a 'read your own write' cache layer) even in otherwise eventually-consistent systems.",
+          },
+          {
+            point: "Don't pick one model for the whole system — mix per-feature based on each feature's actual tolerance for staleness",
+            example: "Forcing strong consistency on a 'view count' feature just because the payments feature needs it wastes latency/availability budget for zero user benefit.",
+            bestApproach: "Make consistency model a per-table or per-field design decision documented in the schema, not a single database-wide setting inherited by every feature.",
+          },
         ],
         followUps: [],
         example:
@@ -1188,10 +1860,26 @@ export const SDI_CATEGORIES = [
             "1) Timeouts — the foundation; without them, one hung call can occupy a thread/connection forever. Every network call gets one, sized to the operation (a cache lookup and a report-generation call shouldn't share a timeout). 2) Retries with exponential backoff and jitter — handle transient blips (a dropped packet, a GC pause); jitter specifically prevents synchronized retry storms across many clients. 3) Circuit breaker — stop calling a dependency that's clearly broken; protects both it (room to recover) and you (stop burning your own resources on calls that won't succeed). 4) Bulkhead — isolate resource pools per dependency so one slow dependency can't starve calls to healthy ones (named for ship compartments containing flooding). 5) Fallback / graceful degradation — when a dependency is unavailable, serve a cached value, a default, or a reduced feature set instead of a hard error. 6) Idempotency — the prerequisite that makes retries *safe* for writes: an idempotency key ensures 'charge this card' executed twice has the same effect as once.",
         },
         keyPoints: [
-          "Timeouts are the foundation — nothing else in the stack matters if a single call can hang forever",
-          "Backoff handles 'how long to wait'; jitter handles 'don't all retry at the same instant' — both are needed, neither alone is enough",
-          "Circuit breakers and bulkheads solve different problems: 'stop calling a broken dependency' vs 'don't let one dependency's slowness exhaust shared resources'",
-          "Idempotency isn't optional once you have retries on writes — without it, a retried payment can become a double charge",
+          {
+            point: "Timeouts are the foundation — nothing else in the stack matters if a single call can hang forever",
+            example: "A payment call with no timeout can hold a request thread indefinitely, and enough hung threads eventually exhausts the pool for completely unrelated requests too.",
+            bestApproach: "Audit every outbound network call in a codebase for an explicit timeout as a baseline hygiene check — treat a missing timeout as a release blocker, not a nice-to-have.",
+          },
+          {
+            point: "Backoff handles 'how long to wait'; jitter handles 'don't all retry at the same instant' — both are needed, neither alone is enough",
+            example: "1,000 clients all retrying at exactly t+1s, t+2s, t+4s (synchronized backoff with no jitter) recreate the exact same load spike they were trying to avoid.",
+            bestApproach: "Always add randomized jitter (e.g., backoff_time × random(0.5, 1.5)) to any exponential backoff implementation — backoff alone is an incomplete fix.",
+          },
+          {
+            point: "Circuit breakers and bulkheads solve different problems: 'stop calling a broken dependency' vs 'don't let one dependency's slowness exhaust shared resources'",
+            example: "A circuit breaker stops calling a clearly-down fraud-check API; a bulkhead ensures that even while it's being called, it can't starve the thread pool serving shipping calls.",
+            bestApproach: "Implement both independently — a circuit breaker without a bulkhead still lets a slow (not-yet-tripped) dependency exhaust shared resources before the breaker opens.",
+          },
+          {
+            point: "Idempotency isn't optional once you have retries on writes — without it, a retried payment can become a double charge",
+            example: "A client retry after a network timeout (where the original request actually succeeded server-side) without an idempotency key results in two charges for one purchase.",
+            bestApproach: "Require an idempotency key on every write endpoint before enabling client-side or infrastructure-level retries against it — sequence this as a hard prerequisite, not parallel work.",
+          },
         ],
         followUps: [],
         example:
@@ -1209,10 +1897,26 @@ export const SDI_CATEGORIES = [
             "1) Measure first — find the actual bottleneck (CPU? DB locks? network? a slow downstream call?) before changing anything; scaling the wrong layer wastes effort and adds complexity for zero benefit. 2) Cache — CDN for static/cacheable content, application-level cache (Redis) for hot reads; usually the highest-leverage, lowest-risk change for read-heavy systems. 3) Read replicas — decouple read scaling from write scaling; route reads through a proxy/load balancer, keep writes on the primary. 4) Statelessness + horizontal scaling — move sessions out of the app process (Redis), put the app tier behind a load balancer with auto-scaling. 5) Asynchronous processing — move slow/non-critical work (emails, transcoding, exports, analytics) off the request path and into background workers via a queue. 6) Sharding — the last resort: split data across multiple database instances by a carefully-chosen key; accept that joins, transactions, and resharding all get harder. Each step down this list is progressively more invasive, expensive, and risky to reverse — exhaust the cheap, low-risk wins before reaching for the operationally heavy ones.",
         },
         keyPoints: [
-          "Always measure before changing anything — 'what's actually slow?' beats any generic playbook",
-          "Caching and read replicas solve the vast majority of read-scaling problems cheaply — reach for them long before sharding",
-          "Statelessness is the prerequisite for horizontal auto-scaling — it has to happen before 'just add more servers' is even possible",
-          "Sharding is a one-way door — it's last on this list because it's the hardest to undo and the most operationally expensive",
+          {
+            point: "Always measure before changing anything — 'what's actually slow?' beats any generic playbook",
+            example: "A team that profiled before acting found JSON serialization, not the database, was their bottleneck — sharding (the 'obvious' fix) would have wasted months for zero benefit.",
+            bestApproach: "Require a profiler/APM flamegraph or query-time breakdown as evidence before any scaling proposal moves forward, regardless of how confident the team feels about the cause.",
+          },
+          {
+            point: "Caching and read replicas solve the vast majority of read-scaling problems cheaply — reach for them long before sharding",
+            example: "Adding a Redis cache with a 60s TTL in front of a hot product-listing endpoint cut database load by 95% in an afternoon — far cheaper than any sharding project.",
+            bestApproach: "Set an explicit bar (e.g., 'cache hit rate above 90% and still bottlenecked') that must be cleared before sharding is even considered as a next step.",
+          },
+          {
+            point: "Statelessness is the prerequisite for horizontal auto-scaling — it has to happen before 'just add more servers' is even possible",
+            example: "An app storing sessions in local memory can't safely auto-scale — half of requests would land on an instance with no knowledge of the user's session.",
+            bestApproach: "Move all session/cache state out of the app process (to Redis or signed tokens) as an explicit, verified prerequisite before enabling auto-scaling rules.",
+          },
+          {
+            point: "Sharding is a one-way door — it's last on this list because it's the hardest to undo and the most operationally expensive",
+            example: "Once orders are sharded by customer_id, 'merge it back into one database' is a multi-month migration project, not a config change you can revert.",
+            bestApproach: "Treat the decision to shard as requiring sign-off proportional to its irreversibility — document what's been exhausted first, and what breaks (joins, transactions) as part of the proposal.",
+          },
         ],
         followUps: [],
         example:
@@ -1230,10 +1934,26 @@ export const SDI_CATEGORIES = [
             "On consistency: 'I'm choosing eventual consistency here because the cost of a few seconds of staleness is near-zero, but the cost of unavailability during a partition is real lost revenue.' On caching: 'A cache turns a database problem into a cache-invalidation problem — which is usually the better problem to have, but it IS a new problem, not a free lunch.' On microservices: 'I'd start with a modular monolith — clean internal boundaries — so that splitting later is an extraction, not a rewrite.' On async: 'If the user doesn't need the result synchronously, they don't need to wait for it synchronously either — accept fast, process in the background, notify on completion.' On sharding: 'Sharding solves a scale problem by creating a join problem — I'd only reach for it once caching, replicas, and indexing are exhausted.' On security/secrets: 'Secrets belong in a vault with short-lived, automatically-rotated credentials — not in config files, and definitely not in logs.' On observability: 'If I can't see it, I can't fix it at 2am — every new service ships with metrics, structured logs, and tracing from day one, not as a follow-up ticket.'",
         },
         keyPoints: [
-          "A trade-off framed in one sentence, naming both the cost and the benefit, reads as more senior than a paragraph of hedging",
-          "'X turns a Y problem into a Z problem' is a powerful rhetorical shape — it shows you know nothing is free, only traded",
-          "Practice saying these out loud — interviews are a spoken-word format, and fluency under pressure is itself part of the grade",
-          "Tailor the soundbite to what the interviewer seems to care about (cost? latency? team velocity?) — the same trade-off can be framed multiple honest ways",
+          {
+            point: "A trade-off framed in one sentence, naming both the cost and the benefit, reads as more senior than a paragraph of hedging",
+            example: "'I'm choosing eventual consistency because staleness costs near-zero here, but unavailability during a partition costs real revenue' lands faster than a rambling pros/cons list.",
+            bestApproach: "Draft and rehearse 2-3 of these one-liners for your most likely trade-offs (consistency, caching, async) before any interview — fluency under pressure is built in advance, not improvised.",
+          },
+          {
+            point: "'X turns a Y problem into a Z problem' is a powerful rhetorical shape — it shows you know nothing is free, only traded",
+            example: "'A cache turns a database problem into a cache-invalidation problem' is memorable specifically because it names the new problem you've taken on, not just the old one you've solved.",
+            bestApproach: "Practice this exact sentence template on your own designs — for every solution you propose, ask 'what new problem did this turn the old problem into?' and say it out loud.",
+          },
+          {
+            point: "Practice saying these out loud — interviews are a spoken-word format, and fluency under pressure is itself part of the grade",
+            example: "A candidate who's rehearsed their trade-off soundbites delivers them smoothly mid-design; one who hasn't stumbles through the same idea in a less confident, longer-winded way.",
+            bestApproach: "Do mock interviews or solo rehearsal specifically practicing delivering these soundbites verbally, not just writing them down — spoken fluency is a distinct skill from written clarity.",
+          },
+          {
+            point: "Tailor the soundbite to what the interviewer seems to care about (cost? latency? team velocity?) — the same trade-off can be framed multiple honest ways",
+            example: "The same caching decision can be framed as 'saves database cost' to a cost-focused interviewer or 'cuts p99 latency by 10x' to a performance-focused one — both true, different emphasis.",
+            bestApproach: "Listen for what the interviewer probes on (follow-up questions about cost vs latency vs team process) and adapt which angle of a trade-off you lead with accordingly.",
+          },
         ],
         followUps: [],
         example:
@@ -1251,10 +1971,26 @@ export const SDI_CATEGORIES = [
             "'Is there an existing system this needs to integrate with, or are we greenfield?' (shows you think about migration cost and integration surface, not just clean-slate design). 'What's the team's operational maturity — do we have an SRE function, observability stack, on-call rotation?' (shows you know that a design's *operability* is as real a constraint as its architecture — a brilliant design an under-staffed team can't run is not actually a good design). 'Which failure would be more costly: showing slightly stale data, or being briefly unavailable?' (this is the PACELC question in disguise — asking it shows you already know the trade-off exists and want the business context to resolve it correctly). 'How do we expect this to evolve in a year — 10x growth? new feature surface? new regulatory requirements (data residency, GDPR)?' (shows you design for *change*, not just for the spec as given — today's clean design is tomorrow's legacy system if it can't absorb growth). Each of these questions does double duty: it gets you real information you need, *and* it signals to the interviewer that you think like someone who's shipped and operated systems, not just designed them on a whiteboard.",
         },
         keyPoints: [
-          "'Integrate with existing systems or greenfield?' — shows you think about migration and integration cost, the part real-world projects spend most of their time on",
-          "'What's the team's operational maturity?' — operability is a real design constraint; a design the team can't run isn't actually a good design",
-          "'Stale-but-available, or correct-but-down — which costs more here?' — the PACELC question in business language; asking it shows you already see the trade-off",
-          "'How does this evolve in a year?' — designing for change, not just for the spec as stated, is what separates senior thinking from junior thinking",
+          {
+            point: "'Integrate with existing systems or greenfield?' — shows you think about migration and integration cost, the part real-world projects spend most of their time on",
+            example: "Learning a design must integrate with a legacy billing system completely changes the API contract and data-migration plan compared to a truly greenfield build.",
+            bestApproach: "Ask this question within the first few minutes of any HLD round — the answer can reshape the entire design, so get it before investing in a direction.",
+          },
+          {
+            point: "'What's the team's operational maturity?' — operability is a real design constraint; a design the team can't run isn't actually a good design",
+            example: "Proposing a Kafka-based event-driven architecture for a 3-person team with no on-call rotation or observability stack sets them up to fail operationally, however elegant the design.",
+            bestApproach: "Calibrate design complexity to the team's stated operational capacity — a simpler design the team can actually run beats a sophisticated one they can't.",
+          },
+          {
+            point: "'Stale-but-available, or correct-but-down — which costs more here?' — the PACELC question in business language; asking it shows you already see the trade-off",
+            example: "For a social feed, stale-but-available is clearly right; for a flight-seat inventory system, correct-but-down might be the safer business call.",
+            bestApproach: "Phrase the PACELC trade-off in business terms (revenue, trust, safety) rather than technical jargon when asking the interviewer — it shows you can translate for non-technical stakeholders too.",
+          },
+          {
+            point: "'How does this evolve in a year?' — designing for change, not just for the spec as stated, is what separates senior thinking from junior thinking",
+            example: "A design built only for today's 10K users might need a fundamentally different data model if the interviewer reveals 10x growth or new regulatory requirements are expected within a year.",
+            bestApproach: "Ask about expected evolution before finalizing the design, and explicitly note which parts of your design would need to change under different growth/requirement scenarios.",
+          },
         ],
         followUps: [],
         example:
@@ -1283,10 +2019,26 @@ export const SDI_CATEGORIES = [
             "Core entities: Issue (type: story/bug/task/epic, fields, status, assignee), Project (owns a Workflow Scheme), Workflow (a directed graph of statuses and allowed transitions, e.g. TODO → IN_PROGRESS → IN_REVIEW → DONE, with role-gated edges), Board (a saved filter + column mapping over issues), Sprint (a time-boxed issue collection). Multi-tenancy: small/medium orgs share partitioned tables keyed by tenant_id with row-level isolation; very large orgs (10K+ seats) can be split to dedicated shards. The workflow engine is the trickiest part — instead of hardcoding statuses, model transitions as data (workflow_transitions table: from_status, to_status, required_role, post-functions like 'auto-assign on transition to IN_PROGRESS') so each team customizes without code changes. Every field change is appended to an immutable changelog table (issue_id, field, old_value, new_value, actor, timestamp) — this powers both the activity feed and audit/compliance requirements. Search (JQL) is served by Elasticsearch with a permission-aware index (each doc carries project_id + visible_role list so unauthorized issues never appear in results). Boards are materialized queries, refreshed via the same event stream that updates the changelog, so board state never drifts from issue state.",
         },
         keyPoints: [
-          "One generic Issue entity + a data-driven workflow (state machine as rows, not code) is what makes per-team customization possible without N codepaths",
-          "Boards and sprints are projections/views over issues — never a second source of truth, or they will drift",
-          "An append-only changelog table is non-negotiable — it's the audit trail, the activity feed, and the undo mechanism all at once",
-          "Permission-aware search (filtering at index time, not query time) is what keeps JQL-style search both fast and secure across multi-project orgs",
+          {
+            point: "One generic Issue entity + a data-driven workflow (state machine as rows, not code) is what makes per-team customization possible without N codepaths",
+            example: "A workflow_transitions table letting one team add a 'Code Review' status between IN_PROGRESS and DONE requires zero code deploys, just new rows.",
+            bestApproach: "Model status transitions as configurable data from day one, even for an MVP — retrofitting a data-driven workflow engine onto hardcoded status logic later is a major rewrite.",
+          },
+          {
+            point: "Boards and sprints are projections/views over issues — never a second source of truth, or they will drift",
+            example: "A board showing a card in 'In Progress' that doesn't match the issue's actual status field is a drift bug caused by treating the board as separately-stored state.",
+            bestApproach: "Compute board/sprint views via queries or cached materializations refreshed from the same event stream that updates issues — never let UI state diverge from the issue's canonical fields.",
+          },
+          {
+            point: "An append-only changelog table is non-negotiable — it's the audit trail, the activity feed, and the undo mechanism all at once",
+            example: "Jira's 'View history' on any issue is a direct read of this changelog table — every field change, ever, with who and when.",
+            bestApproach: "Write every field mutation to an append-only changelog as part of the same transaction as the mutation itself, never as a best-effort side effect that could be skipped.",
+          },
+          {
+            point: "Permission-aware search (filtering at index time, not query time) is what keeps JQL-style search both fast and secure across multi-project orgs",
+            example: "Embedding a `visible_role` array directly in each Elasticsearch document lets a single filtered query exclude unauthorized issues without a separate permission-check pass.",
+            bestApproach: "Bake visibility/permission fields into the search index schema itself, and update them via the same event pipeline that updates project membership — never filter results after the fact in application code.",
+          },
         ],
         followUps: [
           "How would you support a workflow scheme shared across 50 projects but customized per-project?",
@@ -1310,10 +2062,26 @@ export const SDI_CATEGORIES = [
             "Two competing techniques solve concurrent editing: Operational Transformation (OT) — each edit is an operation (insert/delete at position); when two operations arrive out of order, the server transforms one against the other so they still apply correctly (Google Docs' approach) — and CRDTs (Conflict-free Replicated Data Types) — each character/element gets a unique, order-preserving ID, so merges are commutative and don't need a central transform step (used by Figma, Notion). CRDTs are simpler to reason about and work better offline-first, but carry more metadata overhead per character. Architecture: a document is owned by exactly one 'document server' instance at a time (consistent hashing by doc_id), which holds the live in-memory state and the connected clients' WebSocket connections; this avoids needing distributed consensus for every keystroke. Edits go: client → owning server (apply + transform/merge) → broadcast to all other connected clients for that doc. Persistence: periodic snapshots to object storage plus an append-only operation log, so a server crash only loses the in-flight ops since the last snapshot, replayed from the log. Presence (cursors, who's viewing) is ephemeral pub/sub, not persisted. Reconnection: client sends its last-known version; server replays missed ops or sends a full snapshot if too far behind.",
         },
         keyPoints: [
-          "OT (Google Docs) needs a central authority to transform conflicting ops; CRDTs (Figma, Notion) make merges commutative so peers can apply ops in any order and converge — pick based on whether you need offline support",
-          "Pin each document to one owning server via consistent hashing — keeps the hot path (apply + broadcast) in-memory and avoids per-keystroke consensus",
-          "Persist via snapshot + op log, not a write per keystroke to the primary DB — replay the log to reconstruct state after a crash",
-          "Presence (cursors, live viewers) is ephemeral and should never touch durable storage — it's pure pub/sub",
+          {
+            point: "OT (Google Docs) needs a central authority to transform conflicting ops; CRDTs (Figma, Notion) make merges commutative so peers can apply ops in any order and converge — pick based on whether you need offline support",
+            example: "Figma chose a CRDT-like model specifically because it makes conflict resolution embarrassingly simple compared to OT's transform matrices, and it tolerates brief offline edits naturally.",
+            bestApproach: "Choose CRDTs by default for new collaborative editors unless you have existing OT infrastructure — the offline-tolerance and simpler reasoning usually outweigh the extra per-character metadata cost.",
+          },
+          {
+            point: "Pin each document to one owning server via consistent hashing — keeps the hot path (apply + broadcast) in-memory and avoids per-keystroke consensus",
+            example: "Every edit to a given Google Doc routes to the same server instance holding that doc's live state in memory, avoiding a distributed-consensus round trip on every keystroke.",
+            bestApproach: "Use consistent hashing on document ID to route connections to the owning server, and design for ownership handoff (consistent hashing's small remap on node changes) as a first-class operation.",
+          },
+          {
+            point: "Persist via snapshot + op log, not a write per keystroke to the primary DB — replay the log to reconstruct state after a crash",
+            example: "A server holding a document crashes after 200 keystrokes since the last snapshot — replaying just those 200 ops from the log reconstructs exact state, no data lost.",
+            bestApproach: "Snapshot periodically (e.g., every N ops or T seconds) to bound replay time, and always persist the op log durably (not just in memory) so a crash never loses unacknowledged edits.",
+          },
+          {
+            point: "Presence (cursors, live viewers) is ephemeral and should never touch durable storage — it's pure pub/sub",
+            example: "A collaborator's cursor position is broadcast to other connected clients via WebSocket but is never written to a database — it's meaningless the moment they disconnect.",
+            bestApproach: "Keep presence data entirely in-memory/pub-sub (Redis pub/sub or a WebSocket fan-out layer) with no durability guarantee — persisting it would be wasted cost for zero benefit.",
+          },
         ],
         followUps: [
           "How would you shard so one wildly popular shared doc doesn't overload a single server?",
@@ -1337,10 +2105,26 @@ export const SDI_CATEGORIES = [
             "Producers (any internal service — order service, social service) publish a notification event to a Kafka topic rather than calling a delivery API directly — this decouples business logic from delivery concerns and absorbs spikes. A Notification Orchestrator consumes the topic, resolves: (1) user preferences (which channels are enabled, quiet hours), (2) template (renders the message body per locale), (3) channel routing (push vs email vs SMS based on priority and user settings) — and emits one task per channel to channel-specific queues. Each channel has its own worker pool tuned to its provider's limits: FCM/APNs push workers can burst to thousands/sec, SMS workers via Twilio are rate-limited and cost real money so they get a strict token-bucket limiter, email workers batch via SES/SendGrid. Idempotency: every notification carries a dedup key (event_id + user_id + channel); workers check a Redis SET (or DB unique constraint) before sending, so a re-processed Kafka message after a worker crash never double-sends. Delivery tracking: provider webhooks (FCM delivery receipts, SES bounce/complaint events) feed back into a notification_log table for analytics and to auto-disable channels with high bounce/complaint rates per user. Low-priority notifications (weekly digest, recommendations) are batched and rate-shaped; high-priority (OTP, security alerts) bypass batching and go out immediately.",
         },
         keyPoints: [
-          "A queue between 'event happened' and 'notification sent' is what absorbs traffic spikes and decouples business logic from delivery — never call provider APIs synchronously from request handlers",
-          "Each channel (push/SMS/email) needs its own worker pool and rate limiter tuned to that provider's actual limits — one slow channel must never block another",
-          "Idempotency keys are mandatory — at-least-once delivery from Kafka means workers WILL occasionally see the same message twice",
-          "Feed delivery receipts (bounces, complaints, invalid tokens) back into user preference state — silently retrying a dead push token forever wastes capacity",
+          {
+            point: "A queue between 'event happened' and 'notification sent' is what absorbs traffic spikes and decouples business logic from delivery — never call provider APIs synchronously from request handlers",
+            example: "An order-confirmation flow publishing to Kafka instead of calling SendGrid directly means a SendGrid outage never fails the order-placement request itself.",
+            bestApproach: "Make 'publish an event' the only notification-related action any business-logic service performs — the actual send logic should live entirely in downstream consumers.",
+          },
+          {
+            point: "Each channel (push/SMS/email) needs its own worker pool and rate limiter tuned to that provider's actual limits — one slow channel must never block another",
+            example: "Twilio's SMS rate limits are far stricter than FCM's push limits — sharing one worker pool across both means SMS throttling backs up push notifications too.",
+            bestApproach: "Give every channel its own dedicated queue, worker pool, and provider-specific rate limiter, sized independently against that provider's documented limits.",
+          },
+          {
+            point: "Idempotency keys are mandatory — at-least-once delivery from Kafka means workers WILL occasionally see the same message twice",
+            example: "A worker crash after sending a push but before committing its Kafka offset causes the same notification message to be redelivered and reprocessed.",
+            bestApproach: "Dedup on (event_id, user_id, channel) via a Redis SET or DB unique constraint before sending, regardless of how rare double-delivery seems in testing.",
+          },
+          {
+            point: "Feed delivery receipts (bounces, complaints, invalid tokens) back into user preference state — silently retrying a dead push token forever wastes capacity",
+            example: "An FCM 410 (token expired) response that's ignored causes the system to keep attempting delivery to a device that uninstalled the app months ago.",
+            bestApproach: "Wire provider webhook/receipt callbacks directly into a token-cleanup and preference-update pipeline, so dead endpoints are purged automatically rather than manually.",
+          },
         ],
         followUps: [
           "How do you prevent a user from getting the same notification on 3 devices simultaneously?",
@@ -1364,10 +2148,26 @@ export const SDI_CATEGORIES = [
             "Ingestion: a CDC (change data capture) pipeline or explicit publish-event listens for document create/update/delete and pushes to an indexing queue; an Indexer Worker tokenizes the content (stemming, stop-word removal, language detection), and writes to Elasticsearch with fields: title, body (analyzed for full-text), tags, last_updated, view_count, and — critically — acl: an array of role/group IDs allowed to view it. Query: incoming search request resolves the user's group memberships, and the ES query includes a 'filter: acl in [user's groups]' clause — this means permission checks happen inside the index lookup (fast, uses ES's filter cache) rather than as an application-layer filter after fetching results (which would require over-fetching to backfill a page after removing unauthorized hits). Ranking combines BM25 (term frequency/inverse document frequency relevance score) with a freshness decay (recently updated docs score higher — most useful in fast-moving wikis) and a popularity signal (view_count, or better, click-through rate from past searches, learned via periodic re-ranking). Typo tolerance and synonyms (e.g., 'k8s' → 'kubernetes') are handled via ES's fuzzy matching and a synonym filter maintained by the team. Reindexing on doc update is incremental (single-document upsert), not a full rebuild — full rebuilds are reserved for analyzer/schema changes and run as a blue-green index swap with zero downtime.",
         },
         keyPoints: [
-          "Bake ACLs into the document's index entry and filter at query time inside Elasticsearch — never fetch-then-filter in application code, it breaks pagination and leaks document existence",
-          "BM25 alone isn't enough for a living knowledge base — blend in freshness decay and click/popularity signals so stale-but-keyword-matchy docs don't outrank the current canonical one",
-          "Incremental single-doc indexing on every update keeps the index fresh in seconds; reserve full reindexing for schema/analyzer changes via blue-green index swap",
-          "Synonym and typo tolerance (fuzzy match, custom synonym dictionaries) matter enormously for internal jargon-heavy content — generic search tuning underperforms here",
+          {
+            point: "Bake ACLs into the document's index entry and filter at query time inside Elasticsearch — never fetch-then-filter in application code, it breaks pagination and leaks document existence",
+            example: "Filtering unauthorized results after fetching a page of 20 means a user might see only 12 results with no way to know 8 were silently removed, breaking pagination entirely.",
+            bestApproach: "Add an `acl` field to every indexed document and include a `filter: acl in [user's groups]` clause directly in the Elasticsearch query — permission checks belong inside the search engine's filter cache.",
+          },
+          {
+            point: "BM25 alone isn't enough for a living knowledge base — blend in freshness decay and click/popularity signals so stale-but-keyword-matchy docs don't outrank the current canonical one",
+            example: "A 2-year-old onboarding doc with the exact keyword match can outrank last week's updated version under pure BM25 — freshness decay fixes this.",
+            bestApproach: "Combine BM25 relevance score with a time-decay function and click-through-rate signal in your ranking formula, re-tuning the weights based on actual search-result click data.",
+          },
+          {
+            point: "Incremental single-doc indexing on every update keeps the index fresh in seconds; reserve full reindexing for schema/analyzer changes via blue-green index swap",
+            example: "Editing a Confluence page triggers a single-document upsert to Elasticsearch in seconds, while a synonym-dictionary update requires a full reindex behind a blue-green swap.",
+            bestApproach: "Wire document updates to an incremental upsert via CDC or an explicit publish event, and reserve full reindexing exclusively for changes to the index schema or analyzers.",
+          },
+          {
+            point: "Synonym and typo tolerance (fuzzy match, custom synonym dictionaries) matter enormously for internal jargon-heavy content — generic search tuning underperforms here",
+            example: "A search for 'k8s' should surface documents containing 'Kubernetes' — generic out-of-the-box Elasticsearch tuning won't know that mapping without a custom synonym dictionary.",
+            bestApproach: "Maintain a living, team-curated synonym dictionary for internal jargon/acronyms as part of the search index config, reviewed and updated as new terms enter common usage.",
+          },
         ],
         followUps: [
           "How would you handle a document whose permissions change after it's indexed?",
@@ -1391,10 +2191,26 @@ export const SDI_CATEGORIES = [
             "Responsibilities, top to bottom of the request path: (1) TLS termination and request validation (size limits, malformed JSON rejected early, cheap to do at the edge). (2) AuthN: validate JWT/OAuth token signature and expiry once at the gateway — downstream services trust a signed internal header (e.g., X-User-Id, X-Tenant-Id) instead of re-validating tokens, saving redundant work across dozens of services. (3) AuthZ: coarse-grained checks (does this token have the right scope for this route) happen at the gateway; fine-grained, resource-level checks (can this user edit this specific issue) stay in the owning service, which has the domain context. (4) Routing: path-prefix or host-based routing (e.g., /jira/* → Jira service) resolved via a service registry (Consul/Eureka) or static config, with health-check-aware load balancing so traffic never routes to an unhealthy instance. (5) Rate limiting: token bucket per (tenant, route) pair backed by Redis (INCR + EXPIRE, or a Lua script for atomicity) — protects backend services from a single noisy tenant. (6) Resilience: circuit breaker per backend (trip after N consecutive failures, fail fast instead of piling up timeouts) and configurable per-route timeouts/retries with jitter. (7) Observability: every request gets a trace ID injected at the gateway and propagated downstream, plus uniform access logs and latency histograms — this is often the gateway's most underrated value, since it turns 'add tracing' from an N-service problem into a 1-service problem.",
         },
         keyPoints: [
-          "Centralize coarse authN/authZ and TLS termination at the gateway so services trust a signed internal header instead of each re-validating tokens",
-          "Keep fine-grained, resource-level authorization in the owning service — the gateway doesn't have the domain context to know if 'this user' can edit 'this specific issue'",
-          "Rate limit per (tenant, route), not globally — one noisy tenant shouldn't be able to degrade service for everyone, and one hot route shouldn't starve quota for unrelated ones",
-          "Inject a trace ID at the gateway and propagate it downstream — this single change makes distributed tracing tractable across dozens of services",
+          {
+            point: "Centralize coarse authN/authZ and TLS termination at the gateway so services trust a signed internal header instead of each re-validating tokens",
+            example: "Atlassian's gateway validates OAuth once and forwards a signed Atlassian-Account-Id header, letting every downstream product skip reimplementing token validation.",
+            bestApproach: "Validate and decode tokens exactly once at the gateway, then propagate a signed internal identity header — never have both the gateway and every downstream service independently verify the same JWT.",
+          },
+          {
+            point: "Keep fine-grained, resource-level authorization in the owning service — the gateway doesn't have the domain context to know if 'this user' can edit 'this specific issue'",
+            example: "The gateway can confirm a token has 'jira:write' scope, but only the Jira service itself knows whether this specific user has edit rights on this specific issue's project.",
+            bestApproach: "Draw the line explicitly: gateway enforces scope-level access, owning services enforce resource-level access — document this boundary so new services don't duplicate gateway logic.",
+          },
+          {
+            point: "Rate limit per (tenant, route), not globally — one noisy tenant shouldn't be able to degrade service for everyone, and one hot route shouldn't starve quota for unrelated ones",
+            example: "A single enterprise customer running a bulk export job shouldn't be able to exhaust the rate-limit budget that a free-tier customer's normal usage depends on.",
+            bestApproach: "Implement rate limiting as a token bucket keyed by (tenant_id, route) in Redis, with separate budgets so no single dimension of traffic can starve another.",
+          },
+          {
+            point: "Inject a trace ID at the gateway and propagate it downstream — this single change makes distributed tracing tractable across dozens of services",
+            example: "A single slow checkout request can be traced end-to-end across 8 microservices by following one trace ID injected at the gateway and passed through every header.",
+            bestApproach: "Generate a trace ID at the gateway for every inbound request and require every internal service to propagate it on outbound calls — enforce this via a shared middleware library, not convention alone.",
+          },
         ],
         followUps: [
           "How do you avoid the gateway itself becoming a single point of failure?",
@@ -1418,10 +2234,26 @@ export const SDI_CATEGORIES = [
             "Two storage strategies, and real systems use a hybrid: (1) Full snapshot per version — simplest, fast reads (no reconstruction needed), but storage cost scales linearly with edit count × document size — wasteful for a page edited 500 times. (2) Diff-based — store only the delta (using a text diff algorithm like Myers diff, the same family git uses) between version N and N-1; cheap to store, but reconstructing version 1 of a 500-version document means replaying 499 diffs, which is slow. The practical hybrid: store a full snapshot every K versions (e.g., every 20th edit) and diffs in between — reconstruction never replays more than K diffs from the nearest snapshot. Schema: page_versions(id, page_id, version_number, author_id, created_at, content_snapshot NULLABLE, diff_from_previous NULLABLE, is_snapshot BOOLEAN). Diff rendering for the UI (showing 'added 3 lines, removed 1' between two versions) is computed on-demand at view time using the same diff algorithm, not stored redundantly. Revert is implemented as a new version whose content equals an old version's reconstructed content — never as deleting/rewriting history, which would break the audit trail and any links/permissions tied to specific version IDs. Concurrent edit conflicts (two users editing offline, both come back online) are resolved either with last-write-wins plus a conflict-version flag for manual merge, or — for richer collaborative cases — by funneling through the same OT/CRDT machinery used in real-time editors.",
         },
         keyPoints: [
-          "Hybrid storage — full snapshot every K versions, diffs in between — bounds both storage cost and reconstruction time; pure-snapshot or pure-diff each fail at scale in one direction",
-          "Revert creates a NEW version with old content; it never deletes or rewrites history — history must stay append-only for audit and stable permalink guarantees",
-          "Diffs for display (UI 'what changed') are computed on-demand, not stored twice — storing both the version diff and a display diff is redundant",
-          "Concurrent offline edits need an explicit conflict-resolution policy (last-write-wins + flag, or full OT/CRDT) — silently dropping one user's edit is the single most common bug in naive implementations",
+          {
+            point: "Hybrid storage — full snapshot every K versions, diffs in between — bounds both storage cost and reconstruction time; pure-snapshot or pure-diff each fail at scale in one direction",
+            example: "Git stores full blobs but periodically packs them into delta-compressed packfiles, trading a little read-time CPU for much smaller repository size — the same hybrid trade-off.",
+            bestApproach: "Pick a snapshot interval (e.g., every 20 versions) based on the actual read/write ratio of your document history feature — frequently-viewed-history docs want a smaller K.",
+          },
+          {
+            point: "Revert creates a NEW version with old content; it never deletes or rewrites history — history must stay append-only for audit and stable permalink guarantees",
+            example: "Reverting a Confluence page to version 5 creates version 12 with version 5's content — version 5 itself is never touched, so old permalinks still resolve correctly.",
+            bestApproach: "Implement revert as 'fetch old content, save as new version' at the application layer — never expose a destructive 'rewrite history' operation in the API surface at all.",
+          },
+          {
+            point: "Diffs for display (UI 'what changed') are computed on-demand, not stored twice — storing both the version diff and a display diff is redundant",
+            example: "Viewing 'what changed between v3 and v7' runs the diff algorithm live at view time rather than maintaining a separately-stored diff for every possible version pair.",
+            bestApproach: "Compute display diffs lazily via the same diff library used for storage, caching the rendered result briefly if a specific comparison is viewed repeatedly — don't precompute all pairs.",
+          },
+          {
+            point: "Concurrent offline edits need an explicit conflict-resolution policy (last-write-wins + flag, or full OT/CRDT) — silently dropping one user's edit is the single most common bug in naive implementations",
+            example: "Two users editing the same page offline and both syncing later can silently lose one user's paragraph if the system blindly overwrites without detecting the conflict.",
+            bestApproach: "At minimum, detect conflicting concurrent edits and flag them for manual merge rather than silently picking a winner — reserve full OT/CRDT machinery for genuinely real-time collaborative cases.",
+          },
         ],
         followUps: [
           "How would you support branching (draft vs published versions)?",
@@ -1445,10 +2277,26 @@ export const SDI_CATEGORIES = [
             "Ingestion: client/server SDKs send events to a collector service, which validates and writes to Kafka partitioned by a key that keeps related events together (e.g., user_id or session_id) for ordered processing. Stream processing: a Flink or Kafka Streams job consumes the topic and performs windowed aggregation — e.g., 'count of page_view events per page per 10-second tumbling window' — emitting pre-aggregated rows rather than raw events. This is the key design decision: dashboards query pre-aggregated rollups (by minute/hour), never raw events, because scanning billions of raw rows per dashboard refresh is a latency and cost disaster. Storage: pre-aggregated results land in a column-oriented OLAP store (ClickHouse or Druid) optimized for fast group-by/filter queries over time-series data; raw events also land in cheap, durable storage (S3 + Parquet via a separate batch sink) for the cases where someone needs to recompute a historical metric definition that didn't exist when the data was first ingested. Late/out-of-order events (a mobile client offline for 10 minutes) are handled via watermarks in the stream processor — a window stays open for a grace period after its nominal end time to admit slightly-late events before finalizing the aggregate. Dashboard reads hit the OLAP store directly with sub-second query latency; for true real-time (sub-5-second) metrics, a small in-memory layer (Redis counters) bypasses the OLAP store entirely for the handful of 'live counter' widgets that need it.",
         },
         keyPoints: [
-          "Never query raw events for a dashboard — pre-aggregate in the stream processor into rollups (per minute/hour) and query those; raw-event scans don't scale to 'second-level' latency requirements",
-          "Two storage tiers solve two different needs: OLAP store (ClickHouse/Druid) for fast recent rollups, cold object storage (S3/Parquet) for cheap long-term raw retention and metric redefinition",
-          "Watermarks (a grace period before finalizing a time window) are mandatory — without them, a slightly-late event either gets dropped or corrupts an already-finalized aggregate",
-          "Reserve a separate in-memory counter path (Redis) only for the few truly sub-5-second 'live count' widgets — running the whole pipeline at that latency for everything is unnecessary cost",
+          {
+            point: "Never query raw events for a dashboard — pre-aggregate in the stream processor into rollups (per minute/hour) and query those; raw-event scans don't scale to 'second-level' latency requirements",
+            example: "Mixpanel and Amplitude both compute pre-aggregated hourly/daily rollups during ingestion specifically so dashboard queries never scan raw event tables directly.",
+            bestApproach: "Design the stream processor's windowed aggregation as the only thing dashboards ever query — keep raw events in cold storage purely for reprocessing, never for live reads.",
+          },
+          {
+            point: "Two storage tiers solve two different needs: OLAP store (ClickHouse/Druid) for fast recent rollups, cold object storage (S3/Parquet) for cheap long-term raw retention and metric redefinition",
+            example: "A team that needs to redefine 'active user' a year later can reprocess raw S3/Parquet events with the new definition — impossible if only pre-aggregated rollups were kept.",
+            bestApproach: "Always retain raw events in cheap cold storage even after computing rollups — the rollup definition will eventually need to change, and only raw data supports that.",
+          },
+          {
+            point: "Watermarks (a grace period before finalizing a time window) are mandatory — without them, a slightly-late event either gets dropped or corrupts an already-finalized aggregate",
+            example: "A mobile client that was offline for 3 minutes sends delayed events that a watermark-aware window can still admit before finalizing, rather than silently dropping them.",
+            bestApproach: "Set the watermark grace period based on observed client-side delay distribution (e.g., p99 mobile event delay), not an arbitrary default — too short drops real data, too long delays finalization.",
+          },
+          {
+            point: "Reserve a separate in-memory counter path (Redis) only for the few truly sub-5-second 'live count' widgets — running the whole pipeline at that latency for everything is unnecessary cost",
+            example: "A 'live viewers right now' counter on a streaming event uses a direct Redis INCR/DECR path, bypassing the minutes-latency stream-processing pipeline entirely.",
+            bestApproach: "Identify the handful of genuinely real-time widgets explicitly and build them a separate, simple counter path — don't force the whole analytics pipeline to meet their latency bar.",
+          },
         ],
         followUps: [
           "How do you handle a metric definition changing after a year of data has already been aggregated?",
@@ -1472,10 +2320,26 @@ export const SDI_CATEGORIES = [
             "Authentication: a central Identity Service handles login (password + MFA, or SSO via SAML/OIDC against an enterprise IdP like Okta), and on success issues a short-lived JWT access token (5-15 min TTL) plus a longer-lived refresh token (stored securely, often httpOnly cookie). The JWT is signed (RS256) so any downstream service can verify it locally using a public key — no network call back to the identity service per request, which is what makes this scale. Refresh tokens are stored server-side (Redis or DB) so they can be revoked (e.g., on logout or compromise) — access tokens can't be revoked before expiry, which is exactly why their TTL is kept short. Authorization: two common models — RBAC (Role-Based: user has roles, roles have permissions — simple, fast, but coarse) and ABAC/ReBAC (Attribute or Relationship-Based: 'can user X edit document Y' depends on the relationship between X and Y, e.g., document owner or shared-with — needed for resource-level sharing like Google Drive). For ReBAC at scale, a dedicated authorization service (Google's Zanzibar is the reference architecture) stores relationship tuples (object, relation, subject) and answers 'check' queries with bounded staleness via a global logical clock, letting it scale to billions of objects without becoming a bottleneck for every single resource check. Services call this authorization service (or a local cache of recent decisions) rather than embedding permission logic themselves, keeping the policy centralized and auditable.",
         },
         keyPoints: [
-          "Authentication (who are you) and authorization (what can you do) are separate systems with separate scaling and revocation requirements — don't build one monolithic 'auth' service that does both",
-          "Short-lived signed JWTs let every downstream service verify identity locally (no network round-trip) — the trade-off is they can't be revoked before expiry, so keep TTL short and put revocation power in the refresh token instead",
-          "RBAC is fast and simple for coarse permissions (admin/editor/viewer); ReBAC (relationship-based, Zanzibar-style) is what you need for fine-grained resource sharing like 'this specific user can edit this specific document'",
-          "Centralize authorization decisions in one service/library even if you decentralize enforcement — scattering permission logic across services is how privilege-escalation bugs are born",
+          {
+            point: "Authentication (who are you) and authorization (what can you do) are separate systems with separate scaling and revocation requirements — don't build one monolithic 'auth' service that does both",
+            example: "A single 'AuthService' handling both login and 'can this user edit this document' checks becomes a bottleneck and a single point of failure for two very different concerns.",
+            bestApproach: "Split identity (login, token issuance) from authorization (permission checks) into separate services or at least separate code modules from the initial design.",
+          },
+          {
+            point: "Short-lived signed JWTs let every downstream service verify identity locally (no network round-trip) — the trade-off is they can't be revoked before expiry, so keep TTL short and put revocation power in the refresh token instead",
+            example: "A 10-minute access token TTL bounds how long a stolen token remains useful, while the longer-lived refresh token (revocable server-side) controls the actual session lifetime.",
+            bestApproach: "Set access token TTLs to the shortest value that doesn't create excessive refresh traffic (5-15 min is typical), and ensure refresh tokens are revocable via a server-side store.",
+          },
+          {
+            point: "RBAC is fast and simple for coarse permissions (admin/editor/viewer); ReBAC (relationship-based, Zanzibar-style) is what you need for fine-grained resource sharing like 'this specific user can edit this specific document'",
+            example: "Google Drive's 'share with specific people' feature can't be modeled by RBAC roles alone — it needs ReBAC relationship tuples like (document_X, editor, user_Y).",
+            bestApproach: "Use RBAC for coarse, role-based access control and only introduce ReBAC once you have a genuine per-resource sharing requirement — don't build Zanzibar-style infrastructure prematurely.",
+          },
+          {
+            point: "Centralize authorization decisions in one service/library even if you decentralize enforcement — scattering permission logic across services is how privilege-escalation bugs are born",
+            example: "Two services independently reimplementing 'is this user an admin' checks can drift out of sync, creating a gap where one service grants access the other would have denied.",
+            bestApproach: "Build a shared authorization library or sidecar that every service calls for permission checks, so the policy logic exists in exactly one place even though enforcement is distributed.",
+          },
         ],
         followUps: [
           "How do you revoke access immediately when a JWT can't be invalidated before it expires?",
@@ -1499,10 +2363,26 @@ export const SDI_CATEGORIES = [
             "A workflow is defined as a DAG: trigger node (webhook, schedule, event) feeding into a sequence/branch of action nodes (call API, transform data, conditional branch). The execution model is the crux of the design: a naive in-memory interpreter loses all progress if the worker process crashes mid-workflow. The durable approach (used by Temporal, AWS Step Functions, and internally by CI/CD engines) persists the execution state after every single step completes — not just at the end — to a workflow_execution_log (execution_id, step_id, status, output, completed_at). On crash/restart, the engine replays the log to reconstruct exactly where it left off and resumes from the next incomplete step, rather than restarting the whole workflow. Each action step must be idempotent (or the engine deduplicates via an idempotency key per step execution) because 'resume' inherently risks re-attempting a step whose effect already landed but whose completion record didn't get written before the crash. Long-running/async steps (wait for webhook callback, wait 24 hours) are modeled as the workflow suspending — the engine persists 'waiting for event X' and a separate dispatcher wakes it when that event arrives, rather than holding a thread/connection open for hours. Retries use exponential backoff with a max-attempt cap, and a dead-letter queue captures workflows that exhaust retries for human investigation. Branching/conditionals are evaluated against the step's output at execution time, so the DAG can have multiple possible paths defined once but only one taken per run.",
         },
         keyPoints: [
-          "Persist execution state after every step (not just workflow completion) — this is what makes 'resume after crash' possible instead of forcing a full restart",
-          "Every action step must be idempotent or deduplicated via a step-level idempotency key — a crash-and-resume model will occasionally re-attempt a step that already partially succeeded",
-          "Long waits (webhook callback, scheduled delay) should suspend the workflow as persisted state, not hold a thread or connection open — a separate event dispatcher wakes the workflow later",
-          "A dead-letter queue for workflows that exhaust retries is mandatory — silent infinite retry or silent failure are both unacceptable for something users built business processes on top of",
+          {
+            point: "Persist execution state after every step (not just workflow completion) — this is what makes 'resume after crash' possible instead of forcing a full restart",
+            example: "Temporal checkpoints state after every step transparently, so a worker crash mid-5-step workflow resumes from step 3, not from the very beginning.",
+            bestApproach: "Write execution state to durable storage synchronously as part of completing each step, not asynchronously after-the-fact — a crash between 'step done' and 'state saved' loses the resume point.",
+          },
+          {
+            point: "Every action step must be idempotent or deduplicated via a step-level idempotency key — a crash-and-resume model will occasionally re-attempt a step that already partially succeeded",
+            example: "A 'charge customer' step that resumes after a crash might re-attempt a charge whose API call actually succeeded but whose completion record wasn't saved — idempotency keys prevent a double charge.",
+            bestApproach: "Require every action-step implementation to accept and honor an idempotency key derived from the execution_id + step_id, enforced as a workflow-engine contract, not left to individual step authors.",
+          },
+          {
+            point: "Long waits (webhook callback, scheduled delay) should suspend the workflow as persisted state, not hold a thread or connection open — a separate event dispatcher wakes the workflow later",
+            example: "A workflow waiting 24 hours for a follow-up email doesn't hold a thread open — it persists 'waiting until timestamp T' and a scheduler wakes it when due.",
+            bestApproach: "Model all waits (timers, webhook callbacks) as persisted suspension state with an external wake mechanism, never as a blocking sleep or held connection in a worker process.",
+          },
+          {
+            point: "A dead-letter queue for workflows that exhaust retries is mandatory — silent infinite retry or silent failure are both unacceptable for something users built business processes on top of",
+            example: "A workflow stuck retrying a permanently-broken third-party API call forever would silently waste resources with no one aware the underlying business process never completed.",
+            bestApproach: "Cap retry attempts per step with exponential backoff, and route exhausted workflows to a monitored dead-letter queue with alerting, not a silent drop or infinite retry loop.",
+          },
         ],
         followUps: [
           "How would you let a user pause a running workflow and resume it days later?",
@@ -1526,10 +2406,26 @@ export const SDI_CATEGORIES = [
             "Logs: each service writes structured (JSON) log lines locally; a lightweight agent (Fluentd/Filebeat/Vector) tails the log file and forwards to a buffered collector (often via Kafka, to absorb bursty write volume without losing logs if the indexing layer is briefly slow). An indexer consumes the buffer and writes to Elasticsearch with a time-based index strategy (one index per day, e.g., logs-2026-06-30) so old indices can be cheaply deleted/archived to meet retention policies, and so queries can be scoped to a time range without scanning the entire dataset. Metrics: services expose a /metrics endpoint (Prometheus-style) or push counters/gauges/histograms directly; a local agent scrapes/aggregates at fixed intervals (e.g., every 15s) BEFORE sending — this is the critical difference from logs, since sending every raw metric event would have catastrophic cardinality (a single counter incremented 10,000 times/sec must become one aggregated point per interval, not 10,000 rows). Aggregated points land in a time-series DB (Prometheus, InfluxDB, or M3) optimized for fast range-queries and downsampling (keep 15s resolution for a week, 5-min resolution for a year). Alerting: a rules engine evaluates metric queries on a schedule (e.g., 'p99 latency > 500ms for 5 consecutive minutes') and fires to an on-call system (PagerDuty) with deduplication so a flapping condition doesn't page someone 50 times. Cardinality control is the operational nightmare in practice — a label like user_id on a metric silently creates millions of unique time series and can take down the whole metrics backend, so label allowlisting/validation at the agent is a hard requirement, not a nice-to-have.",
         },
         keyPoints: [
-          "Logs and metrics need fundamentally different pipelines — logs are search-optimized (Elasticsearch, time-bucketed indices), metrics are aggregation-optimized (time-series DB, pre-aggregated before storage) — don't force one system to do both well",
-          "Buffer log ingestion through a queue (Kafka) so a slow or down indexer doesn't cause log loss or back-pressure on the application services producing logs",
-          "Pre-aggregate metrics at the agent/collector before they hit the backend — sending every raw event for a high-frequency counter creates catastrophic write volume and cardinality",
-          "Uncontrolled metric label cardinality (e.g., a user_id label) is the most common cause of a metrics backend falling over in production — validate/allowlist labels at ingestion",
+          {
+            point: "Logs and metrics need fundamentally different pipelines — logs are search-optimized (Elasticsearch, time-bucketed indices), metrics are aggregation-optimized (time-series DB, pre-aggregated before storage) — don't force one system to do both well",
+            example: "Trying to store high-cardinality structured logs in Prometheus (a metrics-shaped TSDB) or trying to do fast full-text search in InfluxDB both fight the tool's core design.",
+            bestApproach: "Run two purpose-built pipelines (Elasticsearch-family for logs, Prometheus-family for metrics) rather than picking one system and forcing both workloads through it.",
+          },
+          {
+            point: "Buffer log ingestion through a queue (Kafka) so a slow or down indexer doesn't cause log loss or back-pressure on the application services producing logs",
+            example: "An Elasticsearch cluster briefly overwhelmed during a traffic spike doesn't lose logs if Fluentd is buffering them in Kafka, which simply catches up once indexing recovers.",
+            bestApproach: "Always place a durable buffer (Kafka or a local disk-backed queue) between log-shipping agents and the indexing backend, sized to absorb at least a few minutes of indexer downtime.",
+          },
+          {
+            point: "Pre-aggregate metrics at the agent/collector before they hit the backend — sending every raw event for a high-frequency counter creates catastrophic write volume and cardinality",
+            example: "A counter incremented 10,000 times/sec must become one aggregated point per 15-second scrape interval, not 10,000 individual rows shipped to the backend.",
+            bestApproach: "Use a Prometheus-style pull/scrape model (or pre-aggregate at the StatsD agent) so the backend only ever receives already-aggregated data points, never raw per-event writes.",
+          },
+          {
+            point: "Uncontrolled metric label cardinality (e.g., a user_id label) is the most common cause of a metrics backend falling over in production — validate/allowlist labels at ingestion",
+            example: "Adding a user_id label to a request-count metric silently creates millions of unique time series, which can take down a Prometheus instance's memory entirely.",
+            bestApproach: "Allowlist permitted label values (or label keys entirely) at the agent/collector level, rejecting or stripping unbounded-cardinality labels before they ever reach the metrics backend.",
+          },
         ],
         followUps: [
           "How would you implement log retention that's cheap for old data but fast for recent queries?",
@@ -1553,10 +2449,26 @@ export const SDI_CATEGORIES = [
             "Algorithms, ranked by what they actually solve: Fixed window (counter resets every N seconds) is simplest but has a boundary bug — a user can send 2x the limit by timing requests at the edge of two adjacent windows. Sliding window log (store a timestamp per request, count requests in the last N seconds) is accurate but memory-heavy at high volume. Sliding window counter (weighted average of current and previous fixed window) approximates sliding-log accuracy with fixed-window memory cost — good default. Token bucket (a bucket holds up to B tokens, refills at rate R/sec, each request consumes 1 token, request rejected if bucket empty) is the best choice when you want to allow bursts up to bucket size while still enforcing a long-term average rate — this is what most production rate limiters (Stripe, AWS API Gateway) actually use. Distributed enforcement: the bucket state (current token count, last refill timestamp) lives in Redis, not in-process — otherwise each of N API servers enforces its own independent limit, letting a client get N times the intended quota by hitting different servers. The check-and-decrement must be atomic to avoid a race where two concurrent requests both read '1 token left' and both proceed — implemented as a single Lua script executed atomically by Redis (EVAL), computing elapsed-time-based refill and decrementing in one round trip. Response: a rejected request gets HTTP 429 with a Retry-After header computed from the refill rate. For very high QPS, an optimization is to rate-limit at the edge/gateway (cheap, coarse) and again at the service level (precise, per-resource) rather than a single check trying to do both.",
         },
         keyPoints: [
-          "Token bucket allows controlled bursts up to a cap while enforcing a long-term average rate — this is the production-default algorithm for a reason; fixed-window has a real boundary-doubling bug",
-          "Limiter state must live in a shared store (Redis) across all API server instances — per-instance in-memory counters let a client multiply their effective quota by the number of servers",
-          "The check-and-decrement operation must be atomic (Lua script / single Redis command) — doing a separate GET then SET creates a race condition under concurrent requests",
-          "Return Retry-After on a 429 — it tells well-behaved clients exactly when to retry instead of hammering the limiter immediately",
+          {
+            point: "Token bucket allows controlled bursts up to a cap while enforcing a long-term average rate — this is the production-default algorithm for a reason; fixed-window has a real boundary-doubling bug",
+            example: "Stripe's API rate limiter is token-bucket-like, allowing a short burst of requests after idle periods while still capping sustained throughput over time.",
+            bestApproach: "Default to token bucket for public-facing APIs where legitimate clients sometimes need to burst (e.g., bulk imports), reserving sliding-window-counter for cases where bursts should never be allowed.",
+          },
+          {
+            point: "Limiter state must live in a shared store (Redis) across all API server instances — per-instance in-memory counters let a client multiply their effective quota by the number of servers",
+            example: "A client hitting 10 different API server instances behind a load balancer gets 10x the intended quota if each instance tracks its own in-memory counter independently.",
+            bestApproach: "Centralize all rate-limit state in Redis (or another shared, fast store) from the first implementation — never start with in-memory counters 'for now' and plan to fix it later.",
+          },
+          {
+            point: "The check-and-decrement operation must be atomic (Lua script / single Redis command) — doing a separate GET then SET creates a race condition under concurrent requests",
+            example: "Two concurrent requests both reading '1 token left' via separate GET calls, then both decrementing, can both succeed when only one should have — exactly the race a Lua script prevents.",
+            bestApproach: "Implement the check-and-decrement as a single atomic Redis Lua script (EVAL) from day one, never as separate read-then-write round trips, even under low traffic where the race seems unlikely.",
+          },
+          {
+            point: "Return Retry-After on a 429 — it tells well-behaved clients exactly when to retry instead of hammering the limiter immediately",
+            example: "Stripe's 429 responses include a Retry-After header, letting well-written client libraries back off automatically instead of retrying in a tight loop.",
+            bestApproach: "Compute Retry-After from the actual token-bucket refill rate and include it on every 429 response — it's a small addition that meaningfully reduces retry storms from compliant clients.",
+          },
         ],
         followUps: [
           "How would you rate-limit per IP when many users are behind the same corporate NAT?",
@@ -1580,10 +2492,26 @@ export const SDI_CATEGORIES = [
             "Class design: ParkingLot has many Floors; each Floor has many Spots (each Spot has a type: COMPACT/REGULAR/LARGE/HANDICAPPED and a status: FREE/OCCUPIED); a Vehicle has a type (MOTORCYCLE/CAR/TRUCK) and a license plate. On entry, a SpotAllocationStrategy (interface, so the policy is swappable — e.g., NearestSpotStrategy vs SameFloorPreferenceStrategy) finds a free, size-compatible spot — a motorcycle can park in any spot type, but a truck only fits LARGE. A Ticket is created (id, vehicle, spot, entry_time) and the spot is marked OCCUPIED. On exit, a FeeCalculator (also an interface — flat-rate vs per-hour vs progressive-rate strategies all implement it) computes the charge from (exit_time - entry_time) and the spot/vehicle type, a Payment is processed, and the spot is freed. Concurrency matters even in 'just OOD': two cars approaching the last free spot simultaneously must not both be allocated it — the spot's status transition (FREE → RESERVED → OCCUPIED) needs a DB-level row lock or an atomic compare-and-swap (UPDATE spots SET status='OCCUPIED' WHERE id=X AND status='FREE', check rows_affected). A real-time display ('floor 3: 12 spots free') is maintained as a denormalized counter per floor, decremented/incremented on each allocation/release rather than COUNT(*)-ing spots on every display refresh. Extensions interviewers often probe: reservations (pre-book a spot before arrival — needs a hold/expiry mechanism), EV charging spots (a spot subtype with extra constraints), and multiple entry/exit gates (each gate needs its own ticket-issuing terminal talking to the same shared spot inventory).",
         },
         keyPoints: [
-          "Use a Strategy interface for spot allocation AND for fee calculation — interviewers are usually testing whether you decouple policy (which spot, what price) from structure (lot/floor/spot data model), not whether you hardcode one rule",
-          "Atomic spot-status transitions (compare-and-swap or DB row lock) are required even in a 'simple' OOD problem — two simultaneous arrivals for the last spot is the obvious race condition to call out",
-          "Maintain a denormalized free-spot counter per floor rather than COUNT(*) querying spots on every display refresh — small detail, but shows you think about read-heavy access patterns",
-          "A Ticket (not the Vehicle or Spot) is the right place to record entry_time — it's the natural join point for fee calculation and decouples vehicle/spot lifecycle from a specific parking session",
+          {
+            point: "Use a Strategy interface for spot allocation AND for fee calculation — interviewers are usually testing whether you decouple policy (which spot, what price) from structure (lot/floor/spot data model), not whether you hardcode one rule",
+            example: "A mall wanting 'EV charging spots get priority allocation' should be a new SpotAllocationStrategy implementation, not a code change to ParkingLot's core logic.",
+            bestApproach: "Identify the 2 genuinely variable policies in this problem (allocation, pricing) and isolate exactly those behind interfaces — resist over-applying Strategy to parts of the design that don't actually vary.",
+          },
+          {
+            point: "Atomic spot-status transitions (compare-and-swap or DB row lock) are required even in a 'simple' OOD problem — two simultaneous arrivals for the last spot is the obvious race condition to call out",
+            example: "Two cars approaching the last free spot simultaneously must not both be assigned it — an atomic `UPDATE spots SET status='OCCUPIED' WHERE id=X AND status='FREE'` with a rows-affected check prevents this.",
+            bestApproach: "State this race condition out loud unprompted during the design, and show the specific atomic operation (CAS or row lock) that prevents it, rather than waiting for the interviewer to probe.",
+          },
+          {
+            point: "Maintain a denormalized free-spot counter per floor rather than COUNT(*) querying spots on every display refresh — small detail, but shows you think about read-heavy access patterns",
+            example: "A digital sign showing 'Floor 3: 12 spots free' reads a single integer counter instead of scanning and counting hundreds of spot rows on every refresh.",
+            bestApproach: "Increment/decrement a per-floor free-spot counter atomically alongside every park/unpark operation, and have the display read that counter directly rather than computing it on demand.",
+          },
+          {
+            point: "A Ticket (not the Vehicle or Spot) is the right place to record entry_time — it's the natural join point for fee calculation and decouples vehicle/spot lifecycle from a specific parking session",
+            example: "Storing entry_time on Ticket means a Vehicle that parks 5 separate times has 5 separate Tickets, each with its own clean fee calculation, rather than overloading Vehicle with session-specific state.",
+            bestApproach: "Model each parking visit as its own Ticket entity from the start — resist the temptation to store session-specific fields directly on the longer-lived Vehicle or Spot entities.",
+          },
         ],
         followUps: [
           "How would you add a reservation feature where a spot is held for 15 minutes before a no-show releases it?",
@@ -1607,10 +2535,26 @@ export const SDI_CATEGORIES = [
             "Step 1 — identify entities and relationships from the domain (the obvious part: User, Order, Product, etc., with 1:1/1:N/N:M relationships). Step 2 — and this is the part juniors skip — list the actual queries the application needs to run, with rough frequency and latency requirements ('get a user's last 20 orders, p99 < 50ms, called on every page load' vs 'generate a monthly revenue report, can take 30 seconds, run once a day'). This determines everything downstream. Step 3 — normalize to 3NF first to eliminate update anomalies and redundancy, then deliberately denormalize specific hot paths once you know which ones are hot (e.g., storing a denormalized order_total on the Order row instead of summing order_items on every read, accepting the small risk of drift in exchange for avoiding a join on the most frequent query in the system). Step 4 — choose storage engine based on query shape: relational (Postgres/MySQL) for data with strong relationships and multi-row transactional consistency needs; a document store (MongoDB) when most reads fetch one self-contained entity (a product page bundling reviews/specs) and joins are rare; a wide-column store (Cassandra) when you have very high write throughput and look up by a known key (time-series, event logs); a key-value store (Redis/DynamoDB) for pure lookups by primary key needing single-digit-ms latency. Step 5 — indexing: add an index for every column in a frequent WHERE/JOIN/ORDER BY clause, but no more — every index speeds reads and slows every write, so indexing 'just in case' has a real, ongoing cost. Step 6 — plan for scale before you need it conceptually (read replicas for read-heavy, then sharding strategy and shard key chosen specifically to keep the most frequent queries single-shard) even if you don't implement it on day one.",
         },
         keyPoints: [
-          "Query patterns, not entity relationships alone, should drive schema decisions — the same ER diagram can justify wildly different physical designs depending on read/write frequency and latency needs",
-          "Normalize first (3NF, eliminates anomalies), then denormalize deliberately and only for proven hot paths — premature denormalization recreates update-anomaly bugs for no measured benefit",
-          "SQL vs NoSQL is a query-shape decision, not a popularity contest: relational for multi-entity transactional consistency, document for self-contained-entity reads, wide-column for high-throughput key-based writes, key-value for pure latency-critical lookups",
-          "Every index has a cost on every write — justify each one against an actual frequent query, don't index speculatively",
+          {
+            point: "Query patterns, not entity relationships alone, should drive schema decisions — the same ER diagram can justify wildly different physical designs depending on read/write frequency and latency needs",
+            example: "An identical User-Order-Product ER diagram could be implemented as a normalized Postgres schema for a B2B admin tool or a denormalized DynamoDB single-table design for a high-traffic consumer app.",
+            bestApproach: "Write your top 5-10 actual queries (with rough frequency) before drawing any schema — let those queries, not the conceptual entity diagram, drive the physical design.",
+          },
+          {
+            point: "Normalize first (3NF, eliminates anomalies), then denormalize deliberately and only for proven hot paths — premature denormalization recreates update-anomaly bugs for no measured benefit",
+            example: "Denormalizing a customer's address onto every order row before measuring whether the join is actually slow just creates N places that data can drift out of sync, with zero proven benefit.",
+            bestApproach: "Ship the normalized version first, measure real query performance under realistic load, and denormalize only the specific paths that profiling proves are bottlenecks.",
+          },
+          {
+            point: "SQL vs NoSQL is a query-shape decision, not a popularity contest: relational for multi-entity transactional consistency, document for self-contained-entity reads, wide-column for high-throughput key-based writes, key-value for pure latency-critical lookups",
+            example: "Discord moved from MongoDB to Cassandra to ScyllaDB specifically because their actual access pattern (append-heavy, partitioned by channel) matched a wide-column store, not because NoSQL was trendier.",
+            bestApproach: "Name the specific access pattern that justifies your database family choice in any design discussion — 'NoSQL is more scalable' alone should be treated as an incomplete answer.",
+          },
+          {
+            point: "Every index has a cost on every write — justify each one against an actual frequent query, don't index speculatively",
+            example: "Adding 8 indexes to a frequently-written orders table 'just in case' can slow down every INSERT/UPDATE noticeably while only 2 of those indexes are ever actually used by real queries.",
+            bestApproach: "Review your database's slow-query log or query planner output periodically and drop indexes with zero or near-zero usage — treat unused indexes as technical debt, not free insurance.",
+          },
         ],
         followUps: [
           "How would you choose a shard key for a multi-tenant SaaS database?",
@@ -1634,10 +2578,26 @@ export const SDI_CATEGORIES = [
             "Core data structures: the snake's body is a Deque<Point> (double-ended queue) ordered head-to-tail; a parallel HashSet<Point> mirrors the same cells purely for fast 'is this cell occupied by the snake' lookups, since checking 'does the new head position collide with the body' by scanning a list is O(n) but a hash set lookup is O(1) — this duplication (deque + set, kept in sync on every move) is the key insight interviewers look for. Movement: on each tick, compute newHead = currentHead + directionVector; check boundary collision (newHead outside grid) and self-collision (newHead in the body hash set, with a subtle exception — if newHead equals the current tail position AND the snake isn't eating this tick, it's not a collision, because the tail is about to move away) — both are game-over conditions. If newHead matches the food's position: push newHead to the deque and hash set without popping the tail (snake grows), then spawn new food at a random empty cell (validated against the occupied-set so food never spawns on the snake). Otherwise: push newHead, then pop and remove the old tail from both structures (snake moves without growing). Food spawning at a guaranteed-empty cell on a near-full board needs care — for a grid that's mostly full, repeatedly generating random coordinates and checking 'is it free' degrades badly; better to maintain a set/list of currently-free cells and pick uniformly from that. Game loop runs on a fixed-interval timer (e.g., setInterval at a speed that may increase as score grows), re-rendering only the changed cells (old tail cleared, new head drawn) rather than redrawing the entire board each tick for performance.",
         },
         keyPoints: [
-          "Deque + HashSet kept in sync is the core trick — deque gives O(1) head-push/tail-pop for movement, hash set gives O(1) self-collision checks instead of an O(n) scan through the body",
-          "The tail cell is a collision exception: a new head landing exactly on the current tail is safe (not a collision) because the tail vacates that cell in the same tick, unless the snake just ate and the tail isn't moving",
-          "Eating food = push head without popping tail (grows by one); normal move = push head AND pop tail (length constant) — this single conditional is the entire 'growth' mechanic",
-          "On a nearly-full board, maintaining an explicit free-cell set for food spawning avoids the random-rejection-sampling slowdown of repeatedly guessing occupied cells",
+          {
+            point: "Deque + HashSet kept in sync is the core trick — deque gives O(1) head-push/tail-pop for movement, hash set gives O(1) self-collision checks instead of an O(n) scan through the body",
+            example: "Checking 'does the new head hit the body' via a 500-cell linear scan vs a single hash-set lookup is the difference between an O(n) and O(1) operation, every single tick.",
+            bestApproach: "Maintain both structures in lockstep on every move (push/pop the deque, add/remove the same coordinate from the set) so neither ever drifts out of sync with the other.",
+          },
+          {
+            point: "The tail cell is a collision exception: a new head landing exactly on the current tail is safe (not a collision) because the tail vacates that cell in the same tick, unless the snake just ate and the tail isn't moving",
+            example: "A snake moving into the cell its own tail currently occupies is fine, since the tail moves away in the same tick — but this exception breaks if the snake just ate and the tail stays put.",
+            bestApproach: "Special-case the tail-cell check explicitly in your collision logic, conditioning it on whether the snake grew this tick — this exact edge case is what separates a working solution from a buggy one.",
+          },
+          {
+            point: "Eating food = push head without popping tail (grows by one); normal move = push head AND pop tail (length constant) — this single conditional is the entire 'growth' mechanic",
+            example: "LeetCode's accepted solution to 'Design Snake Game' (#353) implements growth as exactly this one-line conditional around the tail-pop step.",
+            bestApproach: "Isolate the entire growth mechanic into this single if/else around the pop step — resist the urge to track a separate 'length' or 'growing' flag that could drift out of sync with the deque's actual size.",
+          },
+          {
+            point: "On a nearly-full board, maintaining an explicit free-cell set for food spawning avoids the random-rejection-sampling slowdown of repeatedly guessing occupied cells",
+            example: "On a 90%-full board, randomly guessing coordinates and checking 'is it free' can take many rejected attempts before finding an open cell — an explicit free-cell set picks one in O(1).",
+            bestApproach: "Maintain a set of currently-free cells (updated on every move/grow) and sample directly from it for food spawning, rather than rejection-sampling random coordinates against the occupied set.",
+          },
         ],
         followUps: [
           "How would you support multiplayer snakes on the same board?",
@@ -1661,10 +2621,26 @@ export const SDI_CATEGORIES = [
             "A support Ticket differs from a generic Jira issue in one crucial way: it carries SLA commitments tied to its state — e.g., 'first response within 1 hour of creation' and 'resolution within 8 business hours for Priority-1.' Model: Ticket(id, queue_id, priority, status, created_at, sla_policy_id); SLAClock(ticket_id, metric: FIRST_RESPONSE | RESOLUTION, target_at, paused_at NULLABLE, breached BOOLEAN) — the clock pauses when a ticket enters a WAITING_ON_CUSTOMER status (you shouldn't be penalized for SLA while waiting on the reporter) and resumes on reply, which is the detail most naive designs miss. A scheduled job (or a delayed-message queue like SQS with per-message delay, or a min-heap of upcoming deadlines polled periodically) checks for clocks approaching/exceeding target_at and fires escalation events (notify manager, auto-reprioritize) — this must be efficient at scale (millions of open tickets), so indexing/querying by target_at with a covering index, or using a time-bucketed delay queue, beats a naive 'scan all open tickets every minute.' Auto-assignment: a routing engine assigns incoming tickets to an agent based on queue (which team owns this category), current load (agents with fewer open tickets get priority — round-robin or least-connections), and skill match (tagged skills vs ticket category) — implemented as a rules engine evaluated at ticket-creation time, falling back to an unassigned pool with manager-triggered manual assignment if no agent matches. Business-hours-aware SLA math (an 8-hour SLA submitted Friday at 5pm shouldn't breach over the weekend) requires a calendar service that converts wall-clock duration to business-hour duration per the support org's configured hours and holidays.",
         },
         keyPoints: [
-          "SLA clocks are first-class objects with their own pause/resume semantics (pausing while WAITING_ON_CUSTOMER) — this is the detail that separates a real support-ticketing design from a generic issue tracker",
-          "Checking for SLA breaches must scale past 'a cron job scanning every open ticket' — index by target_at or use a delay queue so the check cost doesn't grow linearly with total open tickets",
-          "Auto-assignment is a rules engine evaluated at creation time (queue ownership + current agent load + skill match), with an explicit unassigned fallback — never silently drop a ticket no rule matches",
-          "SLA timers must be business-hours-aware, not wall-clock — an 8-hour SLA submitted Friday evening should land Monday, not over the weekend; this needs an explicit calendar/holiday service",
+          {
+            point: "SLA clocks are first-class objects with their own pause/resume semantics (pausing while WAITING_ON_CUSTOMER) — this is the detail that separates a real support-ticketing design from a generic issue tracker",
+            example: "A ticket waiting 3 days for the customer to reply shouldn't count those 3 days against the agent's resolution SLA — the clock pauses on WAITING_ON_CUSTOMER and resumes on reply.",
+            bestApproach: "Model SLAClock as a separate entity with explicit pause/resume timestamps tied to status transitions, never as a simple created_at + duration calculation.",
+          },
+          {
+            point: "Checking for SLA breaches must scale past 'a cron job scanning every open ticket' — index by target_at or use a delay queue so the check cost doesn't grow linearly with total open tickets",
+            example: "A naive cron job scanning millions of open tickets every minute to find breaches becomes the system's biggest cost center as ticket volume grows.",
+            bestApproach: "Index SLA clocks by target_at (or use a delayed-message queue like SQS with per-message delay) so checking for upcoming breaches is a cheap range query, not a full table scan.",
+          },
+          {
+            point: "Auto-assignment is a rules engine evaluated at creation time (queue ownership + current agent load + skill match), with an explicit unassigned fallback — never silently drop a ticket no rule matches",
+            example: "A ticket tagged with a skill no current agent has assigned should fall into a visible 'unassigned, needs manual review' queue, never silently disappear unrouted.",
+            bestApproach: "Build the routing rules engine with an explicit, monitored fallback path for unmatched tickets, and alert when that fallback queue grows beyond a threshold.",
+          },
+          {
+            point: "SLA timers must be business-hours-aware, not wall-clock — an 8-hour SLA submitted Friday evening should land Monday, not over the weekend; this needs an explicit calendar/holiday service",
+            example: "Zendesk and Jira Service Management both implement business-hours-aware SLA math specifically so a Friday-evening ticket's 8-hour clock doesn't silently breach over the weekend.",
+            bestApproach: "Build a dedicated calendar/business-hours service (per support org's configured hours and holidays) that all SLA math routes through, rather than doing raw wall-clock arithmetic.",
+          },
         ],
         followUps: [
           "How would you handle SLA policies that differ per customer (enterprise vs free tier)?",
@@ -1688,10 +2664,26 @@ export const SDI_CATEGORIES = [
             "Code generation, two approaches: (1) Counter-based — a centralized (or sharded-range) auto-incrementing ID, base62-encoded (a-z, A-Z, 0-9) into a short string — id 125 encodes to a few characters, guarantees uniqueness by construction, no collision handling needed, but requires coordinating ID allocation (e.g., pre-allocate ranges of IDs to each app server so they don't need a synchronous call per request). (2) Hash-based — MD5/SHA hash of the long URL, take the first 7 characters — simpler conceptually but needs collision detection (check if that code already maps to a different URL; if so, append a salt and rehash) and doesn't guarantee uniqueness for free. Most production systems prefer counter-based for its collision-free guarantee. Storage: a simple key-value table/store (short_code → long_url, created_at, expiry, click_count) — this is an ideal fit for a key-value store (DynamoDB) or a simple indexed relational table, since lookups are always by exact primary key, never by range or complex query. Read path dominates by orders of magnitude (every redirect is a read; creation is rare by comparison) — so a Redis cache in front of the DB, populated on first access or pre-warmed for known-popular links, absorbs the vast majority of redirect traffic and keeps DB load low. Redirect status code matters: 301 (permanent) lets browsers cache the redirect and skip your server on repeat visits — great for server load, terrible if you need accurate click analytics; 302 (temporary) forces every click through your server, giving you complete click tracking at the cost of more redirect traffic to handle. Custom aliases and expiry are straightforward additions on top of the same schema. At billions-of-URLs scale, the underlying table is sharded by short_code's hash (consistent hashing) so no single node holds a disproportionate fraction of keys.",
         },
         keyPoints: [
-          "Counter-based base62 encoding guarantees uniqueness by construction with no collision-handling complexity — prefer it over hash-based generation unless you have a specific reason not to coordinate ID allocation",
-          "Reads (redirects) outnumber writes (shortens) by orders of magnitude — a cache (Redis) in front of the datastore is the single highest-leverage optimization, not a clever storage engine choice",
-          "301 vs 302 is a real product decision, not a technical footnote: 301 reduces server load via browser caching but blinds you to repeat-click analytics; 302 gives full analytics at the cost of every click hitting your servers",
-          "The data access pattern (always exact-match lookup by short_code) makes this a textbook key-value store fit — no need for a relational database's join/query capabilities",
+          {
+            point: "Counter-based base62 encoding guarantees uniqueness by construction with no collision-handling complexity — prefer it over hash-based generation unless you have a specific reason not to coordinate ID allocation",
+            example: "Pre-allocating ID ranges (e.g., server A gets IDs 1M-2M, server B gets 2M-3M) lets each app server generate unique base62 codes locally with zero coordination per request.",
+            bestApproach: "Default to a counter-based key-generation service handing out pre-allocated ID ranges to app servers, avoiding both a single-counter bottleneck and hash collision handling.",
+          },
+          {
+            point: "Reads (redirects) outnumber writes (shortens) by orders of magnitude — a cache (Redis) in front of the datastore is the single highest-leverage optimization, not a clever storage engine choice",
+            example: "bit.ly's traffic is heavily Pareto-distributed — a small set of trending links accounts for most clicks, so a cache sized for the 'hot' subset absorbs the vast majority of redirect traffic.",
+            bestApproach: "Add a Redis cache-aside layer for short_code lookups before optimizing anything else — it delivers the highest read-latency improvement for the least implementation effort.",
+          },
+          {
+            point: "301 vs 302 is a real product decision, not a technical footnote: 301 reduces server load via browser caching but blinds you to repeat-click analytics; 302 gives full analytics at the cost of every click hitting your servers",
+            example: "Choosing 301 means a user's second click on the same shortened link never reaches your server at all — the browser serves it from its own cache.",
+            bestApproach: "Explicitly ask 'does the product need click analytics?' before defaulting to either redirect code — treat it as a product requirements question, not a default technical setting.",
+          },
+          {
+            point: "The data access pattern (always exact-match lookup by short_code) makes this a textbook key-value store fit — no need for a relational database's join/query capabilities",
+            example: "Every read is `GET short_code → long_url` with no joins or range queries ever needed — DynamoDB or any key-value store fits this access pattern perfectly.",
+            bestApproach: "Name the access pattern (pure key lookup) explicitly when justifying a key-value store choice, rather than defaulting to a relational database out of habit.",
+          },
         ],
         followUps: [
           "How would you pre-allocate ID ranges to multiple app servers without a synchronous coordination call per request?",
@@ -1715,10 +2707,26 @@ export const SDI_CATEGORIES = [
             "API contract: POST /notifications { event_type: 'order_shipped', user_id, data: { order_id, tracking_url } } — callers send semantic event data, never pre-rendered text. This indirection is the single most important design decision: it lets the notification team change wording, add a new language, or change which channel an event_type defaults to, without every calling service needing a deploy. Template system: each event_type maps to a TemplateSet (one template per locale per channel — push has a short title+body, email has subject+HTML body, SMS has a 160-char-budget plain text) stored with a version number; rendering substitutes {{data.fields}} into the template at send time. Preference center: NotificationPreference(user_id, event_category, channel, enabled) — granular enough that a user can disable marketing emails but keep security-alert emails, and the send path checks this table before dispatching to a given channel (with hard-coded exceptions for non-optional categories like security/legal notices, which bypass preference checks entirely by design). Delivery: the service itself doesn't necessarily talk to FCM/Twilio/SES directly — it can enqueue a rendered-message task to channel-specific delivery workers (this is the seam between 'notification service' and 'notification system' architecture), but the service's job ends at producing a correctly localized, correctly-targeted, preference-respecting message. Idempotency at the API boundary: callers pass an idempotency_key (often the business event's own ID) so retrying a failed HTTP call to /notifications never results in a duplicate send. Audit: every send attempt (rendered, suppressed-by-preference, failed) is logged for support/debugging ('why didn't this user get their order confirmation').",
         },
         keyPoints: [
-          "Calling services send semantic event data (event_type + structured payload), never pre-rendered text — this indirection is what lets wording/localization/channel-defaults change without redeploying every caller",
-          "Templates are versioned per event_type × locale × channel — email/push/SMS need fundamentally different formats (HTML body vs 160-char budget) from the same logical event",
-          "Preferences are granular per (event_category, channel), with explicit hard-coded exceptions for non-optional categories (security, legal) that always bypass opt-out — silently respecting an opt-out on a fraud alert is a real security bug, not just a UX nitpick",
-          "Idempotency keys at the API boundary (not just in the delivery workers) prevent a caller's HTTP retry from producing a duplicate notification",
+          {
+            point: "Calling services send semantic event data (event_type + structured payload), never pre-rendered text — this indirection is what lets wording/localization/channel-defaults change without redeploying every caller",
+            example: "The order service sends `{event_type: 'order_shipped', data: {order_id, tracking_url}}` — the notification team can later rewrite the message copy without the order service ever deploying.",
+            bestApproach: "Define the event-data contract (event_type + payload schema) as the API surface calling services integrate against, and treat the actual message text as an internal implementation detail of the notification service.",
+          },
+          {
+            point: "Templates are versioned per event_type × locale × channel — email/push/SMS need fundamentally different formats (HTML body vs 160-char budget) from the same logical event",
+            example: "An 'order_shipped' event renders as a full HTML email, a short push notification title+body, and a 160-character SMS — three different templates from one event.",
+            bestApproach: "Store templates keyed by (event_type, locale, channel) in a versioned table, allowing copy/locale changes via a CMS-like flow rather than code deploys.",
+          },
+          {
+            point: "Preferences are granular per (event_category, channel), with explicit hard-coded exceptions for non-optional categories (security, legal) that always bypass opt-out — silently respecting an opt-out on a fraud alert is a real security bug, not just a UX nitpick",
+            example: "A user who's opted out of marketing emails should still receive a 'suspicious login detected' security alert — failing to hard-code this exception is a genuine security gap.",
+            bestApproach: "Hard-code a non-optional flag on security/legal event categories at the schema level, enforced in code so no preference-check path can ever suppress them, even accidentally.",
+          },
+          {
+            point: "Idempotency keys at the API boundary (not just in the delivery workers) prevent a caller's HTTP retry from producing a duplicate notification",
+            example: "An order service retrying a timed-out call to `/notifications` (where the original request actually succeeded) without an idempotency key risks sending the same order-confirmation twice.",
+            bestApproach: "Require an idempotency_key on every POST to the notification API, often the originating business event's own ID, checked before any processing begins.",
+          },
         ],
         followUps: [
           "How would you A/B test two different message templates for the same event_type?",
@@ -1742,10 +2750,26 @@ export const SDI_CATEGORIES = [
             "Topic & partitioning: a topic is split into P partitions, each an append-only log; a message's partition is chosen by hash(key) % P (or round-robin if no key) — this is why ordering is only guaranteed within a partition, not across the whole topic, and it's the single most important constraint to state explicitly, since most candidates wrongly assume global ordering. Producers choose a key that groups related messages (e.g., user_id) into the same partition specifically to get ordering where it matters. Replication: each partition has a leader broker and N-1 follower replicas; producers write to the leader, followers pull and replicate; a message is considered 'committed' once it's been replicated to a quorum (e.g., ISR — in-sync replica set) of followers, not just written to the leader — this is what survives a leader broker crashing immediately after a write. Consumer model: rather than the broker pushing to consumers (which requires tracking per-consumer state and slows down under a slow consumer), consumers pull and track their own offset (position) in each partition they read — this offset is itself stored durably (in a special internal topic, Kafka's actual approach) so a consumer can crash and resume from its last committed offset. Consumer groups: multiple consumer instances in a group split the partitions among themselves (each partition read by exactly one consumer in the group at a time) for parallel processing, while multiple distinct groups can each independently read the entire topic from their own offset — this is what lets the same event stream serve both a real-time analytics consumer and a slower batch-archival consumer without either affecting the other. Storage: logs are append-only and segmented into files; old segments are deleted/compacted per a configured retention policy (time-based or size-based), and sequential disk I/O for both writes (append) and reads (mostly sequential scan from an offset) is what gives a log-based design dramatically higher throughput than a random-access database for this workload.",
         },
         keyPoints: [
-          "Ordering is guaranteed only within a partition, never across an entire topic — producers must choose a partition key deliberately for any messages that need relative ordering",
-          "A write is 'durable' only once replicated to a quorum of followers, not merely written to the leader — acknowledging too early loses messages on a leader crash",
-          "Pull-based consumption with consumer-tracked offsets (not broker-pushed delivery) keeps the broker simple and lets slow consumers fall behind without affecting others or requiring the broker to track per-consumer state",
-          "Consumer groups parallelize work (each partition read by one consumer in the group) while independent groups can each replay the whole stream from their own offset — this dual model is what supports many different downstream use cases off one event stream",
+          {
+            point: "Ordering is guaranteed only within a partition, never across an entire topic — producers must choose a partition key deliberately for any messages that need relative ordering",
+            example: "Keying messages by user_id ensures all of one user's events land in the same partition and are processed in order, while different users' events may interleave across partitions freely.",
+            bestApproach: "Choose the partition key based on which entities need relative ordering preserved, and explicitly document that cross-key ordering is never guaranteed.",
+          },
+          {
+            point: "A write is 'durable' only once replicated to a quorum of followers, not merely written to the leader — acknowledging too early loses messages on a leader crash",
+            example: "Kafka's acks=all setting waits for the in-sync replica set to acknowledge before confirming a write, so a leader crash immediately after doesn't silently lose that message.",
+            bestApproach: "Configure producer acknowledgment level (acks=all for critical data) explicitly based on the data's durability requirements, rather than accepting the client library's default.",
+          },
+          {
+            point: "Pull-based consumption with consumer-tracked offsets (not broker-pushed delivery) keeps the broker simple and lets slow consumers fall behind without affecting others or requiring the broker to track per-consumer state",
+            example: "A slow batch-analytics consumer reading from an hour-old offset doesn't slow down a real-time consumer reading from the latest offset on the same topic.",
+            bestApproach: "Design consumers to track and durably persist their own offset (committing only after successful processing) so a consumer crash resumes from the last safely-processed point.",
+          },
+          {
+            point: "Consumer groups parallelize work (each partition read by one consumer in the group) while independent groups can each replay the whole stream from their own offset — this dual model is what supports many different downstream use cases off one event stream",
+            example: "LinkedIn's page-view topic is read in parallel by a search-indexing consumer group and independently, in full, by a separate analytics consumer group — neither affects the other.",
+            bestApproach: "Use one consumer group per independent downstream use case, and size each group's consumer count to match its target partition count for full parallelism.",
+          },
         ],
         followUps: [
           "What happens to in-flight messages if a partition's leader broker crashes?",
@@ -1769,10 +2793,26 @@ export const SDI_CATEGORIES = [
             "Connection layer: each client holds a long-lived WebSocket to one of many chat servers (load-balanced on connect); a routing table (Redis: user_id → server_id) tracks which server each online user is currently connected to — this is essential because the sender and recipient are very likely connected to different physical servers. Sending a message: client → sender's chat server → message is persisted (write to a message store, partitioned by conversation_id) → server looks up recipient's server_id in the routing table → if recipient is online, publish to a pub/sub channel that the recipient's chat server subscribes to, which then pushes over that recipient's WebSocket; if offline, skip the push and rely on the persisted message being delivered on next reconnect (chat history fetch). Delivery status (sent → delivered → read) is modeled as a small state machine per message per recipient (important for group chats — one message has a distinct delivery state per group member): 'sent' is set once persisted; 'delivered' is set when the recipient's client ACKs receipt over the WebSocket; 'read' is set when the recipient's client reports the message entered view. These ACKs flow back through the same server-to-server pub/sub path in reverse. Group chat fan-out: a message to a 200-person group is NOT fanned out to 200 individual rows at send time for huge groups — instead, store one message row plus per-recipient delivery-status rows lazily created/updated as ACKs arrive, avoiding a 200x write amplification on every single group message. Message storage is typically a wide-column store (Cassandra) partitioned by conversation_id and clustered by timestamp, since the dominant query is 'give me the last N messages in this conversation' — a perfect fit for that access pattern. Presence (online/offline/last-seen) is ephemeral state in Redis with a TTL/heartbeat, separate from message delivery entirely.",
         },
         keyPoints: [
-          "A routing table mapping user_id → connected-server-id is the backbone of multi-server chat — without it, there's no way to deliver a message to a recipient connected to a different physical server than the sender",
-          "Delivery status (sent/delivered/read) is per-message-per-recipient, not per-message — this matters enormously for group chats where 200 people have 200 independent delivery states for one message",
-          "For large groups, avoid writing N delivery-status rows eagerly at send time — create/update them lazily as ACKs actually arrive, or fan-out cost dominates at scale",
-          "Message storage access pattern (recent messages in one conversation, time-ordered) is a textbook wide-column-store fit (Cassandra partitioned by conversation_id) — far better than a relational table for this specific query shape",
+          {
+            point: "A routing table mapping user_id → connected-server-id is the backbone of multi-server chat — without it, there's no way to deliver a message to a recipient connected to a different physical server than the sender",
+            example: "A message from a user on chat-server-3 to a recipient connected to chat-server-7 routes through a Redis lookup (user_id → server_id) and a pub/sub hop between the two servers.",
+            bestApproach: "Maintain the routing table in a fast, shared store (Redis) updated on every connect/disconnect, and treat it as the single source of truth for 'who's connected where' across the fleet.",
+          },
+          {
+            point: "Delivery status (sent/delivered/read) is per-message-per-recipient, not per-message — this matters enormously for group chats where 200 people have 200 independent delivery states for one message",
+            example: "In a 200-person group, one message can be 'read' by 50 members, 'delivered' to 100 more, and just 'sent' to the rest — 200 independent states from one message.",
+            bestApproach: "Model delivery status as a separate (message_id, recipient_id) → status record, not a single field on the message, especially for group conversations.",
+          },
+          {
+            point: "For large groups, avoid writing N delivery-status rows eagerly at send time — create/update them lazily as ACKs actually arrive, or fan-out cost dominates at scale",
+            example: "Eagerly writing 200 delivery-status rows for every message in a 200-person group multiplies write volume 200x — lazy creation on actual ACK avoids this entirely.",
+            bestApproach: "Create delivery-status records only when a recipient's client actually ACKs (delivered/read), rather than pre-creating a 'sent' row for every group member at send time.",
+          },
+          {
+            point: "Message storage access pattern (recent messages in one conversation, time-ordered) is a textbook wide-column-store fit (Cassandra partitioned by conversation_id) — far better than a relational table for this specific query shape",
+            example: "WhatsApp-scale message storage favors a wide-column store partitioned by conversation_id and clustered by timestamp, matching the dominant 'last N messages in this chat' query exactly.",
+            bestApproach: "Partition message storage by conversation_id with timestamp as the clustering key from the start — this single schema decision directly optimizes the system's most frequent query.",
+          },
         ],
         followUps: [
           "How would you support end-to-end encryption without breaking server-side search/backup features?",
@@ -1796,10 +2836,26 @@ export const SDI_CATEGORIES = [
             "Job definition: Job(id, schedule — either a one-off run_at timestamp or a cron expression, next_run_at, status: PENDING/CLAIMED/RUNNING/SUCCEEDED/FAILED, payload, retry_policy). Scheduling loop: rather than one centralized scheduler process (a single point of failure and a throughput ceiling), run multiple identical scheduler instances that each periodically poll the DB for jobs WHERE next_run_at <= NOW() AND status = 'PENDING' — but if two instances poll at the same moment, both could see the same due job. The fix is an atomic claim: UPDATE jobs SET status='CLAIMED', claimed_by=instance_id WHERE id=X AND status='PENDING' and only proceed if the update actually affected a row (rows_affected = 1 means this instance won the race; 0 means another instance already claimed it) — this turns 'multiple schedulers' from a double-execution risk into a horizontal scaling feature. Execution: the claiming scheduler doesn't run the job inline — it pushes a task to an execution queue consumed by a separate worker pool, so a job that takes 10 minutes doesn't block that scheduler instance from claiming and dispatching the next thousand due jobs. Crash recovery: if a worker crashes mid-execution, the job is stuck in RUNNING — a reaper process periodically finds jobs RUNNING for longer than their expected max duration and requeues them (with a retry-count check to avoid infinite reprocessing of a poison-pill job). Retry policy: exponential backoff with jitter, configurable max attempts, then move to a dead-letter status for manual inspection. Recurring jobs: after a cron-scheduled job completes, the scheduler computes the next next_run_at from the cron expression and resets status to PENDING — never executes 'the next occurrence' eagerly, since that would require tracking unbounded future instances. At very high job volume, the 'poll the whole jobs table' step itself needs a covering index on (status, next_run_at) or, beyond a few million rows, a time-bucketed priority structure so the scan stays cheap regardless of total job count.",
         },
         keyPoints: [
-          "Multiple scheduler instances polling the same job table is safe (and a scaling feature, not a bug) ONLY if claiming a job is a single atomic conditional UPDATE — checking rows_affected, not a separate read-then-write",
-          "Scheduling (deciding a job is due) and execution (actually running it) must be separate concerns — a slow job must never block the scheduler loop from claiming the next thousand due jobs",
-          "A reaper process for jobs stuck in RUNNING past their expected duration is mandatory — without it, a crashed worker silently loses a job forever with no automatic retry",
-          "Recompute a recurring job's next_run_at lazily after each completion, not by pre-generating future occurrences — pre-generating is unbounded and unnecessary work",
+          {
+            point: "Multiple scheduler instances polling the same job table is safe (and a scaling feature, not a bug) ONLY if claiming a job is a single atomic conditional UPDATE — checking rows_affected, not a separate read-then-write",
+            example: "Two scheduler instances polling at the exact same moment both see the same due job, but only one's `UPDATE ... WHERE status='PENDING'` actually affects a row — the other sees rows_affected=0 and moves on.",
+            bestApproach: "Implement job claiming as a single atomic conditional UPDATE checked via rows_affected, never as a separate SELECT-then-UPDATE, regardless of how rare the race seems at low scheduler-instance counts.",
+          },
+          {
+            point: "Scheduling (deciding a job is due) and execution (actually running it) must be separate concerns — a slow job must never block the scheduler loop from claiming the next thousand due jobs",
+            example: "A scheduler instance that runs a 10-minute job inline can't claim and dispatch the next thousand due jobs during that window — dispatching to a separate worker pool avoids this entirely.",
+            bestApproach: "Have the scheduler only claim and enqueue jobs to a worker pool, never execute them inline — keep the scheduling loop's per-job cost constant regardless of job duration.",
+          },
+          {
+            point: "A reaper process for jobs stuck in RUNNING past their expected duration is mandatory — without it, a crashed worker silently loses a job forever with no automatic retry",
+            example: "A worker that crashes mid-job leaves it stuck in RUNNING status forever unless a reaper process periodically finds jobs RUNNING past their expected max duration and requeues them.",
+            bestApproach: "Run a periodic reaper checking for jobs RUNNING beyond their expected duration, requeuing them with a retry-count check to avoid infinitely reprocessing a genuinely broken job.",
+          },
+          {
+            point: "Recompute a recurring job's next_run_at lazily after each completion, not by pre-generating future occurrences — pre-generating is unbounded and unnecessary work",
+            example: "A daily job pre-generating the next 10 years of occurrences creates thousands of rows that may never run if the job definition changes — lazy computation avoids this waste entirely.",
+            bestApproach: "Compute next_run_at from the cron expression only after the current occurrence completes, resetting status to PENDING — never pre-generate future job instances ahead of time.",
+          },
         ],
         followUps: [
           "How would you support job dependencies (job B only runs after job A succeeds)?",

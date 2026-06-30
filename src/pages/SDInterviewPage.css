@@ -232,26 +232,64 @@
   gap: 8px;
 }
 
-.sdi-points li {
+.sdi-point-card {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  font-size: 14px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  padding: 10px 16px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
   background: rgba(74, 222, 128, 0.04);
   border: 1px solid rgba(74, 222, 128, 0.12);
   border-radius: 8px;
 }
 
-.sdi-points li::before {
+.sdi-point-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.sdi-point-text::before {
   content: "✓";
   color: #4ade80;
   font-weight: 700;
   font-size: 12px;
-  margin-top: 2px;
+  margin-top: 3px;
   flex-shrink: 0;
+}
+
+.sdi-point-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  padding-left: 22px;
+}
+
+.sdi-point-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-top: 1px;
+}
+
+.sdi-point-tag--example {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.sdi-point-tag--best {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
 }
 
 /* ── Real-world example ── */

@@ -112,8 +112,18 @@ export default function SDInterviewPage() {
             <h2 className="sdi-section-title">What a Strong Answer Covers</h2>
           </div>
           <ul className="sdi-points">
-            {problem.keyPoints.map((point, i) => (
-              <li key={i}>{point}</li>
+            {problem.keyPoints.map((kp, i) => (
+              <li key={i} className="sdi-point-card">
+                <div className="sdi-point-text">{kp.point}</div>
+                <div className="sdi-point-row sdi-point-row--example">
+                  <span className="sdi-point-tag sdi-point-tag--example">Example</span>
+                  <span>{kp.example}</span>
+                </div>
+                <div className="sdi-point-row sdi-point-row--best">
+                  <span className="sdi-point-tag sdi-point-tag--best">Best way to design it</span>
+                  <span>{kp.bestApproach}</span>
+                </div>
+              </li>
             ))}
           </ul>
         </section>
