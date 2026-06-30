@@ -223,6 +223,31 @@
   margin: 0;
 }
 
+.sdi-answer-detailed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 720px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sdi-answer-detailed-list li {
+  position: relative;
+  font-size: 14.5px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  padding-left: 18px;
+}
+
+.sdi-answer-detailed-list li::before {
+  content: "—";
+  position: absolute;
+  left: 0;
+  color: #38bdf8;
+}
+
 /* ── Entity model ── */
 .sdi-entities {
   display: grid;

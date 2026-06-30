@@ -102,7 +102,15 @@ export default function SDInterviewPage() {
             <h2 className="sdi-section-title">Model Answer</h2>
           </div>
           <div className="sdi-answer-short">{problem.answer.short}</div>
-          <p className="sdi-answer-detailed">{problem.answer.detailed}</p>
+          {Array.isArray(problem.answer.detailed) ? (
+            <ul className="sdi-answer-detailed-list">
+              {problem.answer.detailed.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="sdi-answer-detailed">{problem.answer.detailed}</p>
+          )}
         </section>
 
         {/* Entity model */}
