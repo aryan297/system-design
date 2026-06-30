@@ -1262,4 +1262,553 @@ export const SDI_CATEGORIES = [
       },
     ],
   },
+  // ────────────────────────────────────────────────────────────────────────
+  {
+    id: "classic-system-design-problems",
+    icon: "🧩",
+    title: "Classic System Design Problems",
+    color: "#0EA5E9",
+    problems: [
+      {
+        id: "jira-project-management",
+        title: "Design a project management tool like Jira",
+        difficulty: "Hard",
+        category: "classic-system-design-problems",
+        question:
+          "Design a project management tool like Jira that supports boards, epics, custom workflows per team, and scales to millions of organizations.",
+        answer: {
+          short:
+            "Model everything around one generic Issue entity with a pluggable per-project workflow (a state machine of statuses and transitions), and treat boards/sprints as read-side projections over that data, not separate sources of truth.",
+          detailed:
+            "Core entities: Issue (type: story/bug/task/epic, fields, status, assignee), Project (owns a Workflow Scheme), Workflow (a directed graph of statuses and allowed transitions, e.g. TODO → IN_PROGRESS → IN_REVIEW → DONE, with role-gated edges), Board (a saved filter + column mapping over issues), Sprint (a time-boxed issue collection). Multi-tenancy: small/medium orgs share partitioned tables keyed by tenant_id with row-level isolation; very large orgs (10K+ seats) can be split to dedicated shards. The workflow engine is the trickiest part — instead of hardcoding statuses, model transitions as data (workflow_transitions table: from_status, to_status, required_role, post-functions like 'auto-assign on transition to IN_PROGRESS') so each team customizes without code changes. Every field change is appended to an immutable changelog table (issue_id, field, old_value, new_value, actor, timestamp) — this powers both the activity feed and audit/compliance requirements. Search (JQL) is served by Elasticsearch with a permission-aware index (each doc carries project_id + visible_role list so unauthorized issues never appear in results). Boards are materialized queries, refreshed via the same event stream that updates the changelog, so board state never drifts from issue state.",
+        },
+        keyPoints: [
+          "One generic Issue entity + a data-driven workflow (state machine as rows, not code) is what makes per-team customization possible without N codepaths",
+          "Boards and sprints are projections/views over issues — never a second source of truth, or they will drift",
+          "An append-only changelog table is non-negotiable — it's the audit trail, the activity feed, and the undo mechanism all at once",
+          "Permission-aware search (filtering at index time, not query time) is what keeps JQL-style search both fast and secure across multi-project orgs",
+        ],
+        followUps: [
+          "How would you support a workflow scheme shared across 50 projects but customized per-project?",
+          "How do you handle a single organization with 500K issues without degrading search latency for everyone else?",
+          "How would you implement real-time updates so two people viewing the same board see changes instantly?",
+        ],
+        example:
+          "Atlassian's real architecture separates 'workflow schemes' (reusable graphs) from per-project overrides, and JQL is compiled down to an Elasticsearch query with an injected permission filter — exactly the pattern that keeps a 20-year-old product still able to onboard new customization without a rewrite.",
+      },
+      {
+        id: "real-time-collaboration-platform",
+        title: "Design a real-time collaboration platform (like Google Docs / Figma)",
+        difficulty: "Hard",
+        category: "classic-system-design-problems",
+        question:
+          "Design a real-time collaborative document editor where multiple users can type in the same document simultaneously and see each other's changes live.",
+        answer: {
+          short:
+            "Route every document to one owning server that holds it in memory, broadcast operations over WebSockets, and resolve concurrent edits with Operational Transformation or a CRDT so every client converges to the same final state regardless of edit order.",
+          detailed:
+            "Two competing techniques solve concurrent editing: Operational Transformation (OT) — each edit is an operation (insert/delete at position); when two operations arrive out of order, the server transforms one against the other so they still apply correctly (Google Docs' approach) — and CRDTs (Conflict-free Replicated Data Types) — each character/element gets a unique, order-preserving ID, so merges are commutative and don't need a central transform step (used by Figma, Notion). CRDTs are simpler to reason about and work better offline-first, but carry more metadata overhead per character. Architecture: a document is owned by exactly one 'document server' instance at a time (consistent hashing by doc_id), which holds the live in-memory state and the connected clients' WebSocket connections; this avoids needing distributed consensus for every keystroke. Edits go: client → owning server (apply + transform/merge) → broadcast to all other connected clients for that doc. Persistence: periodic snapshots to object storage plus an append-only operation log, so a server crash only loses the in-flight ops since the last snapshot, replayed from the log. Presence (cursors, who's viewing) is ephemeral pub/sub, not persisted. Reconnection: client sends its last-known version; server replays missed ops or sends a full snapshot if too far behind.",
+        },
+        keyPoints: [
+          "OT (Google Docs) needs a central authority to transform conflicting ops; CRDTs (Figma, Notion) make merges commutative so peers can apply ops in any order and converge — pick based on whether you need offline support",
+          "Pin each document to one owning server via consistent hashing — keeps the hot path (apply + broadcast) in-memory and avoids per-keystroke consensus",
+          "Persist via snapshot + op log, not a write per keystroke to the primary DB — replay the log to reconstruct state after a crash",
+          "Presence (cursors, live viewers) is ephemeral and should never touch durable storage — it's pure pub/sub",
+        ],
+        followUps: [
+          "How would you shard so one wildly popular shared doc doesn't overload a single server?",
+          "How do you handle a client that's been offline for an hour and reconnects?",
+          "What happens if the server owning a document crashes mid-edit?",
+        ],
+        example:
+          "Figma's multiplayer engine uses a CRDT-like property graph synced over WebSockets, with a single Rust server process per file holding authoritative state in memory — explicitly chosen because it makes conflict resolution embarrassingly simple compared to OT's transform matrices.",
+      },
+      {
+        id: "scalable-notification-system",
+        title: "Design a scalable notification system",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a notification system that can send push, email, SMS, and in-app notifications to hundreds of millions of users without overwhelming any single channel provider.",
+        answer: {
+          short:
+            "Decouple 'a notification should be sent' from 'how it gets delivered' with a queue in between, fan out to per-channel workers that each respect their provider's rate limits, and make every send idempotent so retries never double-notify a user.",
+          detailed:
+            "Producers (any internal service — order service, social service) publish a notification event to a Kafka topic rather than calling a delivery API directly — this decouples business logic from delivery concerns and absorbs spikes. A Notification Orchestrator consumes the topic, resolves: (1) user preferences (which channels are enabled, quiet hours), (2) template (renders the message body per locale), (3) channel routing (push vs email vs SMS based on priority and user settings) — and emits one task per channel to channel-specific queues. Each channel has its own worker pool tuned to its provider's limits: FCM/APNs push workers can burst to thousands/sec, SMS workers via Twilio are rate-limited and cost real money so they get a strict token-bucket limiter, email workers batch via SES/SendGrid. Idempotency: every notification carries a dedup key (event_id + user_id + channel); workers check a Redis SET (or DB unique constraint) before sending, so a re-processed Kafka message after a worker crash never double-sends. Delivery tracking: provider webhooks (FCM delivery receipts, SES bounce/complaint events) feed back into a notification_log table for analytics and to auto-disable channels with high bounce/complaint rates per user. Low-priority notifications (weekly digest, recommendations) are batched and rate-shaped; high-priority (OTP, security alerts) bypass batching and go out immediately.",
+        },
+        keyPoints: [
+          "A queue between 'event happened' and 'notification sent' is what absorbs traffic spikes and decouples business logic from delivery — never call provider APIs synchronously from request handlers",
+          "Each channel (push/SMS/email) needs its own worker pool and rate limiter tuned to that provider's actual limits — one slow channel must never block another",
+          "Idempotency keys are mandatory — at-least-once delivery from Kafka means workers WILL occasionally see the same message twice",
+          "Feed delivery receipts (bounces, complaints, invalid tokens) back into user preference state — silently retrying a dead push token forever wastes capacity",
+        ],
+        followUps: [
+          "How do you prevent a user from getting the same notification on 3 devices simultaneously?",
+          "How would you implement 'quiet hours' without delaying a critical security alert?",
+          "How do you handle a provider (e.g., FCM) being down for 10 minutes?",
+        ],
+        example:
+          "Uber's notification platform routes hundreds of millions of daily events through Kafka into channel-specific workers, with a dedicated 'notification decision service' that resolves user preferences once per event so individual channel workers stay simple and stateless.",
+      },
+      {
+        id: "knowledge-base-search-engine",
+        title: "Design a search engine for knowledge base articles",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a search system for an internal knowledge base (like Confluence search) that supports full-text search, ranking by relevance and freshness, and respects per-document access control.",
+        answer: {
+          short:
+            "Index documents into Elasticsearch with an inverted index for full-text matching, rank with BM25 blended with freshness and click-through signals, and bake access control into the index itself so permission checks never happen as a slow post-query filter.",
+          detailed:
+            "Ingestion: a CDC (change data capture) pipeline or explicit publish-event listens for document create/update/delete and pushes to an indexing queue; an Indexer Worker tokenizes the content (stemming, stop-word removal, language detection), and writes to Elasticsearch with fields: title, body (analyzed for full-text), tags, last_updated, view_count, and — critically — acl: an array of role/group IDs allowed to view it. Query: incoming search request resolves the user's group memberships, and the ES query includes a 'filter: acl in [user's groups]' clause — this means permission checks happen inside the index lookup (fast, uses ES's filter cache) rather than as an application-layer filter after fetching results (which would require over-fetching to backfill a page after removing unauthorized hits). Ranking combines BM25 (term frequency/inverse document frequency relevance score) with a freshness decay (recently updated docs score higher — most useful in fast-moving wikis) and a popularity signal (view_count, or better, click-through rate from past searches, learned via periodic re-ranking). Typo tolerance and synonyms (e.g., 'k8s' → 'kubernetes') are handled via ES's fuzzy matching and a synonym filter maintained by the team. Reindexing on doc update is incremental (single-document upsert), not a full rebuild — full rebuilds are reserved for analyzer/schema changes and run as a blue-green index swap with zero downtime.",
+        },
+        keyPoints: [
+          "Bake ACLs into the document's index entry and filter at query time inside Elasticsearch — never fetch-then-filter in application code, it breaks pagination and leaks document existence",
+          "BM25 alone isn't enough for a living knowledge base — blend in freshness decay and click/popularity signals so stale-but-keyword-matchy docs don't outrank the current canonical one",
+          "Incremental single-doc indexing on every update keeps the index fresh in seconds; reserve full reindexing for schema/analyzer changes via blue-green index swap",
+          "Synonym and typo tolerance (fuzzy match, custom synonym dictionaries) matter enormously for internal jargon-heavy content — generic search tuning underperforms here",
+        ],
+        followUps: [
+          "How would you handle a document whose permissions change after it's indexed?",
+          "How do you keep search fast when the knowledge base has 10 million documents?",
+          "How would you support 'search within this space/folder only'?",
+        ],
+        example:
+          "Confluence's search indexes permission data alongside content and pushes group-membership filters down into the Lucene query itself — the same general pattern GitHub Code Search uses to make sure a private repo never surfaces in a public search result.",
+      },
+      {
+        id: "api-gateway-design",
+        title: "Design an API gateway for a suite of microservices",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design an API gateway that sits in front of dozens of internal microservices (like Atlassian's suite — Jira, Confluence, Bitbucket) handling auth, routing, and rate limiting.",
+        answer: {
+          short:
+            "A stateless edge layer that terminates TLS, authenticates once, routes by path/host to the right backend via service discovery, enforces per-tenant rate limits with a token bucket, and emits uniform observability — so individual services don't each reimplement these cross-cutting concerns.",
+          detailed:
+            "Responsibilities, top to bottom of the request path: (1) TLS termination and request validation (size limits, malformed JSON rejected early, cheap to do at the edge). (2) AuthN: validate JWT/OAuth token signature and expiry once at the gateway — downstream services trust a signed internal header (e.g., X-User-Id, X-Tenant-Id) instead of re-validating tokens, saving redundant work across dozens of services. (3) AuthZ: coarse-grained checks (does this token have the right scope for this route) happen at the gateway; fine-grained, resource-level checks (can this user edit this specific issue) stay in the owning service, which has the domain context. (4) Routing: path-prefix or host-based routing (e.g., /jira/* → Jira service) resolved via a service registry (Consul/Eureka) or static config, with health-check-aware load balancing so traffic never routes to an unhealthy instance. (5) Rate limiting: token bucket per (tenant, route) pair backed by Redis (INCR + EXPIRE, or a Lua script for atomicity) — protects backend services from a single noisy tenant. (6) Resilience: circuit breaker per backend (trip after N consecutive failures, fail fast instead of piling up timeouts) and configurable per-route timeouts/retries with jitter. (7) Observability: every request gets a trace ID injected at the gateway and propagated downstream, plus uniform access logs and latency histograms — this is often the gateway's most underrated value, since it turns 'add tracing' from an N-service problem into a 1-service problem.",
+        },
+        keyPoints: [
+          "Centralize coarse authN/authZ and TLS termination at the gateway so services trust a signed internal header instead of each re-validating tokens",
+          "Keep fine-grained, resource-level authorization in the owning service — the gateway doesn't have the domain context to know if 'this user' can edit 'this specific issue'",
+          "Rate limit per (tenant, route), not globally — one noisy tenant shouldn't be able to degrade service for everyone, and one hot route shouldn't starve quota for unrelated ones",
+          "Inject a trace ID at the gateway and propagate it downstream — this single change makes distributed tracing tractable across dozens of services",
+        ],
+        followUps: [
+          "How do you avoid the gateway itself becoming a single point of failure?",
+          "How would you roll out a new version of a backend service with zero downtime through the gateway?",
+          "What's the trade-off between a centralized gateway and a service-mesh sidecar model?",
+        ],
+        example:
+          "Atlassian's edge gateway (Micros/Envoy-based) authenticates once and forwards a signed Atlassian-Account-Id header to every downstream call across Jira, Confluence, and Bitbucket — letting each product team skip reimplementing OAuth validation in every service.",
+      },
+      {
+        id: "version-control-docs",
+        title: "Design a version control system for documentation",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a version control system for documentation pages (like Confluence's page history) that lets users see past versions, diff changes, and revert.",
+        answer: {
+          short:
+            "Store every saved edit as an immutable version row holding either a full snapshot or a diff against the previous version, and reconstruct any version on read by replaying diffs from the nearest snapshot — never mutate history in place.",
+          detailed:
+            "Two storage strategies, and real systems use a hybrid: (1) Full snapshot per version — simplest, fast reads (no reconstruction needed), but storage cost scales linearly with edit count × document size — wasteful for a page edited 500 times. (2) Diff-based — store only the delta (using a text diff algorithm like Myers diff, the same family git uses) between version N and N-1; cheap to store, but reconstructing version 1 of a 500-version document means replaying 499 diffs, which is slow. The practical hybrid: store a full snapshot every K versions (e.g., every 20th edit) and diffs in between — reconstruction never replays more than K diffs from the nearest snapshot. Schema: page_versions(id, page_id, version_number, author_id, created_at, content_snapshot NULLABLE, diff_from_previous NULLABLE, is_snapshot BOOLEAN). Diff rendering for the UI (showing 'added 3 lines, removed 1' between two versions) is computed on-demand at view time using the same diff algorithm, not stored redundantly. Revert is implemented as a new version whose content equals an old version's reconstructed content — never as deleting/rewriting history, which would break the audit trail and any links/permissions tied to specific version IDs. Concurrent edit conflicts (two users editing offline, both come back online) are resolved either with last-write-wins plus a conflict-version flag for manual merge, or — for richer collaborative cases — by funneling through the same OT/CRDT machinery used in real-time editors.",
+        },
+        keyPoints: [
+          "Hybrid storage — full snapshot every K versions, diffs in between — bounds both storage cost and reconstruction time; pure-snapshot or pure-diff each fail at scale in one direction",
+          "Revert creates a NEW version with old content; it never deletes or rewrites history — history must stay append-only for audit and stable permalink guarantees",
+          "Diffs for display (UI 'what changed') are computed on-demand, not stored twice — storing both the version diff and a display diff is redundant",
+          "Concurrent offline edits need an explicit conflict-resolution policy (last-write-wins + flag, or full OT/CRDT) — silently dropping one user's edit is the single most common bug in naive implementations",
+        ],
+        followUps: [
+          "How would you support branching (draft vs published versions)?",
+          "How do you keep diff computation fast for a 50-page document?",
+          "How would you implement 'who changed this paragraph last' (blame view)?",
+        ],
+        example:
+          "Git itself uses exactly this hybrid: objects are stored as full blobs but packed into delta-compressed packfiles during garbage collection, trading a bit of read-time CPU for a large reduction in repository size — the same trade-off documentation version history makes at a page level.",
+      },
+      {
+        id: "real-time-analytics-platform",
+        title: "Design a real-time analytics platform",
+        difficulty: "Hard",
+        category: "classic-system-design-problems",
+        question:
+          "Design a real-time analytics platform that ingests millions of events per second and powers live dashboards with second-level latency.",
+        answer: {
+          short:
+            "Split the pipeline into a fast streaming path (Kafka → stream processor → pre-aggregated OLAP store) for live dashboards and a slower batch path for deep historical analysis, because no single system is both cheap-at-scale and millisecond-fresh.",
+          detailed:
+            "Ingestion: client/server SDKs send events to a collector service, which validates and writes to Kafka partitioned by a key that keeps related events together (e.g., user_id or session_id) for ordered processing. Stream processing: a Flink or Kafka Streams job consumes the topic and performs windowed aggregation — e.g., 'count of page_view events per page per 10-second tumbling window' — emitting pre-aggregated rows rather than raw events. This is the key design decision: dashboards query pre-aggregated rollups (by minute/hour), never raw events, because scanning billions of raw rows per dashboard refresh is a latency and cost disaster. Storage: pre-aggregated results land in a column-oriented OLAP store (ClickHouse or Druid) optimized for fast group-by/filter queries over time-series data; raw events also land in cheap, durable storage (S3 + Parquet via a separate batch sink) for the cases where someone needs to recompute a historical metric definition that didn't exist when the data was first ingested. Late/out-of-order events (a mobile client offline for 10 minutes) are handled via watermarks in the stream processor — a window stays open for a grace period after its nominal end time to admit slightly-late events before finalizing the aggregate. Dashboard reads hit the OLAP store directly with sub-second query latency; for true real-time (sub-5-second) metrics, a small in-memory layer (Redis counters) bypasses the OLAP store entirely for the handful of 'live counter' widgets that need it.",
+        },
+        keyPoints: [
+          "Never query raw events for a dashboard — pre-aggregate in the stream processor into rollups (per minute/hour) and query those; raw-event scans don't scale to 'second-level' latency requirements",
+          "Two storage tiers solve two different needs: OLAP store (ClickHouse/Druid) for fast recent rollups, cold object storage (S3/Parquet) for cheap long-term raw retention and metric redefinition",
+          "Watermarks (a grace period before finalizing a time window) are mandatory — without them, a slightly-late event either gets dropped or corrupts an already-finalized aggregate",
+          "Reserve a separate in-memory counter path (Redis) only for the few truly sub-5-second 'live count' widgets — running the whole pipeline at that latency for everything is unnecessary cost",
+        ],
+        followUps: [
+          "How do you handle a metric definition changing after a year of data has already been aggregated?",
+          "How would you detect and handle a sudden 100x spike in event volume?",
+          "What happens to in-flight aggregations if the stream processor crashes mid-window?",
+        ],
+        example:
+          "Mixpanel and Amplitude both compute pre-aggregated daily/hourly rollups during ingestion specifically so a dashboard query never has to scan raw event tables — the raw events still exist in cold storage, but only for re-processing, never for live reads.",
+      },
+      {
+        id: "scalable-authn-authz",
+        title: "Design a scalable authentication & authorization system",
+        difficulty: "Hard",
+        category: "classic-system-design-problems",
+        question:
+          "Design an authentication and authorization system that supports millions of users, SSO, and fine-grained per-resource permissions across many services.",
+        answer: {
+          short:
+            "Separate authentication (proving who you are, done once via a central identity service issuing short-lived signed tokens) from authorization (what you can do, checked independently by each resource owner) — conflating the two into one monolithic check is the most common design mistake.",
+          detailed:
+            "Authentication: a central Identity Service handles login (password + MFA, or SSO via SAML/OIDC against an enterprise IdP like Okta), and on success issues a short-lived JWT access token (5-15 min TTL) plus a longer-lived refresh token (stored securely, often httpOnly cookie). The JWT is signed (RS256) so any downstream service can verify it locally using a public key — no network call back to the identity service per request, which is what makes this scale. Refresh tokens are stored server-side (Redis or DB) so they can be revoked (e.g., on logout or compromise) — access tokens can't be revoked before expiry, which is exactly why their TTL is kept short. Authorization: two common models — RBAC (Role-Based: user has roles, roles have permissions — simple, fast, but coarse) and ABAC/ReBAC (Attribute or Relationship-Based: 'can user X edit document Y' depends on the relationship between X and Y, e.g., document owner or shared-with — needed for resource-level sharing like Google Drive). For ReBAC at scale, a dedicated authorization service (Google's Zanzibar is the reference architecture) stores relationship tuples (object, relation, subject) and answers 'check' queries with bounded staleness via a global logical clock, letting it scale to billions of objects without becoming a bottleneck for every single resource check. Services call this authorization service (or a local cache of recent decisions) rather than embedding permission logic themselves, keeping the policy centralized and auditable.",
+        },
+        keyPoints: [
+          "Authentication (who are you) and authorization (what can you do) are separate systems with separate scaling and revocation requirements — don't build one monolithic 'auth' service that does both",
+          "Short-lived signed JWTs let every downstream service verify identity locally (no network round-trip) — the trade-off is they can't be revoked before expiry, so keep TTL short and put revocation power in the refresh token instead",
+          "RBAC is fast and simple for coarse permissions (admin/editor/viewer); ReBAC (relationship-based, Zanzibar-style) is what you need for fine-grained resource sharing like 'this specific user can edit this specific document'",
+          "Centralize authorization decisions in one service/library even if you decentralize enforcement — scattering permission logic across services is how privilege-escalation bugs are born",
+        ],
+        followUps: [
+          "How do you revoke access immediately when a JWT can't be invalidated before it expires?",
+          "How would you design 'can user X view document Y, which is in folder Z, which is shared with X's team' efficiently?",
+          "How do you handle authorization checks when the authorization service itself is briefly unavailable?",
+        ],
+        example:
+          "Google's Zanzibar paper (powering authorization for Drive, Calendar, and Cloud) processes ~10 million authorization checks per second across the company by modeling permissions as a relationship graph rather than per-service ACL lists — it's the textbook answer for 'fine-grained authorization at scale.'",
+      },
+      {
+        id: "workflow-automation-platform",
+        title: "Design a workflow automation platform",
+        difficulty: "Hard",
+        category: "classic-system-design-problems",
+        question:
+          "Design a workflow automation platform (like Zapier or a CI/CD pipeline engine) where users chain triggers and actions, and the system reliably executes multi-step workflows.",
+        answer: {
+          short:
+            "Model a workflow as a DAG of steps with explicit state persisted after every step, execute it via a durable workflow engine that can resume from the last completed step after a crash, and make every action idempotent so retries are always safe.",
+          detailed:
+            "A workflow is defined as a DAG: trigger node (webhook, schedule, event) feeding into a sequence/branch of action nodes (call API, transform data, conditional branch). The execution model is the crux of the design: a naive in-memory interpreter loses all progress if the worker process crashes mid-workflow. The durable approach (used by Temporal, AWS Step Functions, and internally by CI/CD engines) persists the execution state after every single step completes — not just at the end — to a workflow_execution_log (execution_id, step_id, status, output, completed_at). On crash/restart, the engine replays the log to reconstruct exactly where it left off and resumes from the next incomplete step, rather than restarting the whole workflow. Each action step must be idempotent (or the engine deduplicates via an idempotency key per step execution) because 'resume' inherently risks re-attempting a step whose effect already landed but whose completion record didn't get written before the crash. Long-running/async steps (wait for webhook callback, wait 24 hours) are modeled as the workflow suspending — the engine persists 'waiting for event X' and a separate dispatcher wakes it when that event arrives, rather than holding a thread/connection open for hours. Retries use exponential backoff with a max-attempt cap, and a dead-letter queue captures workflows that exhaust retries for human investigation. Branching/conditionals are evaluated against the step's output at execution time, so the DAG can have multiple possible paths defined once but only one taken per run.",
+        },
+        keyPoints: [
+          "Persist execution state after every step (not just workflow completion) — this is what makes 'resume after crash' possible instead of forcing a full restart",
+          "Every action step must be idempotent or deduplicated via a step-level idempotency key — a crash-and-resume model will occasionally re-attempt a step that already partially succeeded",
+          "Long waits (webhook callback, scheduled delay) should suspend the workflow as persisted state, not hold a thread or connection open — a separate event dispatcher wakes the workflow later",
+          "A dead-letter queue for workflows that exhaust retries is mandatory — silent infinite retry or silent failure are both unacceptable for something users built business processes on top of",
+        ],
+        followUps: [
+          "How would you let a user pause a running workflow and resume it days later?",
+          "How do you prevent one tenant's huge workflow fan-out from starving capacity for everyone else?",
+          "How would you version a workflow definition so in-flight executions aren't broken by an edit?",
+        ],
+        example:
+          "Temporal (and its predecessor, Uber's Cadence) makes this durable-execution model a first-class primitive — workflow code looks like a normal function, but the runtime transparently checkpoints every step so a worker crash mid-execution resumes exactly where it left off, which is why it's become the default answer to this exact interview question.",
+      },
+      {
+        id: "logging-monitoring-system",
+        title: "Design a logging & monitoring system",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a centralized logging and monitoring system that ingests logs/metrics from thousands of services and lets engineers search logs and alert on metric anomalies.",
+        answer: {
+          short:
+            "Split logs and metrics into two pipelines with different storage shapes — logs go through a buffered collector into a search-optimized store (Elasticsearch), metrics go through local pre-aggregation into a time-series database — because querying patterns and cardinality requirements are fundamentally different.",
+          detailed:
+            "Logs: each service writes structured (JSON) log lines locally; a lightweight agent (Fluentd/Filebeat/Vector) tails the log file and forwards to a buffered collector (often via Kafka, to absorb bursty write volume without losing logs if the indexing layer is briefly slow). An indexer consumes the buffer and writes to Elasticsearch with a time-based index strategy (one index per day, e.g., logs-2026-06-30) so old indices can be cheaply deleted/archived to meet retention policies, and so queries can be scoped to a time range without scanning the entire dataset. Metrics: services expose a /metrics endpoint (Prometheus-style) or push counters/gauges/histograms directly; a local agent scrapes/aggregates at fixed intervals (e.g., every 15s) BEFORE sending — this is the critical difference from logs, since sending every raw metric event would have catastrophic cardinality (a single counter incremented 10,000 times/sec must become one aggregated point per interval, not 10,000 rows). Aggregated points land in a time-series DB (Prometheus, InfluxDB, or M3) optimized for fast range-queries and downsampling (keep 15s resolution for a week, 5-min resolution for a year). Alerting: a rules engine evaluates metric queries on a schedule (e.g., 'p99 latency > 500ms for 5 consecutive minutes') and fires to an on-call system (PagerDuty) with deduplication so a flapping condition doesn't page someone 50 times. Cardinality control is the operational nightmare in practice — a label like user_id on a metric silently creates millions of unique time series and can take down the whole metrics backend, so label allowlisting/validation at the agent is a hard requirement, not a nice-to-have.",
+        },
+        keyPoints: [
+          "Logs and metrics need fundamentally different pipelines — logs are search-optimized (Elasticsearch, time-bucketed indices), metrics are aggregation-optimized (time-series DB, pre-aggregated before storage) — don't force one system to do both well",
+          "Buffer log ingestion through a queue (Kafka) so a slow or down indexer doesn't cause log loss or back-pressure on the application services producing logs",
+          "Pre-aggregate metrics at the agent/collector before they hit the backend — sending every raw event for a high-frequency counter creates catastrophic write volume and cardinality",
+          "Uncontrolled metric label cardinality (e.g., a user_id label) is the most common cause of a metrics backend falling over in production — validate/allowlist labels at ingestion",
+        ],
+        followUps: [
+          "How would you implement log retention that's cheap for old data but fast for recent queries?",
+          "How do you avoid alert fatigue from a metric that flaps above and below a threshold?",
+          "How would you correlate a slow request across logs, metrics, and traces?",
+        ],
+        example:
+          "Prometheus's entire data model is built around bounded cardinality and pull-based scraping specifically to prevent the 'one bad label tanks the whole system' failure mode — its documentation explicitly warns against using unbounded values (user IDs, email addresses) as label values for exactly this reason.",
+      },
+      {
+        id: "rate-limiter",
+        title: "Design a rate limiter",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a rate limiter that can throttle requests per user/API-key across a distributed fleet of API servers, supporting bursts but enforcing a sustained average rate.",
+        answer: {
+          short:
+            "Use a token bucket algorithm backed by a shared Redis store (atomic via a Lua script) so every server instance enforces the same limit consistently, and pick the algorithm based on whether bursts should be allowed (token bucket) or smoothed out (sliding window).",
+          detailed:
+            "Algorithms, ranked by what they actually solve: Fixed window (counter resets every N seconds) is simplest but has a boundary bug — a user can send 2x the limit by timing requests at the edge of two adjacent windows. Sliding window log (store a timestamp per request, count requests in the last N seconds) is accurate but memory-heavy at high volume. Sliding window counter (weighted average of current and previous fixed window) approximates sliding-log accuracy with fixed-window memory cost — good default. Token bucket (a bucket holds up to B tokens, refills at rate R/sec, each request consumes 1 token, request rejected if bucket empty) is the best choice when you want to allow bursts up to bucket size while still enforcing a long-term average rate — this is what most production rate limiters (Stripe, AWS API Gateway) actually use. Distributed enforcement: the bucket state (current token count, last refill timestamp) lives in Redis, not in-process — otherwise each of N API servers enforces its own independent limit, letting a client get N times the intended quota by hitting different servers. The check-and-decrement must be atomic to avoid a race where two concurrent requests both read '1 token left' and both proceed — implemented as a single Lua script executed atomically by Redis (EVAL), computing elapsed-time-based refill and decrementing in one round trip. Response: a rejected request gets HTTP 429 with a Retry-After header computed from the refill rate. For very high QPS, an optimization is to rate-limit at the edge/gateway (cheap, coarse) and again at the service level (precise, per-resource) rather than a single check trying to do both.",
+        },
+        keyPoints: [
+          "Token bucket allows controlled bursts up to a cap while enforcing a long-term average rate — this is the production-default algorithm for a reason; fixed-window has a real boundary-doubling bug",
+          "Limiter state must live in a shared store (Redis) across all API server instances — per-instance in-memory counters let a client multiply their effective quota by the number of servers",
+          "The check-and-decrement operation must be atomic (Lua script / single Redis command) — doing a separate GET then SET creates a race condition under concurrent requests",
+          "Return Retry-After on a 429 — it tells well-behaved clients exactly when to retry instead of hammering the limiter immediately",
+        ],
+        followUps: [
+          "How would you rate-limit per IP when many users are behind the same corporate NAT?",
+          "How do you avoid Redis becoming a bottleneck/single point of failure for every single request?",
+          "How would you implement different limits for different API tiers (free vs paid)?",
+        ],
+        example:
+          "Stripe's public rate limiter documentation describes exactly a token-bucket model with burst allowance, and their API responses include a Retry-After header — this is close to the canonical reference implementation interviewers expect you to arrive at.",
+      },
+      {
+        id: "parking-lot-system",
+        title: "Design a parking lot system",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a parking lot system (object-oriented design) that supports multiple vehicle types, multiple floors, ticketing, and fee calculation.",
+        answer: {
+          short:
+            "Model it as ParkingLot → Floor → Spot (typed by vehicle size), assign spots via a strategy interface so the allocation policy can change independently of the data model, and compute fees from a ticket that records entry time and spot type.",
+          detailed:
+            "Class design: ParkingLot has many Floors; each Floor has many Spots (each Spot has a type: COMPACT/REGULAR/LARGE/HANDICAPPED and a status: FREE/OCCUPIED); a Vehicle has a type (MOTORCYCLE/CAR/TRUCK) and a license plate. On entry, a SpotAllocationStrategy (interface, so the policy is swappable — e.g., NearestSpotStrategy vs SameFloorPreferenceStrategy) finds a free, size-compatible spot — a motorcycle can park in any spot type, but a truck only fits LARGE. A Ticket is created (id, vehicle, spot, entry_time) and the spot is marked OCCUPIED. On exit, a FeeCalculator (also an interface — flat-rate vs per-hour vs progressive-rate strategies all implement it) computes the charge from (exit_time - entry_time) and the spot/vehicle type, a Payment is processed, and the spot is freed. Concurrency matters even in 'just OOD': two cars approaching the last free spot simultaneously must not both be allocated it — the spot's status transition (FREE → RESERVED → OCCUPIED) needs a DB-level row lock or an atomic compare-and-swap (UPDATE spots SET status='OCCUPIED' WHERE id=X AND status='FREE', check rows_affected). A real-time display ('floor 3: 12 spots free') is maintained as a denormalized counter per floor, decremented/incremented on each allocation/release rather than COUNT(*)-ing spots on every display refresh. Extensions interviewers often probe: reservations (pre-book a spot before arrival — needs a hold/expiry mechanism), EV charging spots (a spot subtype with extra constraints), and multiple entry/exit gates (each gate needs its own ticket-issuing terminal talking to the same shared spot inventory).",
+        },
+        keyPoints: [
+          "Use a Strategy interface for spot allocation AND for fee calculation — interviewers are usually testing whether you decouple policy (which spot, what price) from structure (lot/floor/spot data model), not whether you hardcode one rule",
+          "Atomic spot-status transitions (compare-and-swap or DB row lock) are required even in a 'simple' OOD problem — two simultaneous arrivals for the last spot is the obvious race condition to call out",
+          "Maintain a denormalized free-spot counter per floor rather than COUNT(*) querying spots on every display refresh — small detail, but shows you think about read-heavy access patterns",
+          "A Ticket (not the Vehicle or Spot) is the right place to record entry_time — it's the natural join point for fee calculation and decouples vehicle/spot lifecycle from a specific parking session",
+        ],
+        followUps: [
+          "How would you add a reservation feature where a spot is held for 15 minutes before a no-show releases it?",
+          "How would you support electric vehicle charging spots with a maximum charging duration?",
+          "How would you handle the lot being full and routing cars to a nearby overflow lot?",
+        ],
+        example:
+          "This is one of the most common LLD/OOD interview questions precisely because the 'trick' isn't the parking domain — it's whether you reach for Strategy/Interface patterns for the two genuinely variable parts (allocation policy, pricing policy) instead of hardcoding if/else chains that fight every follow-up question.",
+      },
+      {
+        id: "database-design-approach",
+        title: "Database design — how do you approach it from a blank slate?",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Given a new product requirement, walk through how you'd approach database design from scratch — entity modeling through to indexing and scaling decisions.",
+        answer: {
+          short:
+            "Start from the access patterns (what queries will actually run, and how often) before drawing any schema — the right normalization level, indexes, and even SQL-vs-NoSQL choice all fall out of read/write patterns, not out of the entities alone.",
+          detailed:
+            "Step 1 — identify entities and relationships from the domain (the obvious part: User, Order, Product, etc., with 1:1/1:N/N:M relationships). Step 2 — and this is the part juniors skip — list the actual queries the application needs to run, with rough frequency and latency requirements ('get a user's last 20 orders, p99 < 50ms, called on every page load' vs 'generate a monthly revenue report, can take 30 seconds, run once a day'). This determines everything downstream. Step 3 — normalize to 3NF first to eliminate update anomalies and redundancy, then deliberately denormalize specific hot paths once you know which ones are hot (e.g., storing a denormalized order_total on the Order row instead of summing order_items on every read, accepting the small risk of drift in exchange for avoiding a join on the most frequent query in the system). Step 4 — choose storage engine based on query shape: relational (Postgres/MySQL) for data with strong relationships and multi-row transactional consistency needs; a document store (MongoDB) when most reads fetch one self-contained entity (a product page bundling reviews/specs) and joins are rare; a wide-column store (Cassandra) when you have very high write throughput and look up by a known key (time-series, event logs); a key-value store (Redis/DynamoDB) for pure lookups by primary key needing single-digit-ms latency. Step 5 — indexing: add an index for every column in a frequent WHERE/JOIN/ORDER BY clause, but no more — every index speeds reads and slows every write, so indexing 'just in case' has a real, ongoing cost. Step 6 — plan for scale before you need it conceptually (read replicas for read-heavy, then sharding strategy and shard key chosen specifically to keep the most frequent queries single-shard) even if you don't implement it on day one.",
+        },
+        keyPoints: [
+          "Query patterns, not entity relationships alone, should drive schema decisions — the same ER diagram can justify wildly different physical designs depending on read/write frequency and latency needs",
+          "Normalize first (3NF, eliminates anomalies), then denormalize deliberately and only for proven hot paths — premature denormalization recreates update-anomaly bugs for no measured benefit",
+          "SQL vs NoSQL is a query-shape decision, not a popularity contest: relational for multi-entity transactional consistency, document for self-contained-entity reads, wide-column for high-throughput key-based writes, key-value for pure latency-critical lookups",
+          "Every index has a cost on every write — justify each one against an actual frequent query, don't index speculatively",
+        ],
+        followUps: [
+          "How would you choose a shard key for a multi-tenant SaaS database?",
+          "When would you reach for a NoSQL document store over a relational table with a JSONB column?",
+          "How do you evolve a schema (add a NOT NULL column) on a table with 100 million rows without downtime?",
+        ],
+        example:
+          "Discord famously denormalized message storage and ultimately moved from MongoDB to Cassandra specifically because their actual access pattern — fetch messages for a channel ordered by time — was a wide-column-store's ideal case, a decision driven entirely by query shape rather than by the conceptual entity model of 'messages belong to channels.'",
+      },
+      {
+        id: "snake-game",
+        title: "Design the Snake game",
+        difficulty: "Easy",
+        category: "classic-system-design-problems",
+        question:
+          "Design the classic Snake game — data structures for the snake's body, movement, collision detection, and food spawning.",
+        answer: {
+          short:
+            "Represent the snake as a deque of grid coordinates (head at one end, tail at the other) so movement is O(1) — push a new head, pop the tail unless food was eaten — and use a hash set of the same coordinates for O(1) collision checks instead of scanning the body list.",
+          detailed:
+            "Core data structures: the snake's body is a Deque<Point> (double-ended queue) ordered head-to-tail; a parallel HashSet<Point> mirrors the same cells purely for fast 'is this cell occupied by the snake' lookups, since checking 'does the new head position collide with the body' by scanning a list is O(n) but a hash set lookup is O(1) — this duplication (deque + set, kept in sync on every move) is the key insight interviewers look for. Movement: on each tick, compute newHead = currentHead + directionVector; check boundary collision (newHead outside grid) and self-collision (newHead in the body hash set, with a subtle exception — if newHead equals the current tail position AND the snake isn't eating this tick, it's not a collision, because the tail is about to move away) — both are game-over conditions. If newHead matches the food's position: push newHead to the deque and hash set without popping the tail (snake grows), then spawn new food at a random empty cell (validated against the occupied-set so food never spawns on the snake). Otherwise: push newHead, then pop and remove the old tail from both structures (snake moves without growing). Food spawning at a guaranteed-empty cell on a near-full board needs care — for a grid that's mostly full, repeatedly generating random coordinates and checking 'is it free' degrades badly; better to maintain a set/list of currently-free cells and pick uniformly from that. Game loop runs on a fixed-interval timer (e.g., setInterval at a speed that may increase as score grows), re-rendering only the changed cells (old tail cleared, new head drawn) rather than redrawing the entire board each tick for performance.",
+        },
+        keyPoints: [
+          "Deque + HashSet kept in sync is the core trick — deque gives O(1) head-push/tail-pop for movement, hash set gives O(1) self-collision checks instead of an O(n) scan through the body",
+          "The tail cell is a collision exception: a new head landing exactly on the current tail is safe (not a collision) because the tail vacates that cell in the same tick, unless the snake just ate and the tail isn't moving",
+          "Eating food = push head without popping tail (grows by one); normal move = push head AND pop tail (length constant) — this single conditional is the entire 'growth' mechanic",
+          "On a nearly-full board, maintaining an explicit free-cell set for food spawning avoids the random-rejection-sampling slowdown of repeatedly guessing occupied cells",
+        ],
+        followUps: [
+          "How would you support multiplayer snakes on the same board?",
+          "How would you detect collision efficiently if the board were a sparse, very large grid?",
+          "How would you persist and resume game state if the player's connection drops?",
+        ],
+        example:
+          "This exact deque+hashset combination is the accepted optimal solution on LeetCode's 'Design Snake Game' (#353) — it's a small problem, but it's a clean test of whether a candidate reaches for the right auxiliary data structure instead of brute-force scanning under time pressure.",
+      },
+      {
+        id: "ticketing-system-itsm",
+        title: "Design a ticketing system like Jira (ITSM / support-desk angle)",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a ticketing system for IT support/customer service (think Jira Service Management or Zendesk) — focusing on ticket lifecycle, SLA tracking, and auto-assignment, distinct from a general project-management tool.",
+        answer: {
+          short:
+            "Center the design on a Ticket state machine with SLA timers attached to specific states, an assignment engine that routes by queue/skill/load, and an escalation scheduler that fires when a timer expires — the ITSM angle is fundamentally about time-bound obligations, not just status tracking.",
+          detailed:
+            "A support Ticket differs from a generic Jira issue in one crucial way: it carries SLA commitments tied to its state — e.g., 'first response within 1 hour of creation' and 'resolution within 8 business hours for Priority-1.' Model: Ticket(id, queue_id, priority, status, created_at, sla_policy_id); SLAClock(ticket_id, metric: FIRST_RESPONSE | RESOLUTION, target_at, paused_at NULLABLE, breached BOOLEAN) — the clock pauses when a ticket enters a WAITING_ON_CUSTOMER status (you shouldn't be penalized for SLA while waiting on the reporter) and resumes on reply, which is the detail most naive designs miss. A scheduled job (or a delayed-message queue like SQS with per-message delay, or a min-heap of upcoming deadlines polled periodically) checks for clocks approaching/exceeding target_at and fires escalation events (notify manager, auto-reprioritize) — this must be efficient at scale (millions of open tickets), so indexing/querying by target_at with a covering index, or using a time-bucketed delay queue, beats a naive 'scan all open tickets every minute.' Auto-assignment: a routing engine assigns incoming tickets to an agent based on queue (which team owns this category), current load (agents with fewer open tickets get priority — round-robin or least-connections), and skill match (tagged skills vs ticket category) — implemented as a rules engine evaluated at ticket-creation time, falling back to an unassigned pool with manager-triggered manual assignment if no agent matches. Business-hours-aware SLA math (an 8-hour SLA submitted Friday at 5pm shouldn't breach over the weekend) requires a calendar service that converts wall-clock duration to business-hour duration per the support org's configured hours and holidays.",
+        },
+        keyPoints: [
+          "SLA clocks are first-class objects with their own pause/resume semantics (pausing while WAITING_ON_CUSTOMER) — this is the detail that separates a real support-ticketing design from a generic issue tracker",
+          "Checking for SLA breaches must scale past 'a cron job scanning every open ticket' — index by target_at or use a delay queue so the check cost doesn't grow linearly with total open tickets",
+          "Auto-assignment is a rules engine evaluated at creation time (queue ownership + current agent load + skill match), with an explicit unassigned fallback — never silently drop a ticket no rule matches",
+          "SLA timers must be business-hours-aware, not wall-clock — an 8-hour SLA submitted Friday evening should land Monday, not over the weekend; this needs an explicit calendar/holiday service",
+        ],
+        followUps: [
+          "How would you handle SLA policies that differ per customer (enterprise vs free tier)?",
+          "How do you avoid double-escalating a ticket whose SLA breach event fires twice due to an at-least-once queue?",
+          "How would you report 'percentage of tickets meeting SLA this month' efficiently across millions of historical tickets?",
+        ],
+        example:
+          "Zendesk and Jira Service Management both implement pausable SLA clocks exactly for the 'waiting on customer' case — it's frequently the first follow-up question interviewers ask if a candidate's initial design treats the SLA timer as a simple created_at + duration calculation.",
+      },
+      {
+        id: "url-shortening-service",
+        title: "Design a URL shortening service",
+        difficulty: "Easy",
+        category: "classic-system-design-problems",
+        question:
+          "Design a URL shortener (like bit.ly) that generates short codes for long URLs, redirects with low latency at high read volume, and handles billions of URLs.",
+        answer: {
+          short:
+            "Generate the short code from a base62-encoded auto-incrementing ID (or a hash with collision handling) so lookups are a single indexed key fetch, cache the hot redirect mappings in Redis since reads vastly outnumber writes, and use a 301/302 choice deliberately based on whether you need click analytics.",
+          detailed:
+            "Code generation, two approaches: (1) Counter-based — a centralized (or sharded-range) auto-incrementing ID, base62-encoded (a-z, A-Z, 0-9) into a short string — id 125 encodes to a few characters, guarantees uniqueness by construction, no collision handling needed, but requires coordinating ID allocation (e.g., pre-allocate ranges of IDs to each app server so they don't need a synchronous call per request). (2) Hash-based — MD5/SHA hash of the long URL, take the first 7 characters — simpler conceptually but needs collision detection (check if that code already maps to a different URL; if so, append a salt and rehash) and doesn't guarantee uniqueness for free. Most production systems prefer counter-based for its collision-free guarantee. Storage: a simple key-value table/store (short_code → long_url, created_at, expiry, click_count) — this is an ideal fit for a key-value store (DynamoDB) or a simple indexed relational table, since lookups are always by exact primary key, never by range or complex query. Read path dominates by orders of magnitude (every redirect is a read; creation is rare by comparison) — so a Redis cache in front of the DB, populated on first access or pre-warmed for known-popular links, absorbs the vast majority of redirect traffic and keeps DB load low. Redirect status code matters: 301 (permanent) lets browsers cache the redirect and skip your server on repeat visits — great for server load, terrible if you need accurate click analytics; 302 (temporary) forces every click through your server, giving you complete click tracking at the cost of more redirect traffic to handle. Custom aliases and expiry are straightforward additions on top of the same schema. At billions-of-URLs scale, the underlying table is sharded by short_code's hash (consistent hashing) so no single node holds a disproportionate fraction of keys.",
+        },
+        keyPoints: [
+          "Counter-based base62 encoding guarantees uniqueness by construction with no collision-handling complexity — prefer it over hash-based generation unless you have a specific reason not to coordinate ID allocation",
+          "Reads (redirects) outnumber writes (shortens) by orders of magnitude — a cache (Redis) in front of the datastore is the single highest-leverage optimization, not a clever storage engine choice",
+          "301 vs 302 is a real product decision, not a technical footnote: 301 reduces server load via browser caching but blinds you to repeat-click analytics; 302 gives full analytics at the cost of every click hitting your servers",
+          "The data access pattern (always exact-match lookup by short_code) makes this a textbook key-value store fit — no need for a relational database's join/query capabilities",
+        ],
+        followUps: [
+          "How would you pre-allocate ID ranges to multiple app servers without a synchronous coordination call per request?",
+          "How would you implement link expiry without a background job scanning the entire table?",
+          "How would you handle a celebrity's shortened link suddenly getting 1 million clicks/minute (hot key problem)?",
+        ],
+        example:
+          "This is the most commonly asked 'warm-up' system design question precisely because it has a small, bounded scope but still surfaces real decisions (ID generation strategy, cache-aside pattern, 301 vs 302) that distinguish a candidate who's reasoned about trade-offs from one who's only memorized 'use a cache.'",
+      },
+      {
+        id: "notification-service-internals",
+        title: "Design a notification service (API & delivery internals)",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design the notification SERVICE itself — its API contract, template system, and per-user preference center — as a building block other services call into, distinct from the end-to-end multi-channel notification system architecture.",
+        answer: {
+          short:
+            "Expose a single 'send' API that takes an event type and data payload (never raw message text), resolve the actual message from a versioned template at send-time, and store user channel preferences as structured opt-in/opt-out state the service consults before every send.",
+          detailed:
+            "API contract: POST /notifications { event_type: 'order_shipped', user_id, data: { order_id, tracking_url } } — callers send semantic event data, never pre-rendered text. This indirection is the single most important design decision: it lets the notification team change wording, add a new language, or change which channel an event_type defaults to, without every calling service needing a deploy. Template system: each event_type maps to a TemplateSet (one template per locale per channel — push has a short title+body, email has subject+HTML body, SMS has a 160-char-budget plain text) stored with a version number; rendering substitutes {{data.fields}} into the template at send time. Preference center: NotificationPreference(user_id, event_category, channel, enabled) — granular enough that a user can disable marketing emails but keep security-alert emails, and the send path checks this table before dispatching to a given channel (with hard-coded exceptions for non-optional categories like security/legal notices, which bypass preference checks entirely by design). Delivery: the service itself doesn't necessarily talk to FCM/Twilio/SES directly — it can enqueue a rendered-message task to channel-specific delivery workers (this is the seam between 'notification service' and 'notification system' architecture), but the service's job ends at producing a correctly localized, correctly-targeted, preference-respecting message. Idempotency at the API boundary: callers pass an idempotency_key (often the business event's own ID) so retrying a failed HTTP call to /notifications never results in a duplicate send. Audit: every send attempt (rendered, suppressed-by-preference, failed) is logged for support/debugging ('why didn't this user get their order confirmation').",
+        },
+        keyPoints: [
+          "Calling services send semantic event data (event_type + structured payload), never pre-rendered text — this indirection is what lets wording/localization/channel-defaults change without redeploying every caller",
+          "Templates are versioned per event_type × locale × channel — email/push/SMS need fundamentally different formats (HTML body vs 160-char budget) from the same logical event",
+          "Preferences are granular per (event_category, channel), with explicit hard-coded exceptions for non-optional categories (security, legal) that always bypass opt-out — silently respecting an opt-out on a fraud alert is a real security bug, not just a UX nitpick",
+          "Idempotency keys at the API boundary (not just in the delivery workers) prevent a caller's HTTP retry from producing a duplicate notification",
+        ],
+        followUps: [
+          "How would you A/B test two different message templates for the same event_type?",
+          "How would you support a new language without a code deploy?",
+          "How would you let a calling service know whether a notification was actually delivered, not just accepted?",
+        ],
+        example:
+          "This is the layer Twilio's and SendGrid's own internal 'notification orchestration' teams build above the raw send APIs — the raw API (send this exact SMS) is the easy part; the template/preference/idempotency layer in front of it is what most of this interview question is actually testing.",
+      },
+      {
+        id: "distributed-messaging-system",
+        title: "Design a distributed messaging system (like Kafka)",
+        difficulty: "Hard",
+        category: "classic-system-design-problems",
+        question:
+          "Design a distributed messaging/event-streaming system that guarantees ordered, durable delivery of messages to multiple consumers at very high throughput.",
+        answer: {
+          short:
+            "Partition each topic across multiple brokers so throughput scales horizontally, guarantee ordering only within a partition (not across the whole topic), replicate each partition to multiple brokers for durability, and let consumers track their own read position so the broker stays simple.",
+          detailed:
+            "Topic & partitioning: a topic is split into P partitions, each an append-only log; a message's partition is chosen by hash(key) % P (or round-robin if no key) — this is why ordering is only guaranteed within a partition, not across the whole topic, and it's the single most important constraint to state explicitly, since most candidates wrongly assume global ordering. Producers choose a key that groups related messages (e.g., user_id) into the same partition specifically to get ordering where it matters. Replication: each partition has a leader broker and N-1 follower replicas; producers write to the leader, followers pull and replicate; a message is considered 'committed' once it's been replicated to a quorum (e.g., ISR — in-sync replica set) of followers, not just written to the leader — this is what survives a leader broker crashing immediately after a write. Consumer model: rather than the broker pushing to consumers (which requires tracking per-consumer state and slows down under a slow consumer), consumers pull and track their own offset (position) in each partition they read — this offset is itself stored durably (in a special internal topic, Kafka's actual approach) so a consumer can crash and resume from its last committed offset. Consumer groups: multiple consumer instances in a group split the partitions among themselves (each partition read by exactly one consumer in the group at a time) for parallel processing, while multiple distinct groups can each independently read the entire topic from their own offset — this is what lets the same event stream serve both a real-time analytics consumer and a slower batch-archival consumer without either affecting the other. Storage: logs are append-only and segmented into files; old segments are deleted/compacted per a configured retention policy (time-based or size-based), and sequential disk I/O for both writes (append) and reads (mostly sequential scan from an offset) is what gives a log-based design dramatically higher throughput than a random-access database for this workload.",
+        },
+        keyPoints: [
+          "Ordering is guaranteed only within a partition, never across an entire topic — producers must choose a partition key deliberately for any messages that need relative ordering",
+          "A write is 'durable' only once replicated to a quorum of followers, not merely written to the leader — acknowledging too early loses messages on a leader crash",
+          "Pull-based consumption with consumer-tracked offsets (not broker-pushed delivery) keeps the broker simple and lets slow consumers fall behind without affecting others or requiring the broker to track per-consumer state",
+          "Consumer groups parallelize work (each partition read by one consumer in the group) while independent groups can each replay the whole stream from their own offset — this dual model is what supports many different downstream use cases off one event stream",
+        ],
+        followUps: [
+          "What happens to in-flight messages if a partition's leader broker crashes?",
+          "How would a consumer handle 'poison pill' messages that repeatedly crash processing?",
+          "How do you rebalance partitions across consumers when a new consumer joins the group?",
+        ],
+        example:
+          "Kafka's actual architecture is essentially the reference answer to this question — partition-level ordering, ISR-based replication, and consumer-tracked offsets stored in an internal __consumer_offsets topic are not implementation trivia, they're the direct answers to the three hardest sub-problems (ordering, durability, delivery tracking) this design question is built around.",
+      },
+      {
+        id: "scalable-chat-application",
+        title: "Design a scalable chat application (like WhatsApp)",
+        difficulty: "Hard",
+        category: "classic-system-design-problems",
+        question:
+          "Design a chat application supporting 1:1 and group messaging, online presence, and message delivery guarantees (sent/delivered/read), at billions of messages per day.",
+        answer: {
+          short:
+            "Maintain a persistent WebSocket connection per online user pinned to a specific chat server (tracked in a connection-routing table), route messages between servers via a pub/sub backbone when sender and recipient aren't on the same server, and queue messages for offline users so delivery is guaranteed once they reconnect.",
+          detailed:
+            "Connection layer: each client holds a long-lived WebSocket to one of many chat servers (load-balanced on connect); a routing table (Redis: user_id → server_id) tracks which server each online user is currently connected to — this is essential because the sender and recipient are very likely connected to different physical servers. Sending a message: client → sender's chat server → message is persisted (write to a message store, partitioned by conversation_id) → server looks up recipient's server_id in the routing table → if recipient is online, publish to a pub/sub channel that the recipient's chat server subscribes to, which then pushes over that recipient's WebSocket; if offline, skip the push and rely on the persisted message being delivered on next reconnect (chat history fetch). Delivery status (sent → delivered → read) is modeled as a small state machine per message per recipient (important for group chats — one message has a distinct delivery state per group member): 'sent' is set once persisted; 'delivered' is set when the recipient's client ACKs receipt over the WebSocket; 'read' is set when the recipient's client reports the message entered view. These ACKs flow back through the same server-to-server pub/sub path in reverse. Group chat fan-out: a message to a 200-person group is NOT fanned out to 200 individual rows at send time for huge groups — instead, store one message row plus per-recipient delivery-status rows lazily created/updated as ACKs arrive, avoiding a 200x write amplification on every single group message. Message storage is typically a wide-column store (Cassandra) partitioned by conversation_id and clustered by timestamp, since the dominant query is 'give me the last N messages in this conversation' — a perfect fit for that access pattern. Presence (online/offline/last-seen) is ephemeral state in Redis with a TTL/heartbeat, separate from message delivery entirely.",
+        },
+        keyPoints: [
+          "A routing table mapping user_id → connected-server-id is the backbone of multi-server chat — without it, there's no way to deliver a message to a recipient connected to a different physical server than the sender",
+          "Delivery status (sent/delivered/read) is per-message-per-recipient, not per-message — this matters enormously for group chats where 200 people have 200 independent delivery states for one message",
+          "For large groups, avoid writing N delivery-status rows eagerly at send time — create/update them lazily as ACKs actually arrive, or fan-out cost dominates at scale",
+          "Message storage access pattern (recent messages in one conversation, time-ordered) is a textbook wide-column-store fit (Cassandra partitioned by conversation_id) — far better than a relational table for this specific query shape",
+        ],
+        followUps: [
+          "How would you support end-to-end encryption without breaking server-side search/backup features?",
+          "How do you handle a user who's connected on 3 devices simultaneously (phone, web, desktop)?",
+          "How would you implement 'typing...' indicators without persisting useless data?",
+        ],
+        example:
+          "WhatsApp's original architecture (famously run on a tiny number of Erlang servers per user-million) used exactly this pattern — persistent connections pinned per server, a routing layer, and offline message queuing — and is the standard reference point interviewers expect when this question is asked.",
+      },
+      {
+        id: "job-scheduler",
+        title: "Design a job scheduler",
+        difficulty: "Medium",
+        category: "classic-system-design-problems",
+        question:
+          "Design a distributed job scheduler (like a cron-as-a-service or Airflow) that runs millions of scheduled and one-off jobs reliably, with retries and no double-execution across multiple scheduler instances.",
+        answer: {
+          short:
+            "Store every job's next-run-time in a database, have multiple scheduler instances poll for due jobs but claim each one atomically (so exactly one instance executes it), and hand off actual execution to a separate worker pool so a long-running job never blocks the scheduler's polling loop.",
+          detailed:
+            "Job definition: Job(id, schedule — either a one-off run_at timestamp or a cron expression, next_run_at, status: PENDING/CLAIMED/RUNNING/SUCCEEDED/FAILED, payload, retry_policy). Scheduling loop: rather than one centralized scheduler process (a single point of failure and a throughput ceiling), run multiple identical scheduler instances that each periodically poll the DB for jobs WHERE next_run_at <= NOW() AND status = 'PENDING' — but if two instances poll at the same moment, both could see the same due job. The fix is an atomic claim: UPDATE jobs SET status='CLAIMED', claimed_by=instance_id WHERE id=X AND status='PENDING' and only proceed if the update actually affected a row (rows_affected = 1 means this instance won the race; 0 means another instance already claimed it) — this turns 'multiple schedulers' from a double-execution risk into a horizontal scaling feature. Execution: the claiming scheduler doesn't run the job inline — it pushes a task to an execution queue consumed by a separate worker pool, so a job that takes 10 minutes doesn't block that scheduler instance from claiming and dispatching the next thousand due jobs. Crash recovery: if a worker crashes mid-execution, the job is stuck in RUNNING — a reaper process periodically finds jobs RUNNING for longer than their expected max duration and requeues them (with a retry-count check to avoid infinite reprocessing of a poison-pill job). Retry policy: exponential backoff with jitter, configurable max attempts, then move to a dead-letter status for manual inspection. Recurring jobs: after a cron-scheduled job completes, the scheduler computes the next next_run_at from the cron expression and resets status to PENDING — never executes 'the next occurrence' eagerly, since that would require tracking unbounded future instances. At very high job volume, the 'poll the whole jobs table' step itself needs a covering index on (status, next_run_at) or, beyond a few million rows, a time-bucketed priority structure so the scan stays cheap regardless of total job count.",
+        },
+        keyPoints: [
+          "Multiple scheduler instances polling the same job table is safe (and a scaling feature, not a bug) ONLY if claiming a job is a single atomic conditional UPDATE — checking rows_affected, not a separate read-then-write",
+          "Scheduling (deciding a job is due) and execution (actually running it) must be separate concerns — a slow job must never block the scheduler loop from claiming the next thousand due jobs",
+          "A reaper process for jobs stuck in RUNNING past their expected duration is mandatory — without it, a crashed worker silently loses a job forever with no automatic retry",
+          "Recompute a recurring job's next_run_at lazily after each completion, not by pre-generating future occurrences — pre-generating is unbounded and unnecessary work",
+        ],
+        followUps: [
+          "How would you support job dependencies (job B only runs after job A succeeds)?",
+          "How do you prevent one tenant scheduling 10 million jobs from starving the scheduler for everyone else?",
+          "How would you guarantee a job runs at-most-once even across a full datacenter failover?",
+        ],
+        example:
+          "This is essentially how distributed cron implementations (Airflow's scheduler, or Kubernetes CronJob controllers) work under the hood — atomic claim-via-conditional-update is the load-bearing trick that turns 'avoid double execution' from a hard distributed-systems problem into a single SQL WHERE clause.",
+      },
+    ],
+  },
 ];
