@@ -105,6 +105,29 @@ export default function SDInterviewPage() {
           <p className="sdi-answer-detailed">{problem.answer.detailed}</p>
         </section>
 
+        {/* Entity model */}
+        {problem.entities && problem.entities.length > 0 && (
+          <section className="sdi-section">
+            <div className="sdi-section-label sdi-label-entities">
+              <span className="sdi-label-icon">🗂️</span>
+              <h2 className="sdi-section-title">Entity Model</h2>
+            </div>
+            <div className="sdi-entities">
+              {problem.entities.map((ent, i) => (
+                <div key={i} className="sdi-entity-card">
+                  <div className="sdi-entity-name">{ent.name}</div>
+                  <div className="sdi-entity-desc">{ent.description}</div>
+                  <ul className="sdi-entity-fields">
+                    {ent.fields.map((f, j) => (
+                      <li key={j}>{f}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* What a strong answer covers */}
         <section className="sdi-section">
           <div className="sdi-section-label sdi-label-points">
