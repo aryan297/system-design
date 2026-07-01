@@ -1944,6 +1944,300 @@ export const SDI_CATEGORIES = [
         example:
           "This is a famous, real production challenge — multiple e-commerce postmortems describe sagas that got stuck in inconsistent intermediate states (inventory reserved, payment failed, compensating transaction itself failed) during partial outages; the lesson the industry converged on is that compensating transactions need their *own* retry/idempotency/monitoring — they're not a one-line afterthought, they're a subsystem in their own right.",
       },
+      {
+        id: "hld-design-payment-system",
+        title: "Design a payment processing system (Stripe / fintech)",
+        difficulty: "Hard",
+        category: "hld-interview-qa",
+        question:
+          "Design a payment processing system that handles card charges, refunds, and payouts reliably at scale. What makes payment system design different from most HLD problems?",
+        answer: {
+          short:
+            "Build a double-entry ledger at the center, make every charge idempotent via client-generated keys, and separate the fast 'accept + validate' path from the slower 'authorize + settle' path so user-facing latency stays low regardless of how long card networks take.",
+          detailed: [
+            "Payment systems prioritize correctness over availability — it's better to return an error than to charge twice or miss a charge. This single constraint shapes every architectural decision and is what makes payment design different from most HLD questions.",
+            "The ledger is double-entry: every 'charge $100' creates two entries (debit customer, credit merchant) in the same atomic transaction — you can never have a debit without a matching credit, which makes the books self-auditing and impossible to silently lose money in.",
+            "The request flow has two tiers: (1) fast path — validate the request, write an idempotency record, return an immediate accepted response while async work proceeds; (2) slow path — call the card network (Visa/Mastercard via Stripe), await authorization (typically 1-3 seconds), write the ledger entry, and notify the merchant.",
+            "Idempotency keys are the most load-bearing primitive: every charge request carries a client-generated UUID; the server writes it to a DB table (UNIQUE constraint) before any money movement — a duplicate request returns the original response without charging again. This is what makes 'retry on network failure' safe.",
+            "Card networks use a two-phase model: an authorization hold (reserve funds) is created synchronously, then capture (actually move money) happens in a separate async step — the hold can be released without charging if the user cancels.",
+            "Reconciliation runs continuously: a near-realtime job compares your ledger against the card network's settlement reports — any discrepancy (a charge the network says succeeded but your ledger has as pending) triggers an alert and becomes an incident, not background clean-up.",
+          ],
+        },
+        keyPoints: [
+          {
+            point: "Double-entry ledger is non-negotiable — every debit has a matching credit in the same atomic transaction, making the books self-auditing",
+            example: "Stripe's core data model is a double-entry ledger; a chargeback automatically creates compensating entries so the ledger always balances without manual correction.",
+            bestApproach: "Model the ledger as append-only immutable rows (never UPDATE amounts) so every state transition is auditable by replaying the entry history.",
+          },
+          {
+            point: "Idempotency keys are the most important primitive — every write endpoint requires one so retries on network failure never double-charge",
+            example: "A mobile client that retries a timed-out charge (where the server actually succeeded) without an idempotency key double-charges the card — this is the most common fintech production incident.",
+            bestApproach: "Require a client-generated idempotency key on every mutating API, store it with a UNIQUE constraint before executing any side effects, and return the original response on duplicate requests.",
+          },
+          {
+            point: "Separate the 'accept fast' path from the 'authorize slow' path — user-facing latency must be decoupled from card network round trips",
+            example: "Stripe returns a PaymentIntent status of 'processing' instantly while the authorization round-trip to Visa completes asynchronously — the user sees sub-100ms response regardless of network latency.",
+            bestApproach: "Persist the accepted request synchronously, then process the card network call async and deliver the final outcome via webhook or polling — never block the user-facing response on a third-party network call.",
+          },
+          {
+            point: "Reconciliation is a first-class system — mismatches between your ledger and network settlement reports are incidents, not background clean-up work",
+            example: "A systematic bug that undercharges by $0.01 on every transaction is invisible without reconciliation; at 1M transactions/day that's $10K/day of undetected revenue leakage.",
+            bestApproach: "Run reconciliation on every settlement window (not just nightly) and alert in real-time when the float discrepancy across a window exceeds a threshold.",
+          },
+        ],
+        followUps: [
+          "How would you handle a partial refund on a multi-item order where each item had a different tax rate?",
+          "How do you prevent a race condition where two concurrent refund requests both succeed and refund more than the original charge?",
+          "How would you design the system for a card network timeout — do you authorize optimistically or reject?",
+        ],
+        example:
+          "Stripe's real architecture separates 'payment intents' (authorization holds) from 'charges' (captures) and stores both in a double-entry ledger — naming double-entry ledger and idempotency keys together is what interviewers at fintech companies are specifically listening for, because it signals you understand payments aren't just CRUD over a transactions table.",
+      },
+      {
+        id: "hld-design-fraud-detection",
+        title: "Design a real-time fraud detection system (fintech)",
+        difficulty: "Hard",
+        category: "hld-interview-qa",
+        question:
+          "Design a fraud detection system for a payments platform. It must evaluate every transaction in real time before authorization and block fraudulent ones — what's the architecture and what's the hardest problem to solve?",
+        answer: {
+          short:
+            "Two-tier: a fast rule engine that blocks obvious fraud in milliseconds (velocity limits, blocklists, device fingerprints) before anything hits card networks, plus a slower ML scorer that evaluates subtle patterns — the hardest problem is not the ML, it's serving the behavioral features fast enough to meet the authorization latency window.",
+          detailed: [
+            "Fraud detection has a hard constraint: it must complete inside the payment authorization window (typically 200-500ms) or the payment times out and lets the transaction through by default. This makes it fundamentally different from batch fraud analytics — every signal lookup must be sub-millisecond.",
+            "Tier 1 — rule engine (synchronous, < 5ms): evaluate hard-coded rules against request data in memory — known-bad card numbers (blocklist), impossible velocity (same card used in 3 countries in 10 minutes), device fingerprint on a known-fraud device, IP geolocation vs billing address country mismatch. A rule match is an immediate hard block.",
+            "Tier 2 — ML scorer (synchronous, 50-200ms): a trained gradient-boosted model ingests 100+ features about the transaction (amount, merchant category, time-of-day, user historical behavior) and outputs a fraud probability 0-1. Above threshold → decline; in gray zone → step-up authentication (3DS challenge); below threshold → approve.",
+            "The feature store is the most critical infrastructure piece: ML models are only as fast as their feature lookups. A real-time feature store (Redis, sub-ms lookups) caches pre-computed behavioral features (rolling velocity, 24-hour spend average, typical merchant categories) so the model gets pre-computed values at inference time, not raw DB queries.",
+            "Model feedback loop: every chargeback on a transaction the model scored as low-risk is a labeled false negative — these flow back as training labels and trigger periodic retraining (typically daily or weekly). The gap between when a new fraud pattern emerges and when the model learns it is the system's fundamental limitation.",
+            "Shadow mode for safe rollout: new fraud models always run in shadow mode first (score every transaction, log the result, don't act on it) against live traffic to calibrate thresholds — deploying an uncalibrated model that incorrectly blocks 1% more legitimate transactions is a real revenue event.",
+          ],
+        },
+        keyPoints: [
+          {
+            point: "Latency is the first constraint — fraud scoring must complete inside the authorization window (< 200-500ms); if it times out, the default must be to approve, which means slow = no protection",
+            example: "A model that takes 600ms to score means every transaction effectively bypasses fraud detection, because the payment network timeout fires before the score returns.",
+            bestApproach: "Set a hard latency budget for each tier (rule engine < 5ms, ML scorer < 150ms, total < 200ms) and design the system to fail-open (approve) on timeout, not fail-closed — fail-closed on timeout means any latency spike blocks all legitimate payments.",
+          },
+          {
+            point: "Two-tier architecture — fast rule engine (hard blocks) + ML scorer (probabilistic risk) — each catches what the other misses",
+            example: "Rule engines catch obvious card-testing attacks (same card, 20 transactions in 60 seconds) instantly; ML catches sophisticated attackers who stay under velocity limits but show subtle behavioral anomalies.",
+            bestApproach: "Run the rule engine synchronously first and short-circuit (block immediately) on a hard match — only run the ML scorer on transactions that pass rules, reducing the ML workload to the genuinely ambiguous cases.",
+          },
+          {
+            point: "A real-time feature store (Redis-backed) is the load-bearing infrastructure piece — pre-computed behavioral features, not live DB queries, are what keep inference latency in-SLA",
+            example: "Computing 'user's average transaction amount over the last 30 days' at inference time requires scanning hundreds of rows per transaction — pre-computing and caching this in Redis makes it a sub-millisecond lookup.",
+            bestApproach: "Write a streaming pipeline (Kafka → Flink/Spark Streaming) that maintains rolling behavioral aggregates in Redis, updating them on every transaction event — this is the feature store's write path.",
+          },
+          {
+            point: "Shadow mode and feedback loops are both mandatory — a fraud model without retraining degrades, and one that can't be calibrated safely against live traffic is too risky to deploy",
+            example: "Stripe Radar runs new models in shadow mode against 100% of live transactions before enabling them, comparing predicted vs actual fraud rates to calibrate the approval threshold before the model affects real decisions.",
+            bestApproach: "Treat model rollout as a controlled experiment (not a code deploy), with explicit metrics for false-positive rate (legitimate blocks) and false-negative rate (missed fraud) tracked at every traffic split level.",
+          },
+        ],
+        followUps: [
+          "How do you prevent the feedback loop from becoming self-reinforcing (the model learns to block patterns it's never seen succeed, creating a blindspot)?",
+          "How would you handle a coordinated bot attack that deliberately spreads transactions below all velocity rule thresholds?",
+          "Who decides the fraud threshold — engineering, risk, or business — and how do you make that trade-off explicit?",
+        ],
+        example:
+          "Stripe Radar's published architecture describes using Gradient Boosted Trees ingesting ~1,000 features per transaction, fed by a pre-computed feature store, with the hard-rule tier filtering obvious cases before the model runs — the model only sees genuinely ambiguous cases, which is also why its precision is far higher than a model that runs on everything.",
+      },
+      {
+        id: "hld-design-ml-serving",
+        title: "Design a scalable ML model serving platform",
+        difficulty: "Hard",
+        category: "hld-interview-qa",
+        question:
+          "Design a platform that serves ML model predictions at low latency for production traffic. What are the key architectural decisions and what's the biggest production failure mode?",
+        answer: {
+          short:
+            "Completely separate model training (offline, batch, GPU-heavy) from model inference (online, low-latency) — they have opposite requirements and should be different infrastructure. The biggest production failure mode is training-serving skew: the feature pipeline used during training differs from the one used at inference, so the model silently underperforms on live data.",
+          detailed: [
+            "The core split: training runs on large GPU clusters over hours or days, producing a serialized model artifact; inference serving is stateless HTTP/gRPC services that load the artifact and answer requests in milliseconds. These are different engineering problems requiring different infrastructure.",
+            "Model registry: every trained model is versioned in a registry (MLflow, SageMaker) with metadata (training dataset hash, hyperparameters, evaluation metrics, training run lineage). The serving layer fetches artifacts by version — 'which model is currently in production and why' is a dashboard query, not an incident investigation.",
+            "Inference serving tiers by latency: (1) real-time online (< 100ms p99) — model loaded in memory behind HTTP/gRPC, with server-side request batching to maximize GPU utilization without user-visible latency; (2) near-realtime (< 1s) — Kafka consumer-based streaming inference; (3) batch scoring — overnight jobs with no latency requirement. Match the tier to the business SLA.",
+            "Training-serving skew is the most common and hardest-to-detect production ML bug: the feature computation in the offline training pipeline (Spark, pandas) computes features differently from the online serving pipeline (Redis lookups, real-time aggregations) — even tiny differences (timezone handling, null treatment, rounding) cause the model to perform significantly worse on live data than on held-out test data.",
+            "Model rollouts use traffic splitting, not code deployments: the old model stays running alongside the new one at 10% → 25% → 50% → 100% traffic, with A/B experiment tracking comparing business metrics. A model making worse recommendations is a revenue event — you catch it at 10%, not after full rollout.",
+            "GPU cost control: GPU instances are expensive; serving infra uses request batching (multiple requests share one GPU forward pass), fractional GPU allocation for small models, and scale-to-zero for low-traffic models. The per-prediction cost of GPU serving is 10-100x higher than CPU serving — this must be a first-class design concern.",
+          ],
+        },
+        keyPoints: [
+          {
+            point: "Completely separate training infrastructure from serving infrastructure — they have opposite requirements (throughput vs latency, batch vs real-time, GPU-heavy vs cost-efficient)",
+            example: "Netflix's Metaflow separates the 'science environment' (model development, training pipelines) from the 'production environment' (serving, feature computation) with explicit handoff contracts between them.",
+            bestApproach: "Design the handoff between training and serving as a versioned artifact in a model registry — training produces an artifact, serving consumes it, and neither knows about the other's implementation.",
+          },
+          {
+            point: "Training-serving skew is the most common and hardest-to-detect production ML bug — it must be an explicit architecture concern, not assumed away",
+            example: "A feature computed as 'user's 7-day average spend' offline uses a full historical scan; online it reads from a Redis counter updated every transaction — if the counter has a rounding bug, the model sees different input distributions than it was trained on.",
+            bestApproach: "Use a unified feature store (Feast, Tecton) where offline (training) and online (inference) feature computation share the same code path — eliminating skew by construction rather than by testing.",
+          },
+          {
+            point: "Model rollouts are A/B experiments, not code deployments — traffic splitting + business metric comparison against the control model is the only safe validation method",
+            example: "At Netflix, a recommendation model change that degrades click-through rate by 1% is detectable at 10% traffic split before it affects 90% of subscribers — full rollout without an experiment would lose that signal.",
+            bestApproach: "Require every model rollout to have a defined primary metric (CTR, conversion rate, accuracy) and a pre-specified rollback trigger threshold — never roll out 100% without a measured improvement at a lower split.",
+          },
+          {
+            point: "Per-prediction GPU cost is 10-100x higher than CPU — request batching and scale-to-zero are mandatory for production cost control",
+            example: "A single GPU inference server processing requests one-at-a-time achieves 20% GPU utilization; the same server with a 10ms batch window can batch 50 requests per forward pass, achieving 80% utilization at the same latency.",
+            bestApproach: "Instrument GPU utilization per model endpoint, set auto-scaling based on GPU utilization (not CPU), and enforce a maximum batch latency budget so batching doesn't add user-visible latency beyond the SLA.",
+          },
+        ],
+        followUps: [
+          "How would you detect model performance degradation (data drift) in production without waiting for labeled data to come back?",
+          "How would you serve a 70B-parameter LLM to thousands of concurrent users with sub-second latency?",
+          "How does a feature store handle the 'point-in-time correctness' problem — ensuring training features don't use data that wasn't available at the time of the historical label?",
+        ],
+        example:
+          "Netflix's ML platform is one of the most-cited references for this pattern — they built explicit tooling to prevent training-serving skew from going undetected, because at Netflix's scale even a 1% recommendation quality degradation translates to measurable subscriber churn — the investment in skew prevention directly protects revenue.",
+      },
+      {
+        id: "hld-design-rag-pipeline",
+        title: "Design a RAG (Retrieval-Augmented Generation) pipeline",
+        difficulty: "Hard",
+        category: "hld-interview-qa",
+        question:
+          "Design a production RAG system that answers user questions using a private document corpus. What's the architecture, and what's the most underestimated design decision?",
+        answer: {
+          short:
+            "RAG adds a retrieval step in front of an LLM: embed the query, fetch the most semantically similar document chunks from a vector store, inject those chunks into the LLM's context, and generate a grounded answer — the hardest problem isn't the LLM integration, it's the chunking strategy and retrieval quality that determine whether the system is useful or just fast.",
+          detailed: [
+            "RAG in three stages: (1) Indexing (offline) — chunk source documents, embed each chunk using an embedding model, store vectors in a vector DB (Pinecone, pgvector, Weaviate). (2) Retrieval (online) — embed the user's query, run ANN search for top-K most similar chunks. (3) Generation (online) — construct a prompt with retrieved chunks as context, call the LLM, return the grounded answer.",
+            "Chunking strategy is the most underrated decision: too small (128 tokens) and chunks lose the surrounding context that makes them interpretable; too large (2048 tokens) and you use the entire context window on a few chunks, squeezing out diversity. Semantic chunking (split at paragraph or section boundaries rather than fixed token counts) consistently outperforms fixed-size chunking for real-world recall.",
+            "Hybrid search dramatically outperforms pure vector ANN on real-world benchmarks: combining vector similarity (semantic meaning) with BM25 keyword search (exact term matching) then re-ranking the merged candidate set with a cross-encoder model typically improves recall@10 by 15-30% over pure ANN alone — at the cost of higher latency.",
+            "Evaluate retrieval and generation separately: retrieval recall@K (does the right document appear in the top K?) and generation quality (faithfulness, answer relevance — does the LLM only say things the retrieved context supports?) are distinct failure modes requiring distinct fixes. Conflating them makes debugging impossible.",
+            "Stale embeddings are the most common silent production RAG bug: a document is updated but its old vector remains in the index — the retrieval system confidently returns the outdated version. An incremental indexing pipeline (CDC or document-change events → re-embed → upsert) is mandatory, not optional.",
+            "Context window budget management: retrieved chunks compete with the system prompt, conversation history, and the generated answer for the context window. A context budget manager prioritizes the most-relevant chunks first and truncates the least-relevant, tracking which chunks were included so attribution is possible.",
+          ],
+        },
+        keyPoints: [
+          {
+            point: "Chunking strategy is the most consequential offline decision — bad chunking means perfect vector search still returns useless context to the LLM",
+            example: "Chunking a legal contract at fixed 512-token boundaries splits clauses mid-sentence; semantic chunking at clause boundaries keeps each chunk self-contained and dramatically improves the LLM's answer quality.",
+            bestApproach: "Use semantic chunking (paragraph/section boundaries + overlap) as the default, and measure retrieval recall@K before tuning LLM prompts — fixing retrieval is always higher leverage than prompt engineering.",
+          },
+          {
+            point: "Evaluate retrieval and generation separately — retrieval recall@K and generation faithfulness are distinct failure modes requiring distinct metrics and fixes",
+            example: "A system with poor retrieval (recall@5 of 60%) can't be fixed with better prompts; a system with perfect retrieval but a hallucinating LLM can't be fixed with better chunking — without separate metrics you can't tell which problem you have.",
+            bestApproach: "Build a golden eval set of question-document pairs to measure retrieval recall@K independently, and use faithfulness metrics (RAGAS or human eval) to measure generation quality separately.",
+          },
+          {
+            point: "Hybrid search (vector similarity + BM25 + re-ranking) significantly outperforms pure vector ANN for real-world recall, at the cost of higher latency — this is the production default for any quality-sensitive RAG",
+            example: "A user asking 'what does Section 14.3 say?' has exact keyword intent that vector search may miss (it finds semantically similar text, not necessarily the exact section); BM25 catches the exact string match.",
+            bestApproach: "Default to hybrid search (vector + BM25, merged with Reciprocal Rank Fusion) and add a cross-encoder re-ranker for the final top-5 — measure the latency overhead against recall improvement before committing.",
+          },
+          {
+            point: "Stale embeddings (document updated, vector not refreshed) are the most common silent production RAG bug — incremental indexing on every document change is mandatory",
+            example: "A company updates its benefits policy; RAG over the old embedding confidently answers with the outdated policy for weeks until someone notices the answers are wrong.",
+            bestApproach: "Treat every document create/update/delete as an event that triggers re-embedding and vector upsert in the index — the indexing pipeline must be event-driven, not a nightly batch job.",
+          },
+        ],
+        followUps: [
+          "How would you handle a user asking about a document added 30 seconds ago that hasn't been indexed yet?",
+          "How do you prevent the LLM from hallucinating beyond what the retrieved context says?",
+          "How would you build attribution — showing the user exactly which source chunk each claim in the answer came from?",
+        ],
+        example:
+          "Cursor (the AI coding editor) and GitHub Copilot Chat both use RAG over codebases — the specific insight is that code retrieval requires domain-specific chunking (at function/class boundaries, not token count) and code-tuned embedding models; the general RAG architecture is identical, but domain-specific tuning of chunking and embeddings is what separates useful code search from syntactically similar noise.",
+      },
+      {
+        id: "hld-design-vector-search",
+        title: "Design a scalable vector similarity search service",
+        difficulty: "Hard",
+        category: "hld-interview-qa",
+        question:
+          "Design a vector search service that finds the top-K most similar embeddings to a query vector across hundreds of millions of vectors in under 100ms. What's the core algorithm and what are the production pain points?",
+        answer: {
+          short:
+            "Approximate Nearest Neighbor (ANN) search via HNSW is the production-default algorithm — it trades a small recall loss for orders-of-magnitude speed improvement. The production pain points are not the algorithm but filtered search (ANN + metadata filters), horizontal sharding (scatter-gather across shards), and embedding model upgrades (re-indexing the full corpus).",
+          detailed: [
+            "Exact nearest-neighbor search over 100M high-dimensional vectors (e.g., 1536-dim OpenAI embeddings) is O(N × D) per query — completely untenable at scale. ANN trades a few percent recall accuracy for orders-of-magnitude speed improvement, achieving 95-99% recall@10 at 10-100ms latency.",
+            "HNSW (Hierarchical Navigable Small World) is the production-dominant ANN algorithm — used by Pinecone, Weaviate, pgvector. It builds a layered graph where upper layers have long-range connections and lower layers have fine-grained local connections; a query starts at the top and navigates downward, pruning the search space dramatically. The graph is built once offline and queried in-memory.",
+            "Horizontal sharding requires scatter-gather: a HNSW index doesn't shard like a relational DB (nearest neighbors can be on any shard). The standard approach is partition the corpus into N shards, query all shards in parallel, and merge the top-K results from each shard. This multiplies read cost by the number of shards but is required for corpora too large for a single machine's RAM.",
+            "Filtered search is the hardest operational challenge: 'find top-K similar to X, where category = legal AND created_after = 2024-01-01'. Post-filtering (retrieve top-1000 then filter) destroys recall for selective filters; pre-filtering (build a separate index per filter value) is impractical at many dimensions; in-filter ANN (HNSW with native metadata filtering) is the modern production approach (Weaviate, Pinecone namespaces).",
+            "Embedding model upgrades are the most painful operational event: switching embedding models requires re-embedding the entire corpus (100M docs × inference cost = weeks of compute and expense) and rebuilding the entire index, all while keeping the current index live. The strategy: build the new index offline in parallel, validate recall@K and answer quality, then swap traffic atomically (blue-green index swap).",
+            "Write path management: HNSW graph updates (inserting/deleting vectors) are expensive and can degrade query performance over time as the graph becomes unbalanced. Production systems often buffer writes (via Kafka) and batch-merge them periodically, accepting that new vectors aren't immediately searchable — the freshness SLA must be explicitly specified.",
+          ],
+        },
+        keyPoints: [
+          {
+            point: "ANN (not exact NN) is the only viable algorithm at scale — HNSW is the production default, trading 1-5% recall for orders-of-magnitude speed improvement",
+            example: "A 100M-vector corpus with 1536-dim embeddings requires ~576GB for the raw vectors alone — brute-force cosine similarity at query time is physically impossible; HNSW indexes allow sub-100ms search over the full corpus from a single server.",
+            bestApproach: "Choose HNSW as the default index type and tune the M (graph connectivity) and ef_construction (index build quality) parameters based on your recall vs build-time vs query-latency trade-off — measure recall@K empirically, never assume it.",
+          },
+          {
+            point: "Filtered search is the hardest production challenge — post-filtering on selective filters destroys recall; in-filter ANN (HNSW with native metadata filtering) is the production solution",
+            example: "Filtering to 1% of the corpus after ANN retrieval means the ANN must return 100x more candidates to find K results — at high selectivity, this is effectively full scan.",
+            bestApproach: "Use a vector DB with native in-filter ANN support (Weaviate, Pinecone namespaces, pgvector with partition pruning) for multi-attribute filtered search — post-filtering is only acceptable for low-selectivity filters (> 20% of corpus).",
+          },
+          {
+            point: "Embedding model upgrades require re-indexing the full corpus — plan for a blue-green index strategy from day one so upgrades don't require downtime",
+            example: "OpenAI deprecated text-embedding-ada-002 in favor of text-embedding-3-small — any team that didn't have a re-indexing pipeline had to take a weekend maintenance window to rebuild their entire vector index.",
+            bestApproach: "Treat the embedding model version as a first-class part of the index metadata, build automated re-indexing pipelines that can run offline against the full corpus, and maintain the old index until the new one is fully validated.",
+          },
+          {
+            point: "Sharding requires scatter-gather across all shards per query — partition the index with awareness of which shard will likely contain the query's nearest neighbors to minimize cross-shard traffic",
+            example: "Random partitioning means every query fans out to all N shards; partitioning by document category means a query for 'legal contracts' mostly hits the legal shard, with only a small spillover fanout.",
+            bestApproach: "Start with random partitioning for simplicity, then move to semantic partitioning (cluster documents by topic, shard by cluster) once query patterns are understood — semantic sharding can reduce fanout by 50-80%.",
+          },
+        ],
+        followUps: [
+          "How would you handle 100M+ vectors where even the HNSW index doesn't fit in a single machine's RAM?",
+          "How do you measure and monitor recall@K degradation in production without knowing the ground-truth nearest neighbors?",
+          "How would you design a multi-tenant vector search service where each tenant's data is fully isolated and billing is per-query?",
+        ],
+        example:
+          "Pinecone, Weaviate, and pgvector are all HNSW-based in production — the insight interviewers are testing is that 'use a vector database' is the beginning of the answer; the interesting design problems are filtered search, sharding strategy, embedding model versioning, and write-path freshness SLAs, which differentiate a production service from a weekend proof of concept.",
+      },
+      {
+        id: "hld-design-reconciliation",
+        title: "Design a financial reconciliation system (fintech)",
+        difficulty: "Hard",
+        category: "hld-interview-qa",
+        question:
+          "Design a reconciliation system for a payments platform that compares every internal transaction against external settlement files from card networks and banks. What's the architecture and what's the hardest matching problem?",
+        answer: {
+          short:
+            "Reconciliation answers one question: 'for every transaction we recorded, did the money actually move as expected?' — the architecture is a two-dataset join (internal ledger vs external settlement file) with a tiered matcher (exact → fuzzy → manual), an append-only exception log, and real-time alerting on float discrepancies.",
+          detailed: [
+            "Two sources of truth must match: (1) your internal ledger (every charge, refund, payout your system executed) and (2) external settlement files from Visa, Mastercard, or banks (T+1 or T+2 delivery, listing every transaction they actually processed and settled). Every row in one must match a row in the other.",
+            "The pipeline: ingest settlement files into a staging area on receipt, extract internal ledger records for the same settlement window, join on a common key (transaction ID, authorization code), and compare field by field (amount, currency, timestamp, merchant). The result is: matched (all good), exception (discrepancy found), or orphan (in one source but not the other).",
+            "Tiered matching handles real-world messiness: (1) exact match — same transaction ID, same amount; (2) fuzzy match — same merchant + timestamp within 24h + amount within $0.01 (FX rounding, fee adjustments); (3) manual review queue for anything unmatched after fuzzy matching. The hit rate of exact matching is typically 95-98%; the remaining 2-5% is where the real bugs hide.",
+            "Append-only exception log: every reconciliation run writes immutable result rows — matched, discrepancy found, discrepancy resolved. You never update a prior record. This preserves a complete audit trail required by regulators (SOX, PCI-DSS) so every discrepancy and its resolution are permanently traceable.",
+            "Float discrepancy alerting must be real-time: if your ledger shows you collected $1M but the settlement file shows the network settled $999,800, that $200 float discrepancy is an incident — alerting must fire within minutes of the settlement file arriving, not after a nightly batch. Near-realtime reconciliation via event-driven matching (each payment processor webhook event immediately matched against the internal ledger record) achieves sub-minute discrepancy detection.",
+            "Two-way matching catches both directions of failure: every internal transaction must match an external settlement record (are we getting paid for everything we processed?) AND every external settlement record must match an internal transaction (is the network charging us for transactions we didn't process?). Orphan records in either direction are different but equally serious bugs.",
+          ],
+        },
+        keyPoints: [
+          {
+            point: "Two-way matching — not one-way lookup — is the core insight: every internal record needs an external match AND every external record needs an internal match",
+            example: "A one-way check finds 'charged but not settled'; a two-way check also finds 'settled by network but never charged internally' — the second direction is how you catch billing bugs that benefit users at your expense.",
+            bestApproach: "Model reconciliation as a full outer join between the two datasets — left-only rows are charges with no settlement, right-only rows are settlements with no corresponding charge, both are different classes of incidents.",
+          },
+          {
+            point: "A tiered fuzzy matcher for the unmatched 2-5% is what separates a production reconciliation system from a toy — the easy 95% is table stakes",
+            example: "A FX-converted charge may show $99.99 internally and $100.01 in the settlement file due to network rounding — an exact match rejects it as a discrepancy; fuzzy matching within $0.10 correctly marks it as matched.",
+            bestApproach: "Layer the matcher: exact first (fast, no false positives), then fuzzy with explicit tolerance per field (amount ± $0.10, timestamp ± 24h, merchant fuzzy string match), then route everything else to a human review queue with full context.",
+          },
+          {
+            point: "The ledger and exception log must be append-only with immutable records — regulators and auditors require every discrepancy and its resolution to be permanently traceable",
+            example: "Under SOX and PCI-DSS, a company must be able to show auditors every financial discrepancy and how it was resolved — a mutable reconciliation table that gets overwritten on resolution destroys this audit trail.",
+            bestApproach: "Model exceptions as: exception_created (immutable), exception_investigated (append), exception_resolved (append) — resolution creates a new record alongside the original, never replacing it.",
+          },
+          {
+            point: "Float discrepancy alerting must be real-time, not end-of-day — 24 hours of systematic discrepancy compounds the financial exposure significantly",
+            example: "A bug that undercharges $0.10 on every transaction sounds trivial — at 1M transactions/day it's $100K/day of revenue leakage, and a T+1 batch reconciliation catches it 24 hours later instead of in minutes.",
+            bestApproach: "Run event-driven reconciliation (match each webhook event immediately against the internal ledger) alongside the batch settlement file reconciliation — the event-driven path catches real-time anomalies, the batch path provides the final authoritative reconciliation.",
+          },
+        ],
+        followUps: [
+          "How would you reconcile across 40 currencies and handle FX rate differences between authorization and settlement (which can be days apart)?",
+          "How would you detect a systematic code bug (a deploy that silently altered amounts for a specific merchant category) vs a one-off data entry error?",
+          "How do you handle a card network that sends the same settlement file twice due to a delivery retry?",
+        ],
+        example:
+          "Wise (TransferWise) has been public about running continuous reconciliation across 50+ banking partners — their engineering blog describes exactly this pattern: event-driven matching, append-only exception ledger, tiered matching strategy (exact → fuzzy → manual), and resolving 99.8% of transactions automatically with the rest going to a specialist operations team — the 0.2% that needs human review is where the interesting financial bugs live.",
+      },
     ],
   },
   // ────────────────────────────────────────────────────────────────────────
